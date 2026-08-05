@@ -1,26 +1,393 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Design tokens — dark-first glassmorphic system
+   :root = dark (default), .light = explicit light-mode overrides.
+   Every token has both variants tuned independently (never inverted-filter).
+   ========================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+
+  /* Page background */
+  --bg-page: #05050a;
+
+  /* Ambient glow opacities (dark) */
+  --glow-violet-opacity: 0.16;
+  --glow-cyan-opacity: 0.12;
+
+  /* Brand accent gradient — reserved for active/primary elements only */
+  --accent-from: oklch(0.63 0.24 293);
+  --accent-to: oklch(0.75 0.15 220);
+  --accent-gradient: linear-gradient(90deg, var(--accent-from), var(--accent-to));
+
+  /* Status / temperature colors — identical across themes */
+  --status-hot: oklch(0.63 0.22 25);
+  --status-warm: oklch(0.75 0.16 70);
+  --status-cold: oklch(0.68 0.11 235);
+
+  /* Glass card surface (dark) */
+  --glass-bg: color-mix(in oklab, oklch(0.21 0.01 285) 55%, transparent);
+  --glass-border: color-mix(in oklab, oklch(0.96 0 0) 8%, transparent);
+  --glass-blur: 20px;
+
+  /* Text hierarchy (dark) — near-white down to muted low-emphasis gray */
+  --text-1: oklch(0.98 0 0); /* primary */
+  --text-2: oklch(0.90 0 0);
+  --text-3: oklch(0.78 0 0);
+  --text-4: oklch(0.64 0 0);
+  --text-5: oklch(0.48 0.01 285); /* muted / low emphasis */
+
+  /* Borders / dividers */
+  --border-hairline: color-mix(in oklab, oklch(0.96 0 0) 8%, transparent);
+  --border-hairline-strong: color-mix(in oklab, oklch(0.96 0 0) 14%, transparent);
+
+  /* Surfaces */
+  --surface-1: oklch(0.13 0.01 285); /* base panel */
+  --surface-2: oklch(0.16 0.01 285); /* raised */
+  --surface-3: oklch(0.20 0.01 285); /* hover */
+
+  /* Shimmer */
+  --shimmer-base: oklch(0.20 0.01 285);
+  --shimmer-mid: oklch(0.28 0.01 285);
+
+  --radius-card: 14px;
+  --radius-pill: 999px;
+}
+
+.light {
+  color-scheme: light;
+
+  --bg-page: #f7f7fb;
+
+  /* Halved-ish but independently tuned, not a blind inversion */
+  --glow-violet-opacity: 0.08;
+  --glow-cyan-opacity: 0.07;
+
+  --glass-bg: color-mix(in oklab, oklch(1 0 0) 70%, transparent);
+  --glass-border: color-mix(in oklab, oklch(0 0 0) 8%, transparent);
+
+  --text-1: oklch(0.20 0.01 285);
+  --text-2: oklch(0.30 0.01 285);
+  --text-3: oklch(0.42 0.01 285);
+  --text-4: oklch(0.55 0.01 285);
+  --text-5: oklch(0.62 0.01 285);
+
+  --border-hairline: color-mix(in oklab, oklch(0 0 0) 8%, transparent);
+  --border-hairline-strong: color-mix(in oklab, oklch(0 0 0) 14%, transparent);
+
+  --surface-1: oklch(1 0 0);
+  --surface-2: oklch(0.98 0 0);
+  --surface-3: oklch(0.94 0 0);
+
+  --shimmer-base: oklch(0.92 0 0);
+  --shimmer-mid: oklch(0.97 0 0);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg-page: var(--bg-page);
+  --color-accent-from: var(--accent-from);
+  --color-accent-to: var(--accent-to);
+  --color-status-hot: var(--status-hot);
+  --color-status-warm: var(--status-warm);
+  --color-status-cold: var(--status-cold);
+  --color-glass-bg: var(--glass-bg);
+  --color-glass-border: var(--glass-border);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-text-4: var(--text-4);
+  --color-text-5: var(--text-5);
+  --color-border-hairline: var(--border-hairline);
+  --color-border-hairline-strong: var(--border-hairline-strong);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "Cascadia Code", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+* {
+  border-color: var(--border-hairline);
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-page);
+  color: var(--text-1);
+  font-family: var(--font-sans);
+  overflow-x: hidden; /* page body must never scroll horizontally */
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent-from) 35%, transparent);
+  color: var(--text-1);
+}
+
+/* Focus states: explicit 2px accent ring, never the browser default */
+:focus-visible {
+  outline: 2px solid var(--accent-from);
+  outline-offset: 2px;
+}
+
+/* Scrollbar (webkit) — subtle, theme-aware */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-hairline-strong);
+  border-radius: 999px;
+}
+
+/* ==========================================================================
+   Ambient glows — fixed, non-scrolling, behind all content
+   ========================================================================== */
+
+.ambient-glows {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ambient-glows::before,
+.ambient-glows::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.ambient-glows::before {
+  background: radial-gradient(
+    circle at 15% 0%,
+    color-mix(in oklab, var(--accent-from) 100%, transparent) 0%,
+    transparent 45%
+  );
+  opacity: var(--glow-violet-opacity);
+}
+
+.ambient-glows::after {
+  background: radial-gradient(
+    circle at 85% 15%,
+    color-mix(in oklab, var(--accent-to) 100%, transparent) 0%,
+    transparent 40%
+  );
+  opacity: var(--glow-cyan-opacity);
+}
+
+/* ==========================================================================
+   Glass surfaces
+   ========================================================================== */
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-card);
+}
+
+.glass-hover {
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.glass-hover:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--accent-from) 45%, transparent);
+  box-shadow: 0 32px 32px -12px color-mix(in oklab, var(--accent-from) 35%, transparent);
+}
+
+/* ==========================================================================
+   Accent gradient utilities
+   ========================================================================== */
+
+.text-gradient {
+  background: var(--accent-gradient);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
+.bg-accent-gradient {
+  background: var(--accent-gradient);
+}
+
+/* ==========================================================================
+   Shimmer / skeleton — the ONLY loading indicator
+   ========================================================================== */
+
+@keyframes shimmer-sweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(
+    110deg,
+    var(--shimmer-base) 30%,
+    var(--shimmer-mid) 50%,
+    var(--shimmer-base) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 1.6s ease-in-out infinite;
+}
+
+/* ==========================================================================
+   Ambient wordmark watermark
+   ========================================================================== */
+
+.ambient-wordmark-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ambient-wordmark {
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  background: var(--accent-gradient);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  opacity: 0.11;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.flourish-rule {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-hairline-strong), transparent);
+}
+
+/* ==========================================================================
+   Diagram (monitoring page) — independent teal/mono system
+   ========================================================================== */
+
+.diagram-scope {
+  --dg-ground: #0a141c;
+  --dg-panel: #101b25;
+  --dg-ink: #e7edf3;
+  --dg-muted: #8fa1af;
+  --dg-line: #24323e;
+  --dg-accent: #4fc1ce;
+  --dg-done: #4fd293;
+  --dg-pending: #e3a24e;
+  --dg-todo: #6b7c8c;
+  --dg-font-mono: "Cascadia Code", "SF Mono", Consolas, monospace;
+}
+
+.diagram-scope.light {
+  --dg-ground: #f2f4f7;
+  --dg-panel: #ffffff;
+  --dg-ink: #101826;
+  --dg-muted: #5b6b7c;
+  --dg-line: #dce2e8;
+  --dg-accent: #0e6873;
+}
+
+@keyframes grid-drift {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 400px 400px;
+  }
+}
+
+.diagram-grid {
+  background-image: radial-gradient(circle, var(--dg-line) 1px, transparent 1px);
+  background-size: 28px 28px;
+  animation: grid-drift 70s linear infinite;
+}
+
+.diagram-grid.flattened {
+  animation: none;
+  background-image: none;
+}
+
+@keyframes dash-flow-primary {
+  to {
+    stroke-dashoffset: -48;
+  }
+}
+@keyframes dash-flow-secondary {
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+.flow-line-primary {
+  animation: dash-flow-primary 2.6s linear infinite;
+}
+.flow-line-secondary {
+  animation: dash-flow-secondary 1.8s linear infinite;
+}
+
+@keyframes node-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--dg-accent) 35%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 24px 6px color-mix(in oklab, var(--dg-accent) 35%, transparent);
+  }
+}
+
+.node-breathing {
+  animation: node-breathe 2.3s ease-in-out infinite;
+}
+
+@keyframes status-ring-pulse {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 55%, transparent);
+    opacity: 1;
+  }
+  100% {
+    box-shadow: 0 0 0 10px color-mix(in oklab, currentColor 0%, transparent);
+    opacity: 0;
+  }
+}
+
+.status-dot-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  animation: status-ring-pulse 2.2s ease-out infinite;
+}
+
+.diagram-scope .animations-disabled,
+.diagram-scope .animations-disabled * {
+  animation: none !important;
+}
+
+/* ==========================================================================
+   Responsive — wide content gets its own scroll container
+   ========================================================================== */
+
+.scroll-x-container {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
