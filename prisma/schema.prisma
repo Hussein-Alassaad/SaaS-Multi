@@ -1,0 +1,411 @@
+// Admin Platform — Prisma schema
+// Provider defaults to SQLite for zero-config local dev.
+// To use Postgres: set DATABASE_URL to a postgres:// connection string
+// and change `provider` below to "postgresql" (this also unlocks native
+// Prisma enums — SQLite has no enum support, so enum-like fields below
+// are modeled as validated `String` columns; see src/types for the
+// corresponding TypeScript union types & zod schemas).
+//
+// String "enum" fields and their allowed values:
+//   Product.status            ACTIVE | INACTIVE | MAINTENANCE | FUTURE
+//   Tenant.status              ACTIVE | TRIAL | PAST_DUE | SUSPENDED | CHURNED
+//   User.scope                 PLATFORM | TENANT
+//   User.status                ACTIVE | INVITED | SUSPENDED | DISABLED
+//   Subscription.status        TRIALING | ACTIVE | PAST_DUE | GRACE_PERIOD | CANCELED | EXPIRED
+//   Invoice.status              DRAFT | OPEN | PAID | VOID | UNCOLLECTIBLE
+//   Payment.status               SUCCEEDED | FAILED | PENDING | REFUNDED
+//   Refund.status                 PENDING | APPROVED | REJECTED | COMPLETED
+//   SupportTicket.priority         LOW | MEDIUM | HIGH | URGENT
+//   SupportTicket.status            OPEN | IN_PROGRESS | WAITING_ON_CUSTOMER | RESOLVED | CLOSED
+//   SupportTicket.type               BUG | FEATURE_REQUEST | FEEDBACK | QUESTION | BILLING
+//   FeatureFlag.scope / AiBudget.scope   GLOBAL | PRODUCT | TENANT | SUBSCRIPTION
+//   Notification.audience                 ALL_TENANTS | PRODUCT_TENANTS | SPECIFIC_TENANT | ALL_PLATFORM_USERS
+//   Notification.status                    DRAFT | SCHEDULED | SENT | CANCELED
+//   Integration.provider                    OPENAI | CLAUDE | GEMINI | SMTP | SUPABASE | CLOUDFLARE | STORAGE | META | WHATSAPP | RESEND | WEBHOOK
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Core registry
+// ---------------------------------------------------------------------------
+
+model Product {
+  id              String   @id @default(cuid())
+  slug            String   @unique
+  name            String
+  description     String?
+  status          String   @default("ACTIVE")
+  version         String   @default("0.1.0")
+  maintenanceMode Boolean  @default(false)
+  config          String   @default("{}") // JSON-encoded
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenants     Tenant[]
+  aiUsageLogs AiUsageLog[]
+
+  @@map("products")
+}
+
+model Tenant {
+  id            String   @id @default(cuid())
+  productId     String
+  companyName   String
+  subdomain     String   @unique
+  status        String   @default("TRIAL")
+  ownerId       String?
+  storageUsedMb Int      @default(0)
+  aiCreditsUsed Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  owner   User?   @relation("TenantOwner", fields: [ownerId], references: [id])
+
+  users                 User[]                 @relation("TenantUsers")
+  subscriptions         Subscription[]
+  invoices              Invoice[]
+  payments              Payment[]
+  refunds               Refund[]
+  aiUsageLogs           AiUsageLog[]
+  supportTickets        SupportTicket[]
+  auditLogs             AuditLog[]
+  impersonationSessions ImpersonationSession[]
+
+  @@index([productId])
+  @@map("tenants")
+}
+
+// ---------------------------------------------------------------------------
+// Users, roles & permissions
+// ---------------------------------------------------------------------------
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String
+  avatarUrl   String?
+  scope       String    @default("TENANT")
+  status      String    @default("ACTIVE")
+  roleId      String?
+  tenantId    String?
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  role   Role?   @relation(fields: [roleId], references: [id])
+  tenant Tenant? @relation("TenantUsers", fields: [tenantId], references: [id])
+
+  ownedTenants          Tenant[]               @relation("TenantOwner")
+  assignedTickets       SupportTicket[]        @relation("TicketAssignee")
+  auditLogs             AuditLog[]
+  aiUsageLogs           AiUsageLog[]
+  impersonationsAsAdmin ImpersonationSession[] @relation("ImpersonationAdmin")
+
+  @@index([tenantId])
+  @@index([roleId])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique // Owner, Developer, Support, Finance, Sales, Marketing
+  description String?
+  isSystem    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  users       User[]
+  permissions Permission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id       String @id @default(cuid())
+  roleId   String
+  resource String // e.g. "tenants", "billing", "ai", "settings"
+  action   String // e.g. "view", "create", "edit", "delete", "manage"
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, resource, action])
+  @@map("permissions")
+}
+
+// ---------------------------------------------------------------------------
+// Plans & subscriptions
+// ---------------------------------------------------------------------------
+
+model Plan {
+  id             String   @id @default(cuid())
+  name           String // Basic / Pro / Enterprise
+  slug           String   @unique
+  maxUsers       Int
+  storageLimitMb Int
+  aiCredits      Int
+  monthlyPrice   Int // cents
+  yearlyPrice    Int // cents
+  features       String   @default("[]") // JSON-encoded string[]
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id                 String    @id @default(cuid())
+  tenantId           String
+  planId             String
+  status             String    @default("TRIALING")
+  trialEndsAt        DateTime?
+  gracePeriodEndsAt  DateTime?
+  currentPeriodStart DateTime  @default(now())
+  currentPeriodEnd   DateTime?
+  cancelAtPeriodEnd  Boolean   @default(false)
+  billingCycle       String    @default("monthly") // monthly | yearly
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@index([tenantId])
+  @@map("subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id          String    @id @default(cuid())
+  tenantId    String
+  number      String    @unique
+  status      String    @default("OPEN")
+  amountCents Int
+  currency    String    @default("usd")
+  dueDate     DateTime
+  issuedAt    DateTime  @default(now())
+  paidAt      DateTime?
+  lineItems   String    @default("[]") // JSON-encoded
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payments Payment[]
+
+  @@index([tenantId])
+  @@map("invoices")
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  tenantId    String
+  invoiceId   String?
+  amountCents Int
+  currency    String   @default("usd")
+  status      String   @default("SUCCEEDED")
+  method      String   @default("card") // card, bank_transfer, paypal
+  processedAt DateTime @default(now())
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id])
+  refunds Refund[]
+
+  @@index([tenantId])
+  @@map("payments")
+}
+
+model Refund {
+  id          String    @id @default(cuid())
+  tenantId    String
+  paymentId   String
+  amountCents Int
+  reason      String?
+  status      String    @default("PENDING")
+  requestedAt DateTime  @default(now())
+  processedAt DateTime?
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([tenantId])
+  @@map("refunds")
+}
+
+// ---------------------------------------------------------------------------
+// AI control center
+// ---------------------------------------------------------------------------
+
+model AiUsageLog {
+  id             String   @id @default(cuid())
+  tenantId       String
+  productId      String
+  userId         String?
+  model          String
+  tokens         Int
+  costCents      Int
+  responseTimeMs Int
+  success        Boolean  @default(true)
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@index([productId])
+  @@index([createdAt])
+  @@map("ai_usage_logs")
+}
+
+model AiBudget {
+  id                 String   @id @default(cuid())
+  scope              String // GLOBAL | PRODUCT | TENANT | SUBSCRIPTION
+  scopeId            String? // null when scope = GLOBAL
+  dailyBudgetCents   Int
+  monthlyBudgetCents Int
+  rateLimitPerMin    Int      @default(60)
+  defaultModel       String   @default("gpt-4o-mini")
+  cachingEnabled     Boolean  @default(true)
+  killSwitchEnabled  Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Note: scopeId is a polymorphic reference (Product.id, Tenant.id, or
+  // Subscription.id depending on `scope`) and intentionally has no FK
+  // relation here — resolve it manually via src/lib code per scope.
+
+  @@map("ai_budgets")
+}
+
+// ---------------------------------------------------------------------------
+// Support
+// ---------------------------------------------------------------------------
+
+model SupportTicket {
+  id          String    @id @default(cuid())
+  tenantId    String
+  subject     String
+  description String?
+  type        String    @default("QUESTION")
+  priority    String    @default("MEDIUM")
+  status      String    @default("OPEN")
+  assigneeId  String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  resolvedAt  DateTime?
+
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignee User?  @relation("TicketAssignee", fields: [assigneeId], references: [id])
+
+  @@index([tenantId])
+  @@map("support_tickets")
+}
+
+// ---------------------------------------------------------------------------
+// Audit & compliance
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String
+  resource  String?
+  tenantId  String?
+  ip        String?
+  device    String?
+  browser   String?
+  oldValue  String? // JSON-encoded
+  newValue  String? // JSON-encoded
+  createdAt DateTime @default(now())
+
+  actor  User?   @relation(fields: [actorId], references: [id])
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model ImpersonationSession {
+  id        String    @id @default(cuid())
+  adminId   String
+  tenantId  String
+  reason    String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  admin  User   @relation("ImpersonationAdmin", fields: [adminId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("impersonation_sessions")
+}
+
+// ---------------------------------------------------------------------------
+// Feature flags
+// ---------------------------------------------------------------------------
+
+model FeatureFlag {
+  id          String   @id @default(cuid())
+  key         String
+  name        String
+  description String?
+  scope       String // GLOBAL | PRODUCT | TENANT | SUBSCRIPTION
+  scopeId     String? // null when scope = GLOBAL; productId / tenantId / planId otherwise
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Note: scopeId is a polymorphic reference (Product.id, Tenant.id, or
+  // Plan.id depending on `scope`) and intentionally has no FK relation
+  // here — resolve it manually via src/lib code per scope.
+
+  @@unique([key, scope, scopeId])
+  @@map("feature_flags")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications / broadcasts
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id          String    @id @default(cuid())
+  title       String
+  body        String
+  audience    String    @default("ALL_TENANTS")
+  audienceRef String? // productId or tenantId depending on audience
+  status      String    @default("DRAFT")
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// Integrations
+// ---------------------------------------------------------------------------
+
+model Integration {
+  id         String    @id @default(cuid())
+  provider   String    @unique
+  name       String
+  config     String    @default("{}") // JSON-encoded
+  enabled    Boolean   @default(false)
+  lastSyncAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("integrations")
+}
