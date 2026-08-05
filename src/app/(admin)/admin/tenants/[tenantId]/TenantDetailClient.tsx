@@ -1,0 +1,438 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
+import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Toggle } from "@/components/ui/Toggle";
+import { Avatar } from "@/components/ui/Avatar";
+import { DataTable, type Column } from "@/components/ui/DataTable";
+import {
+  TenantStatusBadge,
+  TicketStatusBadge,
+  InvoiceStatusBadge,
+  PriorityBadge,
+} from "@/components/ui/StatusBadge";
+import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
+import { useUiStore } from "@/lib/store/ui";
+import {
+  ArrowLeft,
+  UserCog,
+  Database,
+  Sparkles,
+  FileText,
+  Key,
+  Mail,
+  Bell,
+  ScrollText,
+  LifeBuoy,
+  Folder,
+} from "lucide-react";
+
+interface Props {
+  tenant: any;
+}
+
+const TABS = [
+  "General",
+  "Subscription",
+  "Storage",
+  "AI",
+  "Invoices",
+  "Logs",
+  "Flags",
+  "Files",
+  "API Keys",
+  "Emails",
+  "Notifications",
+  "Audit",
+  "Support",
+];
+
+export function TenantDetailClient({ tenant }: Props) {
+  const router = useRouter();
+  const startImpersonation = useUiStore((s) => s.startImpersonation);
+  const [tab, setTab] = useState("General");
+
+  const activeSub = tenant.subscriptions[0];
+  const storagePct = activeSub
+    ? Math.min(100, Math.round((tenant.storageUsedMb / activeSub.plan.storageLimitMb) * 100))
+    : 0;
+  const aiPct = activeSub
+    ? Math.min(100, Math.round((tenant.aiCreditsUsed / activeSub.plan.aiCredits) * 100))
+    : 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="icon" onClick={() => router.push("/admin/tenants")}>
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <Avatar name={tenant.companyName} size="lg" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold tracking-tight text-[var(--text-1)] truncate">
+              {tenant.companyName}
+            </h1>
+            <TenantStatusBadge status={tenant.status} />
+          </div>
+          <p className="text-sm text-[var(--text-4)]">
+            {tenant.subdomain}.example.com · {tenant.product.name} · Created {formatDate(tenant.createdAt)}
+          </p>
+        </div>
+        <Button variant="outline" onClick={() => startImpersonation(tenant.id, tenant.companyName)}>
+          <UserCog className="h-4 w-4" />
+          Login as Tenant
+        </Button>
+      </div>
+
+      <Tabs value={tab} onValueChange={setTab}>
+        <div className="scroll-x-container">
+          <TabsList>
+            {TABS.map((t) => (
+              <TabsTrigger key={t} value={t}>
+                {t}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
+
+        <TabsContent value="General">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Company Details</CardTitle>
+              </CardHeader>
+              <dl className="space-y-2 text-sm">
+                <Row label="Company" value={tenant.companyName} />
+                <Row label="Subdomain" value={`${tenant.subdomain}.example.com`} />
+                <Row label="Product" value={tenant.product.name} />
+                <Row label="Status" value={<TenantStatusBadge status={tenant.status} />} />
+                <Row label="Owner" value={tenant.owner ? `${tenant.owner.name} (${tenant.owner.email})` : "—"} />
+                <Row label="Created" value={formatDateTime(tenant.createdAt)} />
+              </dl>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Team Members ({tenant.users.length})</CardTitle>
+              </CardHeader>
+              <div className="space-y-3">
+                {tenant.users.map((u: any) => (
+                  <div key={u.id} className="flex items-center gap-2.5">
+                    <Avatar name={u.name} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm text-[var(--text-1)] truncate">{u.name}</div>
+                      <div className="text-xs text-[var(--text-5)] truncate">{u.email}</div>
+                    </div>
+                    <Badge variant="outline">{u.status}</Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="Subscription">
+          {activeSub ? (
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>{activeSub.plan.name} Plan</CardTitle>
+                  <CardDescription>
+                    {formatCents(activeSub.billingCycle === "yearly" ? activeSub.plan.yearlyPrice : activeSub.plan.monthlyPrice)}
+                    /{activeSub.billingCycle === "yearly" ? "yr" : "mo"}
+                  </CardDescription>
+                </div>
+                <Badge variant={activeSub.status === "ACTIVE" ? "success" : "warm"}>{activeSub.status}</Badge>
+              </CardHeader>
+              <div className="grid grid-cols-2 gap-4 text-sm mb-4 md:grid-cols-4">
+                <Stat label="Max Users" value={activeSub.plan.maxUsers.toString()} />
+                <Stat label="Storage Limit" value={`${(activeSub.plan.storageLimitMb / 1024).toFixed(0)} GB`} />
+                <Stat label="AI Credits" value={activeSub.plan.aiCredits.toLocaleString()} />
+                <Stat
+                  label="Period Ends"
+                  value={activeSub.currentPeriodEnd ? formatDate(activeSub.currentPeriodEnd) : "—"}
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {activeSub.plan.features.map((f: string) => (
+                  <Badge key={f} variant="outline">
+                    {f}
+                  </Badge>
+                ))}
+              </div>
+            </Card>
+          ) : (
+            <EmptyState label="No subscription found." />
+          )}
+        </TabsContent>
+
+        <TabsContent value="Storage">
+          <Card>
+            <CardHeader>
+              <CardTitle>Storage Usage</CardTitle>
+              <CardDescription>
+                {(tenant.storageUsedMb / 1024).toFixed(1)} GB used
+                {activeSub && ` of ${(activeSub.plan.storageLimitMb / 1024).toFixed(0)} GB`}
+              </CardDescription>
+            </CardHeader>
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
+              <motion.div
+                initial={{ width: 0 }}
+                animate={{ width: `${storagePct}%` }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="h-full bg-accent-gradient"
+              />
+            </div>
+            <p className="mt-2 text-xs text-[var(--text-4)]">{storagePct}% of allotted storage used</p>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="AI">
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>AI Credits</CardTitle>
+                <CardDescription>
+                  {tenant.aiCreditsUsed.toLocaleString()} used
+                  {activeSub && ` of ${activeSub.plan.aiCredits.toLocaleString()}`}
+                </CardDescription>
+              </CardHeader>
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-[var(--surface-2)]">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${aiPct}%` }}
+                  transition={{ duration: 0.5, ease: "easeOut" }}
+                  className="h-full bg-accent-gradient"
+                />
+              </div>
+            </Card>
+            <AiLogsTable logs={tenant.aiUsageLogs} />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="Invoices">
+          <InvoicesTable invoices={tenant.invoices} payments={tenant.payments} />
+        </TabsContent>
+
+        <TabsContent value="Logs">
+          <AuditTable logs={tenant.auditLogs} title="Activity Logs" />
+        </TabsContent>
+
+        <TabsContent value="Flags">
+          <Card>
+            <CardHeader>
+              <CardTitle>Feature Flags</CardTitle>
+              <CardDescription>Global + tenant-scoped flags affecting this tenant</CardDescription>
+            </CardHeader>
+            <div className="space-y-3">
+              {tenant.flags.map((f: any) => (
+                <Toggle
+                  key={f.id}
+                  checked={f.enabled}
+                  onCheckedChange={() => {}}
+                  label={f.name}
+                  description={`${f.scope} scope · ${f.key}`}
+                />
+              ))}
+              {tenant.flags.length === 0 && <EmptyState label="No flags configured for this tenant." />}
+            </div>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="Files">
+          <EmptyPanel
+            icon={Folder}
+            title="File Storage"
+            description="Tenant file browser will appear here once product-specific storage integrations are connected."
+          />
+        </TabsContent>
+
+        <TabsContent value="API Keys">
+          <EmptyPanel
+            icon={Key}
+            title="API Keys"
+            description="Manage tenant-scoped API keys for programmatic access. No keys issued yet."
+          />
+        </TabsContent>
+
+        <TabsContent value="Emails">
+          <EmptyPanel
+            icon={Mail}
+            title="Email Activity"
+            description="Transactional email delivery log for this tenant will appear here."
+          />
+        </TabsContent>
+
+        <TabsContent value="Notifications">
+          <EmptyPanel
+            icon={Bell}
+            title="Notifications"
+            description="Broadcast and system notifications sent to this tenant will appear here."
+          />
+        </TabsContent>
+
+        <TabsContent value="Audit">
+          <AuditTable logs={tenant.auditLogs} title="Audit Trail" showImpersonations={tenant.impersonationSessions} />
+        </TabsContent>
+
+        <TabsContent value="Support">
+          <SupportTable tickets={tenant.supportTickets} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between border-b border-[var(--border-hairline)] py-1.5 last:border-0">
+      <dt className="text-[var(--text-4)]">{label}</dt>
+      <dd className="text-[var(--text-1)] font-medium">{value}</dd>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs text-[var(--text-4)]">{label}</div>
+      <div className="text-base font-semibold text-[var(--text-1)]">{value}</div>
+    </div>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return <p className="py-8 text-center text-sm text-[var(--text-4)]">{label}</p>;
+}
+
+function EmptyPanel({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: any;
+  title: string;
+  description: string;
+}) {
+  return (
+    <Card className="flex flex-col items-center justify-center py-12 text-center">
+      <div className="mb-3 rounded-full bg-[var(--surface-2)] p-3">
+        <Icon className="h-5 w-5 text-[var(--text-4)]" />
+      </div>
+      <h3 className="text-sm font-medium text-[var(--text-1)]">{title}</h3>
+      <p className="mt-1 max-w-sm text-xs text-[var(--text-4)]">{description}</p>
+    </Card>
+  );
+}
+
+function AiLogsTable({ logs }: { logs: any[] }) {
+  const columns: Column<any>[] = [
+    { key: "model", header: "Model", render: (l) => <Badge variant="outline">{l.model}</Badge> },
+    { key: "tokens", header: "Tokens", render: (l) => l.tokens.toLocaleString() },
+    { key: "cost", header: "Cost", render: (l) => formatCents(l.costCents) },
+    { key: "latency", header: "Latency", render: (l) => `${l.responseTimeMs}ms` },
+    {
+      key: "status",
+      header: "Status",
+      render: (l) => <Badge variant={l.success ? "success" : "hot"}>{l.success ? "Success" : "Failed"}</Badge>,
+    },
+    { key: "when", header: "When", render: (l) => timeAgo(l.createdAt) },
+  ];
+  return <DataTable columns={columns} data={logs} rowKey={(l) => l.id} emptyMessage="No AI usage recorded." />;
+}
+
+function InvoicesTable({ invoices, payments }: { invoices: any[]; payments: any[] }) {
+  const columns: Column<any>[] = [
+    { key: "number", header: "Invoice", render: (i) => <span className="font-mono text-xs">{i.number}</span> },
+    { key: "amount", header: "Amount", render: (i) => formatCents(i.amountCents) },
+    { key: "status", header: "Status", render: (i) => <InvoiceStatusBadge status={i.status} /> },
+    { key: "issued", header: "Issued", render: (i) => formatDate(i.issuedAt) },
+    { key: "due", header: "Due", render: (i) => formatDate(i.dueDate) },
+  ];
+  return (
+    <div className="space-y-4">
+      <DataTable columns={columns} data={invoices} rowKey={(i) => i.id} emptyMessage="No invoices yet." />
+      <Card>
+        <CardHeader>
+          <CardTitle>Payment History</CardTitle>
+        </CardHeader>
+        <div className="space-y-2">
+          {payments.map((p: any) => (
+            <div key={p.id} className="flex items-center justify-between text-sm py-1.5 border-b border-[var(--border-hairline)] last:border-0">
+              <span className="text-[var(--text-2)]">{formatDateTime(p.processedAt)} · {p.method}</span>
+              <div className="flex items-center gap-2">
+                {p.refunds.length > 0 && <Badge variant="warm">Refunded</Badge>}
+                <span className="font-medium text-[var(--text-1)]">{formatCents(p.amountCents)}</span>
+              </div>
+            </div>
+          ))}
+          {payments.length === 0 && <EmptyState label="No payments recorded." />}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AuditTable({
+  logs,
+  title,
+  showImpersonations,
+}: {
+  logs: any[];
+  title: string;
+  showImpersonations?: any[];
+}) {
+  const columns: Column<any>[] = [
+    { key: "action", header: "Action", render: (l) => l.action.replace(/_/g, " ").replace(/\./g, " ") },
+    { key: "actor", header: "Actor", render: (l) => l.actorName },
+    { key: "ip", header: "IP", render: (l) => <span className="font-mono text-xs">{l.ip}</span> },
+    { key: "device", header: "Device", render: (l) => `${l.device} · ${l.browser}` },
+    { key: "when", header: "When", render: (l) => timeAgo(l.createdAt) },
+  ];
+  return (
+    <div className="space-y-4">
+      <Card padding="none" className="p-4">
+        <CardHeader>
+          <CardTitle>{title}</CardTitle>
+        </CardHeader>
+      </Card>
+      <DataTable columns={columns} data={logs} rowKey={(l) => l.id} emptyMessage="No audit events." />
+      {showImpersonations && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Impersonation Sessions</CardTitle>
+          </CardHeader>
+          <div className="space-y-2">
+            {showImpersonations.map((s: any) => (
+              <div key={s.id} className="flex items-center justify-between text-sm py-1.5 border-b border-[var(--border-hairline)] last:border-0">
+                <span className="text-[var(--text-2)]">
+                  {s.adminName} · {s.reason ?? "No reason given"}
+                </span>
+                <span className="text-[var(--text-4)] text-xs">
+                  {formatDateTime(s.startedAt)} {s.endedAt ? `→ ${formatDateTime(s.endedAt)}` : "(active)"}
+                </span>
+              </div>
+            ))}
+            {showImpersonations.length === 0 && <EmptyState label="No impersonation sessions." />}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function SupportTable({ tickets }: { tickets: any[] }) {
+  const columns: Column<any>[] = [
+    { key: "subject", header: "Subject", render: (t) => t.subject },
+    { key: "type", header: "Type", render: (t) => <Badge variant="outline">{t.type.replace(/_/g, " ")}</Badge> },
+    { key: "priority", header: "Priority", render: (t) => <PriorityBadge priority={t.priority} /> },
+    { key: "status", header: "Status", render: (t) => <TicketStatusBadge status={t.status} /> },
+    { key: "assignee", header: "Assignee", render: (t) => t.assigneeName ?? "Unassigned" },
+    { key: "created", header: "Created", render: (t) => timeAgo(t.createdAt) },
+  ];
+  return <DataTable columns={columns} data={tickets} rowKey={(t) => t.id} emptyMessage="No support tickets." />;
+}
