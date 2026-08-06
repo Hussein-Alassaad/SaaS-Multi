@@ -8,6 +8,7 @@ import { NAV_ITEMS } from "./nav-config";
 import { LogOut, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
+import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
 
 interface CurrentUser {
@@ -19,6 +20,7 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
   const { theme, setTheme } = useTheme();
+  const mounted = useHasMounted();
   const initial = currentUser?.name?.trim()?.[0]?.toUpperCase() ?? "A";
 
   const isActive = (href: string) =>
@@ -104,7 +106,11 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]"
         >
-          {theme === "dark" ? <Sun className="h-4.5 w-4.5 shrink-0" /> : <Moon className="h-4.5 w-4.5 shrink-0" />}
+          {mounted && theme === "dark" ? (
+            <Sun className="h-4.5 w-4.5 shrink-0" />
+          ) : (
+            <Moon className="h-4.5 w-4.5 shrink-0" />
+          )}
           {expanded && <span className="ml-3 whitespace-nowrap">Toggle theme</span>}
         </button>
         <form action={logoutAction}>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Toggle } from "@/components/ui/Toggle";
 import { Select } from "@/components/ui/Select";
@@ -11,6 +11,7 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { formatCents, timeAgo } from "@/lib/utils";
 import { AI_MODELS } from "@/types/ai";
 import { AlertTriangle, Power } from "lucide-react";
+import { updateGlobalAiSettingsAction, setAiKillSwitchAction } from "@/lib/actions/ai";
 
 interface ProductBudget {
   id: string;
@@ -48,13 +49,48 @@ interface Props {
 }
 
 export function AiControlClient({ globalBudget, productBudgets, logs }: Props) {
-  const [aiEnabled, setAiEnabled] = useState(!globalBudget?.killSwitchEnabled);
   const [defaultModel, setDefaultModel] = useState(globalBudget?.defaultModel ?? "gpt-4o-mini");
   const [dailyBudget, setDailyBudget] = useState(((globalBudget?.dailyBudgetCents ?? 0) / 100).toString());
   const [monthlyBudget, setMonthlyBudget] = useState(((globalBudget?.monthlyBudgetCents ?? 0) / 100).toString());
   const [rateLimit, setRateLimit] = useState((globalBudget?.rateLimitPerMin ?? 60).toString());
   const [cachingEnabled, setCachingEnabled] = useState(globalBudget?.cachingEnabled ?? true);
   const [killSwitch, setKillSwitch] = useState(globalBudget?.killSwitchEnabled ?? false);
+  const [isSaving, startSaveTransition] = useTransition();
+  const [isTogglingKillSwitch, startKillSwitchTransition] = useTransition();
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    setSaveError(null);
+    setSaved(false);
+    startSaveTransition(async () => {
+      const result = await updateGlobalAiSettingsAction({
+        defaultModel,
+        dailyBudgetCents: Math.round(Number(dailyBudget) * 100),
+        monthlyBudgetCents: Math.round(Number(monthlyBudget) * 100),
+        rateLimitPerMin: Math.round(Number(rateLimit)),
+        cachingEnabled,
+      });
+      if (!result.ok) {
+        setSaveError(result.error ?? "Failed to save.");
+      } else {
+        setSaved(true);
+      }
+    });
+  };
+
+  const handleKillSwitchToggle = () => {
+    const next = !killSwitch;
+    setSaveError(null);
+    startKillSwitchTransition(async () => {
+      const result = await setAiKillSwitchAction(next);
+      if (result.ok) {
+        setKillSwitch(next);
+      } else {
+        setSaveError(result.error ?? "Failed to update kill switch.");
+      }
+    });
+  };
 
   const logColumns: Column<AiLogRow>[] = [
     { key: "tenant", header: "Tenant", render: (l) => l.tenant.companyName },
@@ -83,13 +119,6 @@ export function AiControlClient({ globalBudget, productBudgets, logs }: Props) {
           </CardHeader>
 
           <div className="space-y-5">
-            <Toggle
-              checked={aiEnabled}
-              onCheckedChange={setAiEnabled}
-              label="AI Features Enabled"
-              description="Master switch for all AI-powered features across products"
-            />
-
             <div>
               <label className="mb-1.5 block text-sm font-medium text-[var(--text-1)]">Default Model</label>
               <Select
@@ -128,8 +157,12 @@ export function AiControlClient({ globalBudget, productBudgets, logs }: Props) {
               description="Cache identical prompts to reduce cost and latency"
             />
 
-            <div className="flex justify-end">
-              <Button>Save Changes</Button>
+            {saveError && <p className="text-xs text-[var(--status-hot)]">{saveError}</p>}
+            <div className="flex items-center justify-end gap-3">
+              {saved && <span className="text-xs text-[var(--status-cold)]">Saved.</span>}
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save Changes"}
+              </Button>
             </div>
           </div>
         </Card>
@@ -144,10 +177,11 @@ export function AiControlClient({ globalBudget, productBudgets, logs }: Props) {
           <Button
             variant={killSwitch ? "secondary" : "destructive"}
             className="w-full"
-            onClick={() => setKillSwitch((k) => !k)}
+            onClick={handleKillSwitchToggle}
+            disabled={isTogglingKillSwitch}
           >
             <Power className="h-4 w-4" />
-            {killSwitch ? "Kill Switch Active — Restore" : "Activate Kill Switch"}
+            {isTogglingKillSwitch ? "Updating..." : killSwitch ? "Kill Switch Active — Restore" : "Activate Kill Switch"}
           </Button>
           {killSwitch && (
             <p className="mt-3 text-xs text-[var(--status-hot)]">

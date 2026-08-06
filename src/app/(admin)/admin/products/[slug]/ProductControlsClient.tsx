@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Toggle } from "@/components/ui/Toggle";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TenantStatusBadge } from "@/components/ui/StatusBadge";
 import { formatCents, formatDate } from "@/lib/utils";
 import { Wrench } from "lucide-react";
+import { setProductMaintenanceModeAction } from "@/lib/actions/products";
+import { setProductAiKillSwitchAction } from "@/lib/actions/ai";
+import { setFeatureFlagEnabledAction } from "@/lib/actions/feature-flags";
 
 interface TenantRow {
   id: string;
@@ -24,8 +27,10 @@ interface FlagRow {
 }
 
 interface Props {
+  productId: string;
   maintenanceMode: boolean;
   killSwitchEnabled: boolean;
+  hasBudget: boolean;
   defaultModel: string | null;
   dailyBudgetCents: number | null;
   flags: FlagRow[];
@@ -33,8 +38,10 @@ interface Props {
 }
 
 export function ProductControlsClient({
+  productId,
   maintenanceMode,
   killSwitchEnabled,
+  hasBudget,
   defaultModel,
   dailyBudgetCents,
   flags,
@@ -43,6 +50,43 @@ export function ProductControlsClient({
   const [maintenance, setMaintenance] = useState(maintenanceMode);
   const [killSwitch, setKillSwitch] = useState(killSwitchEnabled);
   const [flagState, setFlagState] = useState(Object.fromEntries(flags.map((f) => [f.id, f.enabled])));
+  const [maintenancePending, setMaintenancePending] = useState(false);
+  const [killSwitchPending, setKillSwitchPending] = useState(false);
+  const [pendingFlagId, setPendingFlagId] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+
+  const handleMaintenanceToggle = (next: boolean) => {
+    const previous = maintenance;
+    setMaintenance(next);
+    setMaintenancePending(true);
+    startTransition(async () => {
+      const result = await setProductMaintenanceModeAction(productId, next);
+      if (!result.ok) setMaintenance(previous);
+      setMaintenancePending(false);
+    });
+  };
+
+  const handleKillSwitchToggle = (next: boolean) => {
+    const previous = killSwitch;
+    setKillSwitch(next);
+    setKillSwitchPending(true);
+    startTransition(async () => {
+      const result = await setProductAiKillSwitchAction(productId, next);
+      if (!result.ok) setKillSwitch(previous);
+      setKillSwitchPending(false);
+    });
+  };
+
+  const handleFlagToggle = (flagId: string, next: boolean) => {
+    const previous = flagState[flagId];
+    setFlagState((s) => ({ ...s, [flagId]: next }));
+    setPendingFlagId(flagId);
+    startTransition(async () => {
+      const result = await setFeatureFlagEnabledAction(flagId, next);
+      if (!result.ok) setFlagState((s) => ({ ...s, [flagId]: previous }));
+      setPendingFlagId(null);
+    });
+  };
 
   const tenantColumns: Column<TenantRow>[] = [
     { key: "name", header: "Company", render: (t) => t.companyName },
@@ -63,14 +107,16 @@ export function ProductControlsClient({
         <div className="space-y-3">
           <Toggle
             checked={maintenance}
-            onCheckedChange={setMaintenance}
+            onCheckedChange={handleMaintenanceToggle}
+            disabled={maintenancePending}
             label="Maintenance Mode"
             description="Temporarily block tenant access while performing maintenance."
           />
-          {defaultModel && (
+          {hasBudget && (
             <Toggle
               checked={killSwitch}
-              onCheckedChange={setKillSwitch}
+              onCheckedChange={handleKillSwitchToggle}
+              disabled={killSwitchPending}
               label="AI Emergency Kill Switch"
               description={`Default model: ${defaultModel}${dailyBudgetCents != null ? ` · Daily budget: ${formatCents(dailyBudgetCents)}` : ""}`}
             />
@@ -88,7 +134,8 @@ export function ProductControlsClient({
             <Toggle
               key={f.id}
               checked={flagState[f.id]}
-              onCheckedChange={(v) => setFlagState((s) => ({ ...s, [f.id]: v }))}
+              onCheckedChange={(v) => handleFlagToggle(f.id, v)}
+              disabled={pendingFlagId === f.id}
               label={f.name}
               description={f.key}
             />

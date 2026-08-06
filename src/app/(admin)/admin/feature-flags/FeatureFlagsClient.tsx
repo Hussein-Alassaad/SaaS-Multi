@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/Card";
 import { Toggle } from "@/components/ui/Toggle";
 import { Badge } from "@/components/ui/Badge";
@@ -8,6 +8,7 @@ import { Select } from "@/components/ui/Select";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Plus } from "lucide-react";
+import { setFeatureFlagEnabledAction } from "@/lib/actions/feature-flags";
 
 interface FlagRow {
   id: string;
@@ -28,8 +29,23 @@ const SCOPE_VARIANT: Record<string, "accent" | "cold" | "warm" | "outline"> = {
 
 export function FeatureFlagsClient({ flags }: { flags: FlagRow[] }) {
   const [state, setState] = useState(Object.fromEntries(flags.map((f) => [f.id, f.enabled])));
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
   const [scopeFilter, setScopeFilter] = useState("ALL");
   const [search, setSearch] = useState("");
+
+  const handleToggle = (flagId: string, next: boolean) => {
+    const previous = state[flagId];
+    setState((s) => ({ ...s, [flagId]: next }));
+    setPendingId(flagId);
+    startTransition(async () => {
+      const result = await setFeatureFlagEnabledAction(flagId, next);
+      if (!result.ok) {
+        setState((s) => ({ ...s, [flagId]: previous }));
+      }
+      setPendingId(null);
+    });
+  };
 
   const filtered = flags.filter((f) => {
     const matchesScope = scopeFilter === "ALL" || f.scope === scopeFilter;
@@ -75,7 +91,11 @@ export function FeatureFlagsClient({ flags }: { flags: FlagRow[] }) {
                 <p className="mt-1 text-xs text-[var(--text-4)]">{f.scopeLabel}</p>
                 {f.description && <p className="mt-1 text-xs text-[var(--text-4)]">{f.description}</p>}
               </div>
-              <Toggle checked={state[f.id]} onCheckedChange={(v) => setState((s) => ({ ...s, [f.id]: v }))} />
+              <Toggle
+                checked={state[f.id]}
+                onCheckedChange={(v) => handleToggle(f.id, v)}
+                disabled={pendingId === f.id}
+              />
             </div>
           </Card>
         ))}

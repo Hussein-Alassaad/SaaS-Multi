@@ -3,6 +3,7 @@
 import { Bell, Moon, Sun, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
 import { logoutAction } from "@/lib/actions/auth";
+import { useHasMounted } from "@/lib/useHasMounted";
 
 interface CurrentUser {
   name: string;
@@ -11,6 +12,7 @@ interface CurrentUser {
 
 export function MobileTopBar({ currentUser }: { currentUser: CurrentUser | null }) {
   const { theme, setTheme } = useTheme();
+  const mounted = useHasMounted();
   const initial = currentUser?.name?.trim()?.[0]?.toUpperCase() ?? "A";
 
   return (
@@ -34,7 +36,7 @@ export function MobileTopBar({ currentUser }: { currentUser: CurrentUser | null 
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-3)] hover:bg-[var(--surface-2)]"
         >
-          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>
         <form action={logoutAction}>
           <button

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
@@ -19,6 +19,7 @@ import {
 import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
 import { useUiStore } from "@/lib/store/ui";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
+import { setFeatureFlagEnabledAction } from "@/lib/actions/feature-flags";
 import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, type LucideIcon } from "lucide-react";
 
 interface TenantUser {
@@ -149,6 +150,24 @@ export function TenantDetailClient({ tenant }: Props) {
   const router = useRouter();
   const startImpersonation = useUiStore((s) => s.startImpersonation);
   const [tab, setTab] = useState("General");
+  const [flagState, setFlagState] = useState(
+    Object.fromEntries(tenant.flags.map((f) => [f.id, f.enabled]))
+  );
+  const [pendingFlagId, setPendingFlagId] = useState<string | null>(null);
+  const [, startFlagTransition] = useTransition();
+
+  const handleFlagToggle = (flagId: string, next: boolean) => {
+    const previous = flagState[flagId];
+    setFlagState((s) => ({ ...s, [flagId]: next }));
+    setPendingFlagId(flagId);
+    startFlagTransition(async () => {
+      const result = await setFeatureFlagEnabledAction(flagId, next);
+      if (!result.ok) {
+        setFlagState((s) => ({ ...s, [flagId]: previous }));
+      }
+      setPendingFlagId(null);
+    });
+  };
 
   const activeSub = tenant.subscriptions[0];
   const storagePct = activeSub
@@ -331,8 +350,9 @@ export function TenantDetailClient({ tenant }: Props) {
               {tenant.flags.map((f) => (
                 <Toggle
                   key={f.id}
-                  checked={f.enabled}
-                  onCheckedChange={() => {}}
+                  checked={flagState[f.id]}
+                  onCheckedChange={(v) => handleFlagToggle(f.id, v)}
+                  disabled={pendingFlagId === f.id}
                   label={f.name}
                   description={`${f.scope} scope · ${f.key}`}
                 />

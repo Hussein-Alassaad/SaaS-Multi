@@ -70,8 +70,10 @@ export default async function ProductDetailPage({
       </div>
 
       <ProductControlsClient
+        productId={product.id}
         maintenanceMode={product.maintenanceMode}
         killSwitchEnabled={budget?.killSwitchEnabled ?? false}
+        hasBudget={!!budget}
         defaultModel={budget?.defaultModel ?? null}
         dailyBudgetCents={budget?.dailyBudgetCents ?? null}
         flags={flags.map((f) => ({ id: f.id, key: f.key, name: f.name, enabled: f.enabled }))}
