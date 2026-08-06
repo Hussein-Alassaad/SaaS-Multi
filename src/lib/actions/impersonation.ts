@@ -1,17 +1,19 @@
 "use server";
 
 import { db } from "@/lib/db";
+import { getSession } from "@/lib/auth";
+import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
 
 /**
  * Starts an impersonation session: creates an ImpersonationSession record
- * and a corresponding AuditLog entry. In a real deployment the acting admin
- * would come from the authenticated session; for this seeded demo we use
- * the platform Owner as the actor.
+ * and a corresponding AuditLog entry. The acting admin is the currently
+ * authenticated platform user.
  */
 export async function startImpersonationAction(tenantId: string, reason?: string) {
-  const admin = await db.user.findFirst({ where: { scope: "PLATFORM" }, orderBy: { createdAt: "asc" } });
+  const admin = await getSession();
   if (!admin) return { ok: false as const };
+  guard(admin.role?.name ?? "", "tenants", "edit");
 
   const session = await db.impersonationSession.create({
     data: {
@@ -41,12 +43,13 @@ export async function startImpersonationAction(tenantId: string, reason?: string
 }
 
 export async function endImpersonationAction(sessionId: string, tenantId: string) {
+  const admin = await getSession();
+  if (admin) guard(admin.role?.name ?? "", "tenants", "edit");
+
   await db.impersonationSession.update({
     where: { id: sessionId },
     data: { endedAt: new Date() },
   });
-
-  const admin = await db.user.findFirst({ where: { scope: "PLATFORM" }, orderBy: { createdAt: "asc" } });
 
   await db.auditLog.create({
     data: {

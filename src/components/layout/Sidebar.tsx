@@ -8,11 +8,18 @@ import { NAV_ITEMS } from "./nav-config";
 import { LogOut, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
+import { logoutAction } from "@/lib/actions/auth";
 
-export function Sidebar() {
+interface CurrentUser {
+  name: string;
+  role: string;
+}
+
+export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState(false);
   const { theme, setTheme } = useTheme();
+  const initial = currentUser?.name?.trim()?.[0]?.toUpperCase() ?? "A";
 
   const isActive = (href: string) =>
     href === "/admin" ? pathname === "/admin" : pathname.startsWith(href);
@@ -27,7 +34,7 @@ export function Sidebar() {
     >
       <div className="flex h-16 items-center px-4">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-gradient text-sm font-bold text-white">
-          A
+          {initial}
         </div>
         {expanded && (
           <span className="ml-3 text-sm font-semibold text-gradient whitespace-nowrap">
@@ -78,6 +85,20 @@ export function Sidebar() {
         })}
       </nav>
 
+      {currentUser && (
+        <div className="flex items-center border-t border-[var(--border-hairline)] px-4 py-3">
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs font-semibold text-[var(--text-2)]">
+            {initial}
+          </div>
+          {expanded && (
+            <div className="ml-3 min-w-0">
+              <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
+              <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="space-y-1 border-t border-[var(--border-hairline)] px-2 py-3">
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -86,10 +107,15 @@ export function Sidebar() {
           {theme === "dark" ? <Sun className="h-4.5 w-4.5 shrink-0" /> : <Moon className="h-4.5 w-4.5 shrink-0" />}
           {expanded && <span className="ml-3 whitespace-nowrap">Toggle theme</span>}
         </button>
-        <button className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]">
-          <LogOut className="h-4.5 w-4.5 shrink-0" />
-          {expanded && <span className="ml-3 whitespace-nowrap">Sign out</span>}
-        </button>
+        <form action={logoutAction}>
+          <button
+            type="submit"
+            className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]"
+          >
+            <LogOut className="h-4.5 w-4.5 shrink-0" />
+            {expanded && <span className="ml-3 whitespace-nowrap">Sign out</span>}
+          </button>
+        </form>
       </div>
     </motion.aside>
   );

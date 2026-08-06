@@ -96,6 +96,7 @@ model User {
   status      String    @default("ACTIVE")
   roleId      String?
   tenantId    String?
+  passwordHash String?
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

@@ -2,15 +2,22 @@
 
 import { Bell, Moon, Sun, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
+import { logoutAction } from "@/lib/actions/auth";
 
-export function MobileTopBar() {
+interface CurrentUser {
+  name: string;
+  role: string;
+}
+
+export function MobileTopBar({ currentUser }: { currentUser: CurrentUser | null }) {
   const { theme, setTheme } = useTheme();
+  const initial = currentUser?.name?.trim()?.[0]?.toUpperCase() ?? "A";
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--surface-1)]/80 px-4 backdrop-blur-xl md:hidden">
       <div className="flex items-center gap-2">
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-gradient text-xs font-bold text-white">
-          A
+          {initial}
         </div>
         <span className="text-sm font-semibold text-gradient">Admin Platform</span>
       </div>
@@ -29,12 +36,15 @@ export function MobileTopBar() {
         >
           {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>
-        <button
-          aria-label="Sign out"
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-3)] hover:bg-[var(--surface-2)]"
-        >
-          <LogOut className="h-4 w-4" />
-        </button>
+        <form action={logoutAction}>
+          <button
+            type="submit"
+            aria-label="Sign out"
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-3)] hover:bg-[var(--surface-2)]"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </form>
       </div>
     </header>
   );

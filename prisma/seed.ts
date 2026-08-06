@@ -1,4 +1,6 @@
 import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
+import { PERMISSION_MATRIX, type SystemRole } from "../src/lib/permissions";
 
 const db = new PrismaClient();
 
@@ -42,35 +44,21 @@ async function main() {
   // -------------------------------------------------------------------
   // Roles & permissions
   // -------------------------------------------------------------------
-  const roleDefs: Record<string, { resource: string; action: string }[]> = {
-    Owner: [{ resource: "*", action: "manage" }],
-    Developer: [
-      { resource: "products", action: "manage" },
-      { resource: "feature-flags", action: "manage" },
-      { resource: "integrations", action: "manage" },
-      { resource: "monitoring", action: "manage" },
-      { resource: "ai", action: "manage" },
-    ],
-    Support: [
-      { resource: "tenants", action: "edit" },
-      { resource: "support", action: "manage" },
-      { resource: "users", action: "edit" },
-    ],
-    Finance: [
-      { resource: "billing", action: "manage" },
-      { resource: "subscriptions", action: "manage" },
-      { resource: "analytics", action: "view" },
-    ],
-    Sales: [
-      { resource: "tenants", action: "edit" },
-      { resource: "subscriptions", action: "edit" },
-      { resource: "analytics", action: "view" },
-    ],
-    Marketing: [
-      { resource: "notifications", action: "manage" },
-      { resource: "analytics", action: "view" },
-    ],
-  };
+  // Permission rows are generated directly from PERMISSION_MATRIX
+  // (src/lib/permissions.ts) — the canonical source of truth used by the
+  // app's `can()`/`guard()` enforcement — so the DB rows shown on the
+  // Roles page always mirror what's actually enforced in code.
+  const roleDefs: Record<SystemRole, { resource: string; action: string }[]> = Object.fromEntries(
+    Object.entries(PERMISSION_MATRIX).map(([roleName, resourceMap]) => {
+      const perms: { resource: string; action: string }[] = [];
+      for (const [resource, actions] of Object.entries(resourceMap)) {
+        for (const action of actions ?? []) {
+          perms.push({ resource, action });
+        }
+      }
+      return [roleName, perms];
+    })
+  ) as Record<SystemRole, { resource: string; action: string }[]>;
 
   const roles: Record<string, { id: string }> = {};
   for (const [name, perms] of Object.entries(roleDefs)) {
@@ -173,15 +161,16 @@ async function main() {
   // Platform (internal admin) users
   // -------------------------------------------------------------------
   const platformUsersData = [
-    { email: "ava.owner@platform.example.com", name: "Ava Whitfield", role: "Owner" },
-    { email: "leo.dev@platform.example.com", name: "Leo Marchetti", role: "Developer" },
-    { email: "nina.support@platform.example.com", name: "Nina Osei", role: "Support" },
-    { email: "marcus.finance@platform.example.com", name: "Marcus Chen", role: "Finance" },
-    { email: "priya.sales@platform.example.com", name: "Priya Nair", role: "Sales" },
-    { email: "diego.marketing@platform.example.com", name: "Diego Fuentes", role: "Marketing" },
+    { email: "ava.owner@platform.example.com", name: "Ava Whitfield", role: "Owner", password: "owner123!" },
+    { email: "leo.dev@platform.example.com", name: "Leo Marchetti", role: "Developer", password: "dev123!" },
+    { email: "nina.support@platform.example.com", name: "Nina Osei", role: "Support", password: "support123!" },
+    { email: "marcus.finance@platform.example.com", name: "Marcus Chen", role: "Finance", password: "finance123!" },
+    { email: "priya.sales@platform.example.com", name: "Priya Nair", role: "Sales", password: "sales123!" },
+    { email: "diego.marketing@platform.example.com", name: "Diego Fuentes", role: "Marketing", password: "marketing123!" },
   ];
   const platformUsers: Record<string, { id: string }> = {};
   for (const u of platformUsersData) {
+    const passwordHash = await bcrypt.hash(u.password, 10);
     const user = await db.user.create({
       data: {
         email: u.email,
@@ -189,6 +178,7 @@ async function main() {
         scope: "PLATFORM",
         status: "ACTIVE",
         roleId: roles[u.role].id,
+        passwordHash,
         lastLoginAt: daysAgo(randInt(0, 5)),
       },
     });

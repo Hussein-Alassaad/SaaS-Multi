@@ -65,7 +65,37 @@ see `package.json` scripts.)
 2. Set `DATABASE_URL` in `.env` to your Postgres connection string.
 3. Run `npx prisma migrate dev` and `npm run db:seed`.
 
-### 3. Run the dev server
+### 3. Log in
+
+The `/admin/*` tree requires authentication. Visiting it while logged out
+redirects to `/login`. Platform (internal admin) users can sign in with the
+demo credentials seeded above — **tenant-user login is intentionally out of
+scope for this pass** (only `scope: "PLATFORM"` users can log in here).
+
+| Role | Email | Password |
+|---|---|---|
+| Owner | `ava.owner@platform.example.com` | `owner123!` |
+| Developer | `leo.dev@platform.example.com` | `dev123!` |
+| Support | `nina.support@platform.example.com` | `support123!` |
+| Finance | `marcus.finance@platform.example.com` | `finance123!` |
+| Sales | `priya.sales@platform.example.com` | `sales123!` |
+| Marketing | `diego.marketing@platform.example.com` | `marketing123!` |
+
+**Session mechanism:** email + password auth, backed by a signed, HTTP-only
+JWT cookie (`admin_session`) — passwords are hashed with `bcryptjs`, and the
+session token is signed/verified with `jose` (`src/lib/auth.ts`). This keeps
+verification edge-compatible so `src/middleware.ts` can gate every
+`/admin/*` request without touching Prisma. Sessions last 7 days. Set
+`AUTH_SECRET` in `.env` to a strong random value for any real deployment
+(see `.env.example`) — a fixed fallback secret is used for local dev only
+and is **not safe for production**.
+
+Server-side mutations (e.g. starting/ending tenant impersonation) call
+`getSession()` to identify the acting admin and `guard()` from
+`src/lib/permissions.ts` to enforce the role → permission matrix before
+performing the mutation.
+
+### 4. Run the dev server
 
 ```bash
 npm run dev
@@ -172,9 +202,15 @@ branching anywhere in the admin core.
   server actions is straightforward given the existing `lib/mock/*` query
   layer and Prisma models, but was deprioritized in favor of covering every
   module end-to-end.
-- There is no authentication/session layer yet — all pages assume an
-  authenticated platform admin. `lib/permissions.ts` defines the role →
-  permission matrix and guard helpers ready to wire in once auth exists.
+- Authentication now covers **platform admins only** (`scope: "PLATFORM"`).
+  Tenant-side (`scope: "TENANT"`) login is intentionally out of scope for
+  this pass — those users have no `passwordHash` and cannot sign in here.
+- Permission enforcement (`guard()` from `lib/permissions.ts`) is wired into
+  the impersonation server action, the only state-changing server action
+  that currently exists in this codebase (see the gap above about most
+  writes still being local component state). As more server actions are
+  added for the other modules' write paths, they should call `getSession()`
+  + `guard()` the same way.
 - `api/admin/*` route handlers were not heavily used since server
   components calling `lib/mock/*` directly (via Prisma) covers all current
   read paths; add route handlers there as needed for client-side fetching

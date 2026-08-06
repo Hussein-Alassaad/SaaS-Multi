@@ -52,7 +52,7 @@ export function RolesMatrixClient({ roles }: { roles: RoleRow[] }) {
                     {resource.replace(/-/g, " ")}
                   </td>
                   {roles.map((r) => {
-                    const perms = r.resourcePermissions[resource] ?? r.resourcePermissions["*"] ?? [];
+                    const perms = r.resourcePermissions[resource] ?? [];
                     const hasAccess = perms.length > 0;
                     return (
                       <td key={r.id} className="px-4 py-2.5">
