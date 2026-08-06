@@ -17,9 +17,10 @@ import {
   Phone,
   Send,
   Webhook,
+  type LucideIcon,
 } from "lucide-react";
 
-const PROVIDER_META: Record<string, { icon: any; label: string }> = {
+const PROVIDER_META: Record<string, { icon: LucideIcon; label: string }> = {
   OPENAI: { icon: Bot, label: "AI Model Provider" },
   CLAUDE: { icon: Sparkles, label: "AI Model Provider" },
   GEMINI: { icon: Gem, label: "AI Model Provider" },

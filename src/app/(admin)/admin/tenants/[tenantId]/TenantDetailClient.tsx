@@ -18,22 +18,115 @@ import {
 } from "@/components/ui/StatusBadge";
 import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
 import { useUiStore } from "@/lib/store/ui";
-import {
-  ArrowLeft,
-  UserCog,
-  Database,
-  Sparkles,
-  FileText,
-  Key,
-  Mail,
-  Bell,
-  ScrollText,
-  LifeBuoy,
-  Folder,
-} from "lucide-react";
+import { startImpersonationAction } from "@/lib/actions/impersonation";
+import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, type LucideIcon } from "lucide-react";
+
+interface TenantUser {
+  id: string;
+  name: string;
+  email: string;
+  status: string;
+  lastLoginAt: string | null;
+}
+interface TenantSubscription {
+  id: string;
+  status: string;
+  billingCycle: string;
+  trialEndsAt: string | null;
+  gracePeriodEndsAt: string | null;
+  currentPeriodEnd: string | null;
+  plan: {
+    name: string;
+    monthlyPrice: number;
+    yearlyPrice: number;
+    maxUsers: number;
+    storageLimitMb: number;
+    aiCredits: number;
+    features: string[];
+  };
+}
+interface TenantInvoice {
+  id: string;
+  number: string;
+  status: string;
+  amountCents: number;
+  dueDate: string;
+  issuedAt: string;
+  paidAt: string | null;
+}
+interface TenantPayment {
+  id: string;
+  amountCents: number;
+  status: string;
+  method: string;
+  processedAt: string;
+  refunds: { id: string; amountCents: number; status: string }[];
+}
+interface TenantAiLog {
+  id: string;
+  model: string;
+  tokens: number;
+  costCents: number;
+  responseTimeMs: number;
+  success: boolean;
+  createdAt: string;
+}
+interface TenantTicket {
+  id: string;
+  subject: string;
+  type: string;
+  priority: string;
+  status: string;
+  assigneeName: string | null;
+  createdAt: string;
+}
+interface TenantAuditEntry {
+  id: string;
+  action: string;
+  actorName: string;
+  ip: string | null;
+  device: string | null;
+  browser: string | null;
+  createdAt: string;
+}
+interface TenantImpersonation {
+  id: string;
+  adminName: string;
+  reason: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+interface TenantFlag {
+  id: string;
+  key: string;
+  name: string;
+  scope: string;
+  enabled: boolean;
+}
+
+interface TenantDetail {
+  id: string;
+  companyName: string;
+  subdomain: string;
+  status: string;
+  storageUsedMb: number;
+  aiCreditsUsed: number;
+  createdAt: string;
+  product: { id: string; name: string; slug: string };
+  owner: { id: string; name: string; email: string } | null;
+  users: TenantUser[];
+  subscriptions: TenantSubscription[];
+  invoices: TenantInvoice[];
+  payments: TenantPayment[];
+  aiUsageLogs: TenantAiLog[];
+  supportTickets: TenantTicket[];
+  auditLogs: TenantAuditEntry[];
+  impersonationSessions: TenantImpersonation[];
+  flags: TenantFlag[];
+}
 
 interface Props {
-  tenant: any;
+  tenant: TenantDetail;
 }
 
 const TABS = [
@@ -83,7 +176,13 @@ export function TenantDetailClient({ tenant }: Props) {
             {tenant.subdomain}.example.com · {tenant.product.name} · Created {formatDate(tenant.createdAt)}
           </p>
         </div>
-        <Button variant="outline" onClick={() => startImpersonation(tenant.id, tenant.companyName)}>
+        <Button
+          variant="outline"
+          onClick={async () => {
+            const result = await startImpersonationAction(tenant.id);
+            startImpersonation(tenant.id, tenant.companyName, result.ok ? result.sessionId : null);
+          }}
+        >
           <UserCog className="h-4 w-4" />
           Login as Tenant
         </Button>
@@ -120,7 +219,7 @@ export function TenantDetailClient({ tenant }: Props) {
                 <CardTitle>Team Members ({tenant.users.length})</CardTitle>
               </CardHeader>
               <div className="space-y-3">
-                {tenant.users.map((u: any) => (
+                {tenant.users.map((u) => (
                   <div key={u.id} className="flex items-center gap-2.5">
                     <Avatar name={u.name} size="sm" />
                     <div className="min-w-0 flex-1">
@@ -229,7 +328,7 @@ export function TenantDetailClient({ tenant }: Props) {
               <CardDescription>Global + tenant-scoped flags affecting this tenant</CardDescription>
             </CardHeader>
             <div className="space-y-3">
-              {tenant.flags.map((f: any) => (
+              {tenant.flags.map((f) => (
                 <Toggle
                   key={f.id}
                   checked={f.enabled}
@@ -314,7 +413,7 @@ function EmptyPanel({
   title,
   description,
 }: {
-  icon: any;
+  icon: LucideIcon;
   title: string;
   description: string;
 }) {
@@ -329,8 +428,8 @@ function EmptyPanel({
   );
 }
 
-function AiLogsTable({ logs }: { logs: any[] }) {
-  const columns: Column<any>[] = [
+function AiLogsTable({ logs }: { logs: TenantAiLog[] }) {
+  const columns: Column<TenantAiLog>[] = [
     { key: "model", header: "Model", render: (l) => <Badge variant="outline">{l.model}</Badge> },
     { key: "tokens", header: "Tokens", render: (l) => l.tokens.toLocaleString() },
     { key: "cost", header: "Cost", render: (l) => formatCents(l.costCents) },
@@ -345,8 +444,8 @@ function AiLogsTable({ logs }: { logs: any[] }) {
   return <DataTable columns={columns} data={logs} rowKey={(l) => l.id} emptyMessage="No AI usage recorded." />;
 }
 
-function InvoicesTable({ invoices, payments }: { invoices: any[]; payments: any[] }) {
-  const columns: Column<any>[] = [
+function InvoicesTable({ invoices, payments }: { invoices: TenantInvoice[]; payments: TenantPayment[] }) {
+  const columns: Column<TenantInvoice>[] = [
     { key: "number", header: "Invoice", render: (i) => <span className="font-mono text-xs">{i.number}</span> },
     { key: "amount", header: "Amount", render: (i) => formatCents(i.amountCents) },
     { key: "status", header: "Status", render: (i) => <InvoiceStatusBadge status={i.status} /> },
@@ -361,7 +460,7 @@ function InvoicesTable({ invoices, payments }: { invoices: any[]; payments: any[
           <CardTitle>Payment History</CardTitle>
         </CardHeader>
         <div className="space-y-2">
-          {payments.map((p: any) => (
+          {payments.map((p) => (
             <div key={p.id} className="flex items-center justify-between text-sm py-1.5 border-b border-[var(--border-hairline)] last:border-0">
               <span className="text-[var(--text-2)]">{formatDateTime(p.processedAt)} · {p.method}</span>
               <div className="flex items-center gap-2">
@@ -382,11 +481,11 @@ function AuditTable({
   title,
   showImpersonations,
 }: {
-  logs: any[];
+  logs: TenantAuditEntry[];
   title: string;
-  showImpersonations?: any[];
+  showImpersonations?: TenantImpersonation[];
 }) {
-  const columns: Column<any>[] = [
+  const columns: Column<TenantAuditEntry>[] = [
     { key: "action", header: "Action", render: (l) => l.action.replace(/_/g, " ").replace(/\./g, " ") },
     { key: "actor", header: "Actor", render: (l) => l.actorName },
     { key: "ip", header: "IP", render: (l) => <span className="font-mono text-xs">{l.ip}</span> },
@@ -407,7 +506,7 @@ function AuditTable({
             <CardTitle>Impersonation Sessions</CardTitle>
           </CardHeader>
           <div className="space-y-2">
-            {showImpersonations.map((s: any) => (
+            {showImpersonations.map((s) => (
               <div key={s.id} className="flex items-center justify-between text-sm py-1.5 border-b border-[var(--border-hairline)] last:border-0">
                 <span className="text-[var(--text-2)]">
                   {s.adminName} · {s.reason ?? "No reason given"}
@@ -425,8 +524,8 @@ function AuditTable({
   );
 }
 
-function SupportTable({ tickets }: { tickets: any[] }) {
-  const columns: Column<any>[] = [
+function SupportTable({ tickets }: { tickets: TenantTicket[] }) {
+  const columns: Column<TenantTicket>[] = [
     { key: "subject", header: "Subject", render: (t) => t.subject },
     { key: "type", header: "Type", render: (t) => <Badge variant="outline">{t.type.replace(/_/g, " ")}</Badge> },
     { key: "priority", header: "Priority", render: (t) => <PriorityBadge priority={t.priority} /> },

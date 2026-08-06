@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { formatCents, formatDate } from "@/lib/utils";
 import { useUiStore } from "@/lib/store/ui";
+import { startImpersonationAction } from "@/lib/actions/impersonation";
 import { UserCog } from "lucide-react";
 
 interface TenantRow {
@@ -95,9 +96,10 @@ export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
         <Button
           size="sm"
           variant="outline"
-          onClick={(e) => {
+          onClick={async (e) => {
             e.stopPropagation();
-            startImpersonation(t.id, t.companyName);
+            const result = await startImpersonationAction(t.id);
+            startImpersonation(t.id, t.companyName, result.ok ? result.sessionId : null);
           }}
         >
           <UserCog className="h-3.5 w-3.5" />

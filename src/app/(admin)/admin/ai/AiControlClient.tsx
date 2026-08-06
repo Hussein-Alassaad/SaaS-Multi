@@ -12,6 +12,27 @@ import { formatCents, timeAgo } from "@/lib/utils";
 import { AI_MODELS } from "@/types/ai";
 import { AlertTriangle, Power } from "lucide-react";
 
+interface ProductBudget {
+  id: string;
+  dailyBudgetCents: number;
+  monthlyBudgetCents: number;
+  rateLimitPerMin: number;
+  defaultModel: string;
+  killSwitchEnabled: boolean;
+}
+
+interface AiLogRow {
+  id: string;
+  tenant: { companyName: string };
+  product: { name: string };
+  model: string;
+  tokens: number;
+  costCents: number;
+  responseTimeMs: number;
+  success: boolean;
+  createdAt: string | Date;
+}
+
 interface Props {
   globalBudget: {
     id: string;
@@ -22,8 +43,8 @@ interface Props {
     cachingEnabled: boolean;
     killSwitchEnabled: boolean;
   } | null;
-  productBudgets: any[];
-  logs: any[];
+  productBudgets: ProductBudget[];
+  logs: AiLogRow[];
 }
 
 export function AiControlClient({ globalBudget, productBudgets, logs }: Props) {
@@ -35,7 +56,7 @@ export function AiControlClient({ globalBudget, productBudgets, logs }: Props) {
   const [cachingEnabled, setCachingEnabled] = useState(globalBudget?.cachingEnabled ?? true);
   const [killSwitch, setKillSwitch] = useState(globalBudget?.killSwitchEnabled ?? false);
 
-  const logColumns: Column<any>[] = [
+  const logColumns: Column<AiLogRow>[] = [
     { key: "tenant", header: "Tenant", render: (l) => l.tenant.companyName },
     { key: "product", header: "Product", render: (l) => <Badge variant="outline">{l.product.name}</Badge> },
     { key: "model", header: "Model", render: (l) => l.model },

@@ -1,36 +1,181 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Admin Platform
 
-## Getting Started
+Phase 1 of a multi-tenant SaaS Admin Platform — the internal control center that
+will eventually manage multiple independent products (a Marketing platform,
+a Gym platform, and future products), each plugging into the same
+product-agnostic core.
 
-First, run the development server:
+This phase implements only the **Admin Platform**: dashboard, tenant CRM,
+product registry, billing, AI control center, users, support, notifications,
+analytics, feature flags, integrations, audit logs, monitoring, roles &
+permissions, security, settings, and tenant impersonation. It does **not**
+implement any Marketing or Gym feature logic — those are separate products
+that register into this platform later without touching its core.
+
+## Stack
+
+- **Next.js 15** (App Router) + TypeScript
+- **Prisma ORM** — SQLite by default (zero-config local dev), Postgres-ready
+- Path-based routing (`/admin/...`) — structured so subdomain routing
+  (`admin.domain.com`) is a future config swap, not a rewrite
+- **Tailwind CSS v4** (CSS-first `@theme`) + **Framer Motion** for the full
+  glass design system (ambient glows, shared-layout nav pill, spring-based
+  sheets, shimmer-only loading states)
+- **Radix UI** primitives (dialog, dropdown, tabs, select, switch, tooltip,
+  etc.) restyled to match the design system
+- **Recharts** for all charts
+- **next-themes** for dark/light (dark-first default)
+- **Zustand** for lightweight client UI state (sidebar, impersonation banner)
+- **zod** for validation schemas backing the domain types
+
+## Getting started
+
+### 1. Install dependencies
+
+```bash
+npm install
+```
+
+### 2. Set up the database
+
+The project ships configured for **SQLite** so it runs with zero external
+setup — no Postgres instance required.
+
+```bash
+cp .env.example .env
+npx prisma db push      # creates prisma/dev.db from the schema
+npm run db:seed         # seeds 2 products, 8 tenants, plans, invoices,
+                         # AI usage logs, tickets, audit logs, flags, roles
+```
+
+(`npm run db:push` / `npm run db:seed` are also available as shortcuts —
+see `package.json` scripts.)
+
+**To use Postgres instead:**
+
+1. In `prisma/schema.prisma`, change `provider = "sqlite"` to
+   `provider = "postgresql"` under `datasource db`.
+   - Note: SQLite has no native enum type, so this schema models
+     enum-like fields (statuses, scopes, etc.) as validated `String`
+     columns rather than Prisma `enum`s — see the comment block at the
+     top of `schema.prisma` for the full list of allowed values per
+     field. This keeps the same schema portable across both providers;
+     you are not required to convert them to native enums when
+     switching to Postgres, though you may choose to.
+2. Set `DATABASE_URL` in `.env` to your Postgres connection string.
+3. Run `npx prisma migrate dev` and `npm run db:seed`.
+
+### 3. Run the dev server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) — it redirects to
+`/admin`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Other scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Script | Purpose |
+|---|---|
+| `npm run build` | Production build |
+| `npm run db:generate` | Regenerate the Prisma client |
+| `npm run db:push` | Push schema changes to the DB (no migration history) |
+| `npm run db:migrate` | Create/apply a migration (Postgres workflow) |
+| `npm run db:seed` | Re-run the seed script |
+| `npm run db:reset` | Drop, recreate, and reseed the database |
 
-## Learn More
+## Folder structure
 
-To learn more about Next.js, take a look at the following resources:
+```
+src/
+  app/
+    (admin)/admin/          # every admin module — layout.tsx is the shell
+      tenants/               tenant CRM (table + detail w/ 13 tabs)
+      products/               product registry (grid + generic [slug] page)
+      subscriptions/          plan builder (Basic/Pro/Enterprise)
+      billing/                revenue, invoices, payments, refunds
+      ai/                     AI Control Center
+      users/ support/ notifications/ analytics/
+      feature-flags/ integrations/ audit-logs/ monitoring/
+      roles/ security/ settings/
+    api/admin/               route handlers (as needed; most reads go
+                              through server components + lib/mock/*)
+    layout.tsx                root layout: theme provider, fonts, ambient glows
+    globals.css                design tokens, glass utilities, shimmer, diagram theme
+  components/
+    layout/                  Sidebar, MobileTopBar, MobileBottomSheet,
+                              AmbientWordmark, PageTransition, ImpersonationBanner
+    ui/                       Card, Button, Badge, KpiCard, DataTable, Modal,
+                              Drawer, Skeleton, Toggle, Select, Tabs, StatusBadge...
+    charts/                   Revenue/TenantGrowth/AiUsage/ApiRequests/ActiveUsers
+    diagram/                  SystemFlowDiagram — the monitoring page's
+                              interactive technical-schematic data-flow view
+  lib/
+    db.ts                     Prisma client singleton
+    permissions.ts             role -> permission matrix + guard helpers
+    mock/                      server-side query functions per domain,
+                                reading live from the seeded DB
+    actions/                   server actions (e.g. impersonation start/end)
+    store/                     Zustand UI store
+    utils.ts
+  types/
+    product.ts, tenant.ts, subscription.ts, ai.ts, billing.ts
+                                shared domain types + zod schemas (product-agnostic)
+prisma/
+  schema.prisma
+  seed.ts
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Adding a future product
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The core admin code never branches on a product's identity — `Product` is a
+registry entry (`slug`, `name`, `status`, `version`, `config` JSON), and every
+tenant-owned resource is scoped by `tenantId` → `productId`, not by hardcoded
+product logic. To add a new product to the ecosystem:
 
-## Deploy on Vercel
+1. Insert a row into the `Product` table (via `/admin/products` UI once
+   write actions are added, or directly via Prisma/seed):
+   ```ts
+   await db.product.create({
+     data: {
+       slug: "my-new-product",
+       name: "My New Product",
+       status: "FUTURE", // or "ACTIVE" once launched
+       version: "0.1.0",
+       config: JSON.stringify({ primaryColor: "#...", icon: "..." }),
+     },
+   });
+   ```
+2. It immediately appears in `/admin/products` and gets a working detail
+   page at `/admin/products/my-new-product` — the `[slug]` route reads
+   generically from the registry, no code changes required.
+3. Point tenants at it by setting their `productId` — they'll show up in
+   that product's tenant list, AI usage, and revenue rollups automatically.
+4. The product's own feature logic (e.g. class scheduling for a Gym
+   product, campaign builders for a Marketing product) is built as a
+   **separate codebase/module** that plugs into this admin platform's data
+   model — it is intentionally out of scope for this repo.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+This is proven in the seed data: **Marketing** (`ACTIVE`) and **Gym**
+(`FUTURE`) are both registered products rendered from the exact same
+`/admin/products/[slug]` code path, with zero `if product === '...'`
+branching anywhere in the admin core.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Known gaps vs. the full spec
+
+- Most write actions (editing a plan, saving settings, creating a feature
+  flag, etc.) are wired as functional UI with local component state rather
+  than persisted server actions — the two exceptions are tenant
+  impersonation (start/end sessions are persisted to `ImpersonationSession`
+  + `AuditLog`) which was explicitly required to be real. Wiring the rest to
+  server actions is straightforward given the existing `lib/mock/*` query
+  layer and Prisma models, but was deprioritized in favor of covering every
+  module end-to-end.
+- There is no authentication/session layer yet — all pages assume an
+  authenticated platform admin. `lib/permissions.ts` defines the role →
+  permission matrix and guard helpers ready to wire in once auth exists.
+- `api/admin/*` route handlers were not heavily used since server
+  components calling `lib/mock/*` directly (via Prisma) covers all current
+  read paths; add route handlers there as needed for client-side fetching
+  or external API consumers.

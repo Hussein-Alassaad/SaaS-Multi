@@ -2,11 +2,19 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useUiStore } from "@/lib/store/ui";
+import { endImpersonationAction } from "@/lib/actions/impersonation";
 import { UserCog, X } from "lucide-react";
 
 export function ImpersonationBanner() {
   const impersonation = useUiStore((s) => s.impersonation);
   const endImpersonation = useUiStore((s) => s.endImpersonation);
+
+  const handleExit = async () => {
+    if (impersonation?.sessionId) {
+      await endImpersonationAction(impersonation.sessionId, impersonation.tenantId);
+    }
+    endImpersonation();
+  };
 
   return (
     <AnimatePresence>
@@ -24,7 +32,7 @@ export function ImpersonationBanner() {
               Viewing as <strong>{impersonation.tenantName}</strong> — impersonation session active
             </span>
             <button
-              onClick={endImpersonation}
+              onClick={handleExit}
               className="ml-3 inline-flex items-center gap-1 rounded-full bg-white/20 px-2.5 py-0.5 text-xs hover:bg-white/30"
             >
               <X className="h-3 w-3" />

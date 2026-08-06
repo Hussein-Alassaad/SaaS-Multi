@@ -1,5 +1,3 @@
-import { z } from "zod";
-
 export const TICKET_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 export type TicketPriority = (typeof TICKET_PRIORITIES)[number];
 
