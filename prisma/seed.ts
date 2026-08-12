@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { PERMISSION_MATRIX, type SystemRole } from "../src/lib/permissions";
+import { AGENCY_PERMISSION_MATRIX, agencyRoleDbName, type AgencyRole } from "../src/lib/agency-permissions";
 
 const db = new PrismaClient();
 
@@ -22,6 +23,16 @@ async function main() {
   console.log("Seeding database...");
 
   // Clean slate (order matters for FK constraints)
+  await db.meetingRequest.deleteMany();
+  await db.meetingSlot.deleteMany();
+  await db.message.deleteMany();
+  await db.conversation.deleteMany();
+  await db.channel.deleteMany();
+  await db.nexarisClient.deleteMany();
+  await db.knowledgeEntry.deleteMany();
+  await db.tenantFeatureRequest.deleteMany();
+  await db.aiSettings.deleteMany();
+  await db.teamInvite.deleteMany();
   await db.impersonationSession.deleteMany();
   await db.auditLog.deleteMany();
   await db.aiUsageLog.deleteMany();
@@ -33,7 +44,6 @@ async function main() {
   await db.subscription.deleteMany();
   await db.featureFlag.deleteMany();
   await db.notification.deleteMany();
-  await db.integration.deleteMany();
   await db.user.deleteMany();
   await db.tenant.deleteMany();
   await db.plan.deleteMany();
@@ -71,6 +81,34 @@ async function main() {
       },
     });
     roles[name] = role;
+  }
+
+  // Agency OS roles — same generation pattern, stored under a distinguishing
+  // DB name (agencyRoleDbName) since Role.name is globally unique and
+  // collides with platform role names like "Owner"/"Sales"/"Marketing".
+  const agencyRoleDefs: Record<AgencyRole, { resource: string; action: string }[]> = Object.fromEntries(
+    Object.entries(AGENCY_PERMISSION_MATRIX).map(([roleName, resourceMap]) => {
+      const perms: { resource: string; action: string }[] = [];
+      for (const [resource, actions] of Object.entries(resourceMap)) {
+        for (const action of actions ?? []) {
+          perms.push({ resource, action });
+        }
+      }
+      return [roleName, perms];
+    })
+  ) as Record<AgencyRole, { resource: string; action: string }[]>;
+
+  const agencyRoles: Record<AgencyRole, { id: string }> = {} as Record<AgencyRole, { id: string }>;
+  for (const [name, perms] of Object.entries(agencyRoleDefs) as [AgencyRole, { resource: string; action: string }[]][]) {
+    const role = await db.role.create({
+      data: {
+        name: agencyRoleDbName(name),
+        description: `${name} — Agency OS tenant role`,
+        isSystem: true,
+        permissions: { create: perms },
+      },
+    });
+    agencyRoles[name] = role;
   }
 
   // -------------------------------------------------------------------
@@ -199,15 +237,22 @@ async function main() {
     { company: "Riverside Wellness", sub: "riverside", product: marketing, status: "SUSPENDED", plan: basic },
   ];
 
-  const tenants: { id: string; companyName: string; productId: string }[] = [];
+  const tenants: { id: string; companyName: string; productId: string; sub: string; isAgency: boolean }[] = [];
 
   for (const t of tenantDefs) {
+    const isAgency = t.product.id === marketing.id;
+    const ownerPassword = "agency123!";
+    const ownerPasswordHash = isAgency ? await bcrypt.hash(ownerPassword, 10) : undefined;
+
     const ownerUser = await db.user.create({
       data: {
         email: `owner@${t.sub}.example.com`,
         name: `${t.company.split(" ")[0]} Owner`,
         scope: "TENANT",
         status: "ACTIVE",
+        uiLanguage: t.sub === "northwind" ? "AR" : "EN",
+        roleId: isAgency ? agencyRoles.Owner.id : undefined,
+        passwordHash: ownerPasswordHash,
         lastLoginAt: daysAgo(randInt(0, 14)),
       },
     });
@@ -241,7 +286,7 @@ async function main() {
       });
     }
 
-    tenants.push({ id: tenant.id, companyName: tenant.companyName, productId: tenant.productId });
+    tenants.push({ id: tenant.id, companyName: tenant.companyName, productId: tenant.productId, sub: t.sub, isAgency });
 
     // Subscription
     const subStatus =
@@ -404,6 +449,232 @@ async function main() {
   }
 
   // -------------------------------------------------------------------
+  // Nexaris tenant platform -- Channels, Conversations, Messages,
+  // NexarisClients, MeetingSlots/Requests, KnowledgeEntries, AiSettings.
+  // Seeded for marketing-product tenants (the AI Sales & Support use case).
+  // Arabic-first demo data, matching the confirmed primary language.
+  // -------------------------------------------------------------------
+  const arabicCustomerNames = [
+    "أحمد الفهد", "سارة المطيري", "خالد العتيبي", "منى الشمري", "يوسف الدوسري",
+    "ليلى القحطاني", "عمر الزهراني", "نورة الحربي", "فيصل السبيعي", "ريم العنزي",
+  ];
+  const arabicFirstMessages = [
+    "السلام عليكم، أريد معلومات عن خدماتكم من فضلكم",
+    "مرحبا، هل يمكنني معرفة الأسعار؟",
+    "أهلا، أبحث عن شركة لبناء متجر إلكتروني",
+    "السلام عليكم، عندي استفسار عن الباقات المتوفرة",
+    "مرحبا، شفت إعلانكم وحابب أعرف أكثر عن الخدمة",
+  ];
+  const englishFirstMessages = [
+    "Hi, I'd like to know more about your services.",
+    "Hello, can you send me your pricing?",
+    "Hi there, I'm looking for help launching an online store.",
+  ];
+  const knowledgeEntryDefs = [
+    {
+      title: "الخدمات المقدمة",
+      category: "SERVICES",
+      body: "نقدم خدمات تصميم وبناء المتاجر الإلكترونية الكاملة، بما في ذلك: تصميم واجهة المتجر، ربط بوابات الدفع، إدارة المخزون، والتسويق الرقمي للمتجر بعد الإطلاق.",
+    },
+    {
+      title: "الأسعار والباقات",
+      category: "PRICING",
+      body: "الباقة الأساسية: 3000 ريال (متجر بسيط، حتى 20 منتج). الباقة الاحترافية: 7000 ريال (متجر متكامل، منتجات غير محدودة، ربط شحن). الباقة المتقدمة: حسب الطلب (تخصيص كامل + تكامل مع أنظمة ERP).",
+    },
+    {
+      title: "الأسئلة الشائعة",
+      category: "FAQ",
+      body: "س: كم تستغرق مدة التنفيذ؟ ج: من 2 إلى 4 أسابيع حسب الباقة.\nس: هل تقدمون دعم بعد الإطلاق؟ ج: نعم، شهر دعم مجاني ثم باقات دعم شهرية اختيارية.\nس: هل يمكن الدفع بالتقسيط؟ ج: نعم، دفعتين على الأقل حسب الاتفاق.",
+    },
+    {
+      title: "سياسة المواعيد",
+      category: "POLICY",
+      body: "المواعيد متاحة من الأحد إلى الخميس، من الساعة 10 صباحًا حتى 6 مساءً بتوقيت الرياض. يفضل حجز الموعد قبل 24 ساعة على الأقل.",
+    },
+  ];
+
+  for (const tenant of tenants.filter((t) => t.isAgency)) {
+    // AI settings -- Arabic-first, professional tone, approval required by default.
+    await db.aiSettings.create({
+      data: {
+        tenantId: tenant.id,
+        tone: "PROFESSIONAL",
+        primaryLanguage: "AR",
+        allowEnglish: true,
+        approvalRequired: true,
+        model: "claude-sonnet-4-5",
+        qualificationRules:
+          "اسأل عن نوع النشاط التجاري، الميزانية التقريبية، والجدول الزمني المطلوب قبل حجز اجتماع. لا تعطِ أسعارًا نهائية دون تأكيد من فريق المبيعات.",
+      },
+    });
+
+    // Knowledge base entries
+    for (const k of knowledgeEntryDefs) {
+      await db.knowledgeEntry.create({
+        data: {
+          tenantId: tenant.id,
+          title: k.title,
+          category: k.category,
+          body: k.body,
+          addedById: null,
+          createdAt: daysAgo(randInt(10, 60)),
+        },
+      });
+    }
+
+    // Channels -- WhatsApp connected, Instagram connected, Facebook disconnected (realistic partial setup)
+    const whatsapp = await db.channel.create({
+      data: { tenantId: tenant.id, provider: "WHATSAPP", status: "CONNECTED", displayName: `${tenant.companyName} WhatsApp`, connectedAt: daysAgo(45) },
+    });
+    const instagram = await db.channel.create({
+      data: { tenantId: tenant.id, provider: "INSTAGRAM", status: "CONNECTED", displayName: `@${tenant.sub}`, connectedAt: daysAgo(30) },
+    });
+    await db.channel.create({
+      data: { tenantId: tenant.id, provider: "FACEBOOK", status: "DISCONNECTED" },
+    });
+    const channels = [whatsapp, instagram];
+
+    // Meeting slots -- a mix of available (future) and booked (linked below)
+    const availableSlots: { id: string }[] = [];
+    for (let i = 0; i < 6; i++) {
+      const startsAt = daysAgo(-randInt(1, 14));
+      startsAt.setHours(pick([10, 11, 13, 14, 16]), 0, 0, 0);
+      const slot = await db.meetingSlot.create({
+        data: { tenantId: tenant.id, startsAt, endsAt: new Date(startsAt.getTime() + 30 * 60000), status: "AVAILABLE" },
+      });
+      availableSlots.push(slot);
+    }
+
+    // Conversations across the funnel
+    const stagePlan: { stage: string; count: number }[] = [
+      { stage: "NEW", count: 3 },
+      { stage: "CONTACTED", count: 3 },
+      { stage: "INTERESTED", count: 2 },
+      { stage: "MEETING_PENDING", count: 1 },
+      { stage: "MEETING_BOOKED", count: 2 },
+      { stage: "WON", count: 2 },
+      { stage: "LOST", count: 1 },
+    ];
+
+    let slotCursor = 0;
+    for (const { stage, count } of stagePlan) {
+      for (let i = 0; i < count; i++) {
+        const useArabic = Math.random() > 0.25;
+        const customerName = pick(arabicCustomerNames);
+        const client = await db.nexarisClient.create({
+          data: {
+            tenantId: tenant.id,
+            name: customerName,
+            phone: `+9665${randInt(10000000, 99999999)}`,
+            email: Math.random() > 0.5 ? `${customerName.split(" ")[0]}@example.com` : null,
+            company: Math.random() > 0.6 ? pick(["متجر الأناقة", "بوتيك لمسة", "معرض الديار", "Style Hub"]) : null,
+            needs: stage === "NEW" ? null : "بناء متجر إلكتروني متكامل مع ربط الشحن والدفع",
+            tag:
+              stage === "WON" ? "CONVERTED" : stage === "LOST" ? "LOST" : stage === "NEW" ? "REPLIED" : "INTERESTED",
+            createdAt: daysAgo(randInt(1, 60)),
+          },
+        });
+
+        const channel = pick(channels);
+        const conversation = await db.conversation.create({
+          data: {
+            tenantId: tenant.id,
+            channelId: channel.id,
+            nexarisClientId: client.id,
+            stage,
+            status: stage === "LOST" ? "CLOSED" : "OPEN",
+            language: useArabic ? "AR" : "EN",
+            lastMessageAt: daysAgo(randInt(0, 20)),
+            createdAt: daysAgo(randInt(1, 60)),
+          },
+        });
+
+        const firstMsg = useArabic ? pick(arabicFirstMessages) : pick(englishFirstMessages);
+        await db.message.create({
+          data: {
+            conversationId: conversation.id,
+            sender: "CUSTOMER",
+            body: firstMsg,
+            language: useArabic ? "AR" : "EN",
+            status: "SENT",
+            createdAt: daysAgo(randInt(10, 60)),
+          },
+        });
+
+        if (stage !== "NEW") {
+          await db.message.create({
+            data: {
+              conversationId: conversation.id,
+              sender: "AI",
+              body: useArabic
+                ? `أهلاً ${customerName.split(" ")[0]}، شكراً لتواصلك معنا. يسعدنا مساعدتك في بناء متجرك الإلكتروني. هل يمكنني معرفة نوع المنتجات التي تنوي بيعها؟`
+                : `Hello ${customerName.split(" ")[0]}, thanks for reaching out! We'd love to help you launch your online store. What kind of products are you looking to sell?`,
+              language: useArabic ? "AR" : "EN",
+              status: "SENT",
+              createdAt: daysAgo(randInt(9, 59)),
+            },
+          });
+        }
+
+        // Meeting booked / pending stages get a linked MeetingRequest
+        if ((stage === "MEETING_BOOKED" || stage === "MEETING_PENDING") && slotCursor < availableSlots.length) {
+          const slot = availableSlots[slotCursor++];
+          await db.meetingRequest.create({
+            data: {
+              tenantId: tenant.id,
+              conversationId: conversation.id,
+              nexarisClientId: client.id,
+              slotId: slot.id,
+              status: stage === "MEETING_BOOKED" ? "APPROVED" : "PENDING_APPROVAL",
+              decidedAt: stage === "MEETING_BOOKED" ? daysAgo(randInt(0, 5)) : null,
+              createdAt: daysAgo(randInt(0, 5)),
+            },
+          });
+          if (stage === "MEETING_BOOKED") {
+            await db.meetingSlot.update({ where: { id: slot.id }, data: { status: "BOOKED" } });
+          }
+        }
+
+        // A couple of pending-approval messages for the Approval Queue demo
+        if (stage === "CONTACTED" && Math.random() < 0.5) {
+          await db.message.create({
+            data: {
+              conversationId: conversation.id,
+              sender: "AI",
+              body: useArabic
+                ? "بالنسبة للسعر، الباقة الاحترافية تبدأ من 7000 ريال وتشمل متجر متكامل مع ربط الشحن. هل ترغب بحجز موعد لمناقشة التفاصيل؟"
+                : "Our professional package starts at 7,000 SAR and includes a full store with shipping integration. Would you like to book a call to go over the details?",
+              language: useArabic ? "AR" : "EN",
+              status: "PENDING_APPROVAL",
+              createdAt: daysAgo(randInt(0, 3)),
+            },
+          });
+          await db.conversation.update({ where: { id: conversation.id }, data: { status: "PENDING_APPROVAL" } });
+        }
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Pending team invites (agency tenants)
+  // -------------------------------------------------------------------
+  for (const tenant of tenants.filter((t) => t.isAgency)) {
+    const tenantUsers = await db.user.findMany({ where: { tenantId: tenant.id } });
+    if (tenantUsers.length === 0) continue;
+    if (Math.random() < 0.5) {
+      await db.teamInvite.create({
+        data: {
+          tenantId: tenant.id,
+          email: `newhire@${tenant.sub}-prospect.example.com`,
+          roleId: pick(Object.values(agencyRoles)).id,
+          invitedById: pick(tenantUsers).id,
+          createdAt: daysAgo(randInt(0, 14)),
+        },
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------
   // Global / product-level AI budgets
   // -------------------------------------------------------------------
   await db.aiBudget.create({
@@ -494,26 +765,10 @@ async function main() {
     ],
   });
 
-  // -------------------------------------------------------------------
-  // Integrations
-  // -------------------------------------------------------------------
-  await db.integration.createMany({
-    data: [
-      { provider: "OPENAI", name: "OpenAI", enabled: true, config: JSON.stringify({ apiKeyMasked: "sk-••••1a2b", org: "org-platform" }), lastSyncAt: daysAgo(0) },
-      { provider: "CLAUDE", name: "Anthropic Claude", enabled: true, config: JSON.stringify({ apiKeyMasked: "sk-ant-••••9f3e" }), lastSyncAt: daysAgo(0) },
-      { provider: "GEMINI", name: "Google Gemini", enabled: false, config: JSON.stringify({}), lastSyncAt: null },
-      { provider: "SMTP", name: "Transactional Email (SMTP)", enabled: true, config: JSON.stringify({ host: "smtp.postmarkapp.com", port: 587 }), lastSyncAt: daysAgo(1) },
-      { provider: "SUPABASE", name: "Supabase", enabled: false, config: JSON.stringify({}), lastSyncAt: null },
-      { provider: "CLOUDFLARE", name: "Cloudflare", enabled: true, config: JSON.stringify({ zone: "example.com" }), lastSyncAt: daysAgo(2) },
-      { provider: "STORAGE", name: "Object Storage (S3-compatible)", enabled: true, config: JSON.stringify({ bucket: "admin-platform-prod" }), lastSyncAt: daysAgo(0) },
-      { provider: "META", name: "Meta Business", enabled: false, config: JSON.stringify({}), lastSyncAt: null },
-      { provider: "WHATSAPP", name: "WhatsApp Business API", enabled: false, config: JSON.stringify({}), lastSyncAt: null },
-      { provider: "RESEND", name: "Resend", enabled: true, config: JSON.stringify({ domain: "mail.example.com" }), lastSyncAt: daysAgo(1) },
-      { provider: "WEBHOOK", name: "Outbound Webhooks", enabled: true, config: JSON.stringify({ endpoints: 3 }), lastSyncAt: daysAgo(0) },
-    ],
-  });
-
-  console.log(`Seeded: 2 products, ${tenants.length} tenants, ${plans.length} plans, 6 roles.`);
+  const agencyTenantCount = tenants.filter((t) => t.isAgency).length;
+  console.log(
+    `Seeded: 2 products, ${tenants.length} tenants, ${plans.length} plans, 6 platform roles, 6 agency roles, Nexaris tenant platform data (channels/conversations/messages/clients/meetings/knowledge base) for ${agencyTenantCount} tenants.`
+  );
 }
 
 main()
