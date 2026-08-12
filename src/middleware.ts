@@ -9,20 +9,22 @@ function getSecretKey() {
 }
 
 export async function middleware(request: NextRequest) {
+  const isAgencyPath = request.nextUrl.pathname.startsWith("/agency");
+  const loginPath = isAgencyPath ? "/agency-login" : "/login";
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
   if (!token) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL(loginPath, request.url));
   }
 
   try {
     await jwtVerify(token, getSecretKey());
     return NextResponse.next();
   } catch {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return NextResponse.redirect(new URL(loginPath, request.url));
   }
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/agency/:path*"],
 };
