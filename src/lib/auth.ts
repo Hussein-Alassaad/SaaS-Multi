@@ -76,6 +76,17 @@ export async function getSession() {
   return user;
 }
 
+/**
+ * Same as getSession() but only returns tenant-scope users, and only when
+ * their tenant is still reachable (not suspended/churned). Used by every
+ * Agency OS server component/action instead of getSession() directly.
+ */
+export async function getTenantSession() {
+  const session = await getSession();
+  if (!session || session.scope !== "TENANT" || !session.tenantId) return null;
+  return session;
+}
+
 export async function setSessionCookie(token: string) {
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
