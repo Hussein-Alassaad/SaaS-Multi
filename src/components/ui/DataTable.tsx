@@ -39,7 +39,7 @@ export function DataTable<T>({
                 <th
                   key={col.key}
                   className={cn(
-                    "px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-[var(--text-4)]",
+                    "px-4 py-3 text-start text-xs font-medium uppercase tracking-wide text-[var(--text-4)]",
                     col.className
                   )}
                 >

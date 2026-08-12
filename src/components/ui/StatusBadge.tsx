@@ -57,6 +57,20 @@ export function PriorityBadge({ priority }: { priority: string }) {
   );
 }
 
+export function ClientStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { variant: "cold" | "warm" | "hot" | "success" | "neutral"; label: string }> = {
+    ACTIVE: { variant: "success", label: "Active" },
+    PAUSED: { variant: "warm", label: "Paused" },
+    ARCHIVED: { variant: "neutral", label: "Archived" },
+  };
+  const cfg = map[status] ?? { variant: "neutral" as const, label: status };
+  return (
+    <Badge variant={cfg.variant} dot>
+      {cfg.label}
+    </Badge>
+  );
+}
+
 export function ProductStatusBadge({ status }: { status: string }) {
   const map: Record<string, { variant: "cold" | "warm" | "hot" | "success" | "neutral"; label: string }> = {
     ACTIVE: { variant: "success", label: "Active" },
