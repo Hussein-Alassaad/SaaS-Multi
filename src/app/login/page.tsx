@@ -3,7 +3,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Ca
 import { LoginForm } from "./LoginForm";
 
 export const metadata: Metadata = {
-  title: "Sign in — Admin Platform",
+  title: "Sign in — Nexaris",
 };
 
 export default function LoginPage() {
@@ -12,9 +12,9 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center text-center">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent-gradient text-base font-bold text-white">
-            A
+            N
           </div>
-          <h1 className="mt-3 text-lg font-semibold text-gradient">Admin Platform</h1>
+          <h1 className="mt-3 text-lg font-semibold text-gradient">Nexaris</h1>
           <p className="mt-1 text-xs text-[var(--text-4)]">Sign in to the platform control center</p>
         </div>
 
