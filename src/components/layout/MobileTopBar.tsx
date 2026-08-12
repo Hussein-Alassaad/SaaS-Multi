@@ -21,7 +21,7 @@ export function MobileTopBar({ currentUser }: { currentUser: CurrentUser | null 
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-gradient text-xs font-bold text-white">
           {initial}
         </div>
-        <span className="text-sm font-semibold text-gradient">Admin Platform</span>
+        <span className="text-sm font-semibold text-gradient">Nexaris</span>
       </div>
       <div className="flex items-center gap-1">
         <button
