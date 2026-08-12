@@ -40,7 +40,7 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
         </div>
         {expanded && (
           <span className="ml-3 text-sm font-semibold text-gradient whitespace-nowrap">
-            Admin Platform
+            Nexaris
           </span>
         )}
       </div>
