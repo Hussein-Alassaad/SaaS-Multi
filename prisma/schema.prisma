@@ -11,6 +11,7 @@
 //   Tenant.status              ACTIVE | TRIAL | PAST_DUE | SUSPENDED | CHURNED
 //   User.scope                 PLATFORM | TENANT
 //   User.status                ACTIVE | INVITED | SUSPENDED | DISABLED
+//   User.uiLanguage            EN | AR
 //   Subscription.status        TRIALING | ACTIVE | PAST_DUE | GRACE_PERIOD | CANCELED | EXPIRED
 //   Invoice.status              DRAFT | OPEN | PAID | VOID | UNCOLLECTIBLE
 //   Payment.status               SUCCEEDED | FAILED | PENDING | REFUNDED
@@ -22,6 +23,25 @@
 //   Notification.audience                 ALL_TENANTS | PRODUCT_TENANTS | SPECIFIC_TENANT | ALL_PLATFORM_USERS
 //   Notification.status                    DRAFT | SCHEDULED | SENT | CANCELED
 //   Integration.provider                    OPENAI | CLAUDE | GEMINI | SMTP | SUPABASE | CLOUDFLARE | STORAGE | META | WHATSAPP | RESEND | WEBHOOK
+//   ClientTask.status                TODO | IN_PROGRESS | DONE
+//   ClientMeeting.status              SCHEDULED | COMPLETED | CANCELED
+//   TeamInvite.status                 PENDING | ACCEPTED | REVOKED
+//
+// Nexaris tenant platform (AI Sales & Support) — string "enum" fields:
+//   Channel.provider                 WHATSAPP | INSTAGRAM | FACEBOOK
+//   Channel.status                   CONNECTED | DISCONNECTED | ERROR
+//   Conversation.status              OPEN | PENDING_APPROVAL | AWAITING_CUSTOMER | CLOSED
+//   Conversation.stage               NEW | CONTACTED | INTERESTED | MEETING_PENDING | MEETING_BOOKED | WON | LOST
+//   Conversation.language            AR | EN
+//   Message.sender                   CUSTOMER | AI | HUMAN
+//   Message.status                   SENT | PENDING_APPROVAL | APPROVED | REJECTED
+//   NexarisClient.tag                 REPLIED | INTERESTED | NOT_RESPONDING | LOST | CONVERTED
+//   MeetingSlot.status                 AVAILABLE | BOOKED | BLOCKED
+//   MeetingRequest.status               PENDING_APPROVAL | APPROVED | REJECTED | COMPLETED | CANCELED
+//   KnowledgeEntry.category             SERVICES | PRICING | FAQ | POLICY | OTHER
+//   TenantFeatureRequest.status          NEW | UNDER_REVIEW | PLANNED | COMPLETED | REJECTED
+//   AiSettings.tone                     PROFESSIONAL | FRIENDLY | FORMAL
+//   AiSettings.primaryLanguage          AR | EN
 
 generator client {
   provider = "prisma-client-js"
@@ -78,6 +98,17 @@ model Tenant {
   supportTickets        SupportTicket[]
   auditLogs             AuditLog[]
   impersonationSessions ImpersonationSession[]
+  teamInvites           TeamInvite[]
+
+  // Nexaris tenant platform
+  channels         Channel[]
+  conversations    Conversation[]
+  nexarisClients   NexarisClient[]
+  meetingSlots     MeetingSlot[]
+  meetingRequests  MeetingRequest[]
+  knowledgeEntries KnowledgeEntry[]
+  featureRequests  TenantFeatureRequest[]
+  aiSettings       AiSettings?
 
   @@index([productId])
   @@map("tenants")
@@ -88,18 +119,19 @@ model Tenant {
 // ---------------------------------------------------------------------------
 
 model User {
-  id          String    @id @default(cuid())
-  email       String    @unique
-  name        String
-  avatarUrl   String?
-  scope       String    @default("TENANT")
-  status      String    @default("ACTIVE")
-  roleId      String?
-  tenantId    String?
+  id           String    @id @default(cuid())
+  email        String    @unique
+  name         String
+  avatarUrl    String?
+  scope        String    @default("TENANT")
+  status       String    @default("ACTIVE")
+  uiLanguage   String    @default("EN") // EN | AR -- dashboard UI language, independent of AiSettings.primaryLanguage (which is customer-facing)
+  roleId       String?
+  tenantId     String?
   passwordHash String?
-  lastLoginAt DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   role   Role?   @relation(fields: [roleId], references: [id])
   tenant Tenant? @relation("TenantUsers", fields: [tenantId], references: [id])
@@ -109,6 +141,13 @@ model User {
   auditLogs             AuditLog[]
   aiUsageLogs           AiUsageLog[]
   impersonationsAsAdmin ImpersonationSession[] @relation("ImpersonationAdmin")
+  sentTeamInvites       TeamInvite[]
+
+  // Nexaris tenant platform
+  approvalsDecided      Message[]              @relation("MessageApprovedBy")
+  meetingsDecided       MeetingRequest[]       @relation("MeetingDecidedBy")
+  knowledgeEntriesAdded KnowledgeEntry[]       @relation("KnowledgeEntryAuthor")
+  featureRequestsFiled  TenantFeatureRequest[] @relation("FeatureRequestAuthor")
 
   @@index([tenantId])
   @@index([roleId])
@@ -124,6 +163,7 @@ model Role {
 
   users       User[]
   permissions Permission[]
+  teamInvites TeamInvite[]
 
   @@map("roles")
 }
@@ -395,18 +435,217 @@ model Notification {
 }
 
 // ---------------------------------------------------------------------------
-// Integrations
+// Team (member list reuses the existing User/Role models; TeamInvite tracks
+// pending invitations only -- no email delivery, invite status is simulated).
 // ---------------------------------------------------------------------------
 
-model Integration {
-  id         String    @id @default(cuid())
-  provider   String    @unique
-  name       String
-  config     String    @default("{}") // JSON-encoded
-  enabled    Boolean   @default(false)
-  lastSyncAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+model TeamInvite {
+  id          String    @id @default(cuid())
+  tenantId    String
+  email       String
+  roleId      String
+  status      String    @default("PENDING") // PENDING | ACCEPTED | REVOKED
+  invitedById String?
+  createdAt   DateTime  @default(now())
+  acceptedAt  DateTime?
 
-  @@map("integrations")
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role      Role   @relation(fields: [roleId], references: [id])
+  invitedBy User?  @relation(fields: [invitedById], references: [id])
+
+  @@index([tenantId])
+  @@map("team_invites")
+}
+
+// ---------------------------------------------------------------------------
+// Nexaris -- AI Sales & Support platform (tenant side)
+//
+// Core loop: a customer messages the tenant on WhatsApp/Instagram/Facebook ->
+// Channel routes it into a Conversation -> AI drafts a Message (Arabic-first)
+// -> sensitive/pricing/commitment replies queue for human Approval -> once
+// sent, the Conversation's `stage` tracks pipeline progress -> if the
+// customer wants a meeting, AI offers open MeetingSlots -> the resulting
+// MeetingRequest also needs approval before being confirmed.
+//
+// NexarisClient is the only "client" concept in this platform -- profiles
+// are auto-created on first inbound message and enriched by the AI as it
+// collects details during conversation; staff can add free-text notes and
+// tags on top.
+// ---------------------------------------------------------------------------
+
+model Channel {
+  id          String    @id @default(cuid())
+  tenantId    String
+  provider    String // WHATSAPP | INSTAGRAM | FACEBOOK
+  status      String    @default("DISCONNECTED") // CONNECTED | DISCONNECTED | ERROR
+  displayName String? // e.g. connected page/number name, shown in Integrations UI
+  config      String    @default("{}") // JSON-encoded, e.g. { phoneNumberId } -- never store raw secrets here in prod
+  connectedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([tenantId, provider])
+  @@index([tenantId])
+  @@map("channels")
+}
+
+model NexarisClient {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String?
+  phone     String?
+  email     String?
+  company   String?
+  needs     String? // free text, filled in as AI collects info during conversation
+  tag       String   @default("REPLIED") // REPLIED | INTERESTED | NOT_RESPONDING | LOST | CONVERTED
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversations   Conversation[]
+  meetingRequests MeetingRequest[]
+
+  @@index([tenantId])
+  @@map("nexaris_clients")
+}
+
+model Conversation {
+  id              String   @id @default(cuid())
+  tenantId        String
+  channelId       String
+  nexarisClientId String
+  status          String   @default("OPEN") // OPEN | PENDING_APPROVAL | AWAITING_CUSTOMER | CLOSED
+  stage           String   @default("NEW") // NEW | CONTACTED | INTERESTED | MEETING_PENDING | MEETING_BOOKED | WON | LOST
+  language        String   @default("AR") // AR | EN
+  lastMessageAt   DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel       Channel       @relation(fields: [channelId], references: [id])
+  nexarisClient NexarisClient @relation(fields: [nexarisClientId], references: [id], onDelete: Cascade)
+
+  messages        Message[]
+  meetingRequests MeetingRequest[]
+
+  @@index([tenantId])
+  @@index([channelId])
+  @@index([nexarisClientId])
+  @@index([stage])
+  @@map("conversations")
+}
+
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  sender         String // CUSTOMER | AI | HUMAN
+  body           String
+  language       String    @default("AR") // AR | EN
+  status         String    @default("SENT") // SENT | PENDING_APPROVAL | APPROVED | REJECTED
+  approvedById   String?
+  approvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  approvedBy   User?        @relation("MessageApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([conversationId])
+  @@index([status])
+  @@map("messages")
+}
+
+model MeetingSlot {
+  id        String   @id @default(cuid())
+  tenantId  String
+  startsAt  DateTime
+  endsAt    DateTime
+  status    String   @default("AVAILABLE") // AVAILABLE | BOOKED | BLOCKED
+  createdAt DateTime @default(now())
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  request MeetingRequest?
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("meeting_slots")
+}
+
+model MeetingRequest {
+  id              String    @id @default(cuid())
+  tenantId        String
+  conversationId  String
+  nexarisClientId String
+  slotId          String    @unique
+  status          String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | APPROVED | REJECTED | COMPLETED | CANCELED
+  decidedById     String?
+  decidedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation  Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  nexarisClient NexarisClient @relation(fields: [nexarisClientId], references: [id], onDelete: Cascade)
+  slot          MeetingSlot   @relation(fields: [slotId], references: [id])
+  decidedBy     User?         @relation("MeetingDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("meeting_requests")
+}
+
+model KnowledgeEntry {
+  id        String   @id @default(cuid())
+  tenantId  String
+  title     String
+  category  String   @default("OTHER") // SERVICES | PRICING | FAQ | POLICY | OTHER
+  body      String // free text, Arabic-first; injected into AI system context
+  addedById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant  Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  addedBy User?  @relation("KnowledgeEntryAuthor", fields: [addedById], references: [id])
+
+  @@index([tenantId])
+  @@map("knowledge_entries")
+}
+
+model TenantFeatureRequest {
+  id          String   @id @default(cuid())
+  tenantId    String
+  title       String
+  description String
+  status      String   @default("NEW") // NEW | UNDER_REVIEW | PLANNED | COMPLETED | REJECTED
+  filedById   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant  Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  filedBy User?  @relation("FeatureRequestAuthor", fields: [filedById], references: [id])
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("tenant_feature_requests")
+}
+
+// Per-tenant AI configuration -- language, tone, qualification rules.
+// One row per tenant (1:1), created on tenant provisioning.
+model AiSettings {
+  id                 String   @id @default(cuid())
+  tenantId           String   @unique
+  tone               String   @default("PROFESSIONAL") // PROFESSIONAL | FRIENDLY | FORMAL
+  primaryLanguage    String   @default("AR") // AR | EN
+  allowEnglish       Boolean  @default(true)
+  qualificationRules String   @default("") // free text, injected into AI system prompt
+  approvalRequired   Boolean  @default(true) // require human approval before sending AI replies
+  model              String   @default("claude-sonnet-4-5")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("ai_settings")
 }
