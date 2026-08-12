@@ -15,7 +15,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <div className="relative min-h-screen">
       <Sidebar currentUser={currentUser} />
-      <AmbientWordmark />
+      <AmbientWordmark word="NEXARIS" />
       <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
         <MobileTopBar currentUser={currentUser} />
         <ImpersonationBanner />
