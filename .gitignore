@@ -38,6 +38,9 @@ yarn-error.log*
 prisma/*.db
 prisma/*.db-journal
 
+# user-uploaded files (local disk storage, not committed)
+/public/uploads/
+
 # vercel
 .vercel
 
