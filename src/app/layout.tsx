@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Admin Platform",
+  title: "Nexaris",
   description: "Multi-tenant SaaS admin control center",
 };
 
