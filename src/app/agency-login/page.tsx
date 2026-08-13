@@ -36,6 +36,13 @@ export default function AgencyLoginPage() {
             <span className="text-[var(--text-3)]">agency123!</span>
           </p>
         </div>
+
+        <p className="mt-4 text-center text-xs text-[var(--text-4)]">
+          New agency?{" "}
+          <a href="/signup" className="text-[var(--accent-from)] hover:underline">
+            Create a workspace
+          </a>
+        </p>
       </div>
     </div>
   );
