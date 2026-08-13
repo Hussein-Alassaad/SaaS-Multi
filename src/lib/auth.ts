@@ -9,10 +9,17 @@ const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 7; // 7 days
 /**
  * HMAC secret used to sign/verify session JWTs. Falls back to a fixed
  * local-dev value when AUTH_SECRET isn't set so `npm run dev` works out of
- * the box; any real deployment must set AUTH_SECRET (see .env.example).
+ * the box; in production this throws instead of silently using the
+ * insecure fallback (see src/lib/env.ts for the equivalent boot-time check).
  */
 function getSecretKey() {
-  const secret = process.env.AUTH_SECRET ?? "dev-only-insecure-fallback-secret-do-not-use-in-production";
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("AUTH_SECRET is required in production.");
+    }
+    return new TextEncoder().encode("dev-only-insecure-fallback-secret-do-not-use-in-production");
+  }
   return new TextEncoder().encode(secret);
 }
 
