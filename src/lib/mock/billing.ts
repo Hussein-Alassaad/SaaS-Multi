@@ -11,10 +11,15 @@ export async function getPlans() {
 }
 
 export async function getBillingOverview() {
-  const [invoices, payments, refunds] = await Promise.all([
+  const [invoices, payments, refunds, pendingVerification] = await Promise.all([
     db.invoice.findMany({ include: { tenant: true }, orderBy: { issuedAt: "desc" } }),
     db.payment.findMany({ include: { tenant: true }, orderBy: { processedAt: "desc" } }),
     db.refund.findMany({ include: { tenant: true }, orderBy: { requestedAt: "desc" } }),
+    db.payment.findMany({
+      where: { method: "omt_wish", status: "PENDING" },
+      include: { tenant: true },
+      orderBy: { processedAt: "asc" },
+    }),
   ]);
 
   const totalRevenue = payments.filter((p) => p.status === "SUCCEEDED").reduce((s, p) => s + p.amountCents, 0);
@@ -24,5 +29,5 @@ export async function getBillingOverview() {
   const outstanding = invoices.filter((i) => i.status === "OPEN").reduce((s, i) => s + i.amountCents, 0);
   const overdue = invoices.filter((i) => i.status === "OPEN" && i.dueDate < new Date()).length;
 
-  return { invoices, payments, refunds, totalRevenue, totalRefunded, outstanding, overdue };
+  return { invoices, payments, refunds, pendingVerification, totalRevenue, totalRefunded, outstanding, overdue };
 }

@@ -5,7 +5,7 @@ import { formatCents } from "@/lib/utils";
 import { DollarSign, Receipt, RotateCcw, AlertTriangle } from "lucide-react";
 
 export default async function BillingPage() {
-  const { invoices, payments, refunds, totalRevenue, totalRefunded, outstanding, overdue } =
+  const { invoices, payments, refunds, pendingVerification, totalRevenue, totalRefunded, outstanding, overdue } =
     await getBillingOverview();
 
   return (
@@ -48,6 +48,14 @@ export default async function BillingPage() {
           reason: r.reason,
           status: r.status,
           requestedAt: r.requestedAt.toISOString(),
+        }))}
+        pendingVerification={pendingVerification.map((p) => ({
+          id: p.id,
+          tenantName: p.tenant.companyName,
+          amountCents: p.amountCents,
+          proofReference: p.proofReference,
+          proofNote: p.proofNote,
+          processedAt: p.processedAt.toISOString(),
         }))}
       />
     </div>
