@@ -4,12 +4,19 @@ import { jwtVerify } from "jose";
 const SESSION_COOKIE_NAME = "admin_session";
 
 function getSecretKey() {
-  const secret = process.env.AUTH_SECRET ?? "dev-only-insecure-fallback-secret-do-not-use-in-production";
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("AUTH_SECRET is required in production.");
+    }
+    return new TextEncoder().encode("dev-only-insecure-fallback-secret-do-not-use-in-production");
+  }
   return new TextEncoder().encode(secret);
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const isAgencyPath = request.nextUrl.pathname.startsWith("/agency");
+  const requiredScope = isAgencyPath ? "TENANT" : "PLATFORM";
   const loginPath = isAgencyPath ? "/agency-login" : "/login";
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
@@ -18,7 +25,10 @@ export async function middleware(request: NextRequest) {
   }
 
   try {
-    await jwtVerify(token, getSecretKey());
+    const { payload } = await jwtVerify(token, getSecretKey());
+    if (payload.scope !== requiredScope) {
+      return NextResponse.redirect(new URL(loginPath, request.url));
+    }
     return NextResponse.next();
   } catch {
     return NextResponse.redirect(new URL(loginPath, request.url));
