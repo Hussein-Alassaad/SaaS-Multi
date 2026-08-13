@@ -1,10 +1,17 @@
 // Admin Platform — Prisma schema
 // Provider defaults to SQLite for zero-config local dev.
-// To use Postgres: set DATABASE_URL to a postgres:// connection string
-// and change `provider` below to "postgresql" (this also unlocks native
-// Prisma enums — SQLite has no enum support, so enum-like fields below
-// are modeled as validated `String` columns; see src/types for the
-// corresponding TypeScript union types & zod schemas).
+// To use Postgres: see the "Database" section in .env.example for the full
+// switch-over steps (change `provider` below to "postgresql", set
+// DATABASE_URL, run `prisma migrate dev --name init` against a fresh DB).
+// This also unlocks native Prisma enums — SQLite has no enum support, so
+// enum-like fields below are modeled as validated `String` columns; see
+// src/types for the corresponding TypeScript union types & zod schemas.
+// The Postgres migration is deliberately minimal-diff: these String
+// "enum" columns and the JSON-encoded String columns (Product.config,
+// Plan.features, Invoice.lineItems, AuditLog.oldValue/newValue) are NOT
+// converted to native Json/enum types in that pass — zod already
+// validates them at the app layer, so that's a deferred nice-to-have,
+// not a correctness gap.
 //
 // String "enum" fields and their allowed values:
 //   Product.status            ACTIVE | INACTIVE | MAINTENANCE | FUTURE
@@ -15,6 +22,7 @@
 //   Subscription.status        TRIALING | ACTIVE | PAST_DUE | GRACE_PERIOD | CANCELED | EXPIRED
 //   Invoice.status              DRAFT | OPEN | PAID | VOID | UNCOLLECTIBLE
 //   Payment.status               SUCCEEDED | FAILED | PENDING | REFUNDED
+//   Payment.method                card | bank_transfer | paypal | omt_wish
 //   Refund.status                 PENDING | APPROVED | REJECTED | COMPLETED
 //   SupportTicket.priority         LOW | MEDIUM | HIGH | URGENT
 //   SupportTicket.status            OPEN | IN_PROGRESS | WAITING_ON_CUSTOMER | RESOLVED | CLOSED
@@ -119,19 +127,24 @@ model Tenant {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  name         String
-  avatarUrl    String?
-  scope        String    @default("TENANT")
-  status       String    @default("ACTIVE")
-  uiLanguage   String    @default("EN") // EN | AR -- dashboard UI language, independent of AiSettings.primaryLanguage (which is customer-facing)
-  roleId       String?
-  tenantId     String?
-  passwordHash String?
-  lastLoginAt  DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  name                  String
+  avatarUrl             String?
+  scope                 String    @default("TENANT")
+  status                String    @default("ACTIVE")
+  uiLanguage            String    @default("EN") // EN | AR -- dashboard UI language, independent of AiSettings.primaryLanguage (which is customer-facing)
+  roleId                String?
+  tenantId              String?
+  passwordHash          String?
+  lastLoginAt           DateTime?
+  verifiedAt            DateTime?
+  verificationToken     String?   @unique
+  verificationExpiresAt DateTime?
+  resetToken            String?   @unique
+  resetTokenExpiresAt   DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
   role   Role?   @relation(fields: [roleId], references: [id])
   tenant Tenant? @relation("TenantUsers", fields: [tenantId], references: [id])
@@ -142,6 +155,7 @@ model User {
   aiUsageLogs           AiUsageLog[]
   impersonationsAsAdmin ImpersonationSession[] @relation("ImpersonationAdmin")
   sentTeamInvites       TeamInvite[]
+  reviewedPayments      Payment[]              @relation("PaymentReviewedBy")
 
   // Nexaris tenant platform
   approvalsDecided      Message[]              @relation("MessageApprovedBy")
@@ -247,20 +261,26 @@ model Invoice {
 }
 
 model Payment {
-  id          String   @id @default(cuid())
-  tenantId    String
-  invoiceId   String?
-  amountCents Int
-  currency    String   @default("usd")
-  status      String   @default("SUCCEEDED")
-  method      String   @default("card") // card, bank_transfer, paypal
-  processedAt DateTime @default(now())
+  id             String    @id @default(cuid())
+  tenantId       String
+  invoiceId      String?
+  amountCents    Int
+  currency       String    @default("usd")
+  status         String    @default("SUCCEEDED") // SUCCEEDED | FAILED | PENDING | REFUNDED
+  method         String    @default("card") // card | bank_transfer | paypal | omt_wish
+  proofReference String? // OMT/Wish transaction reference submitted by tenant
+  proofNote      String? // optional free-text note from tenant (e.g. sender name/phone)
+  reviewedById   String? // platform user who approved/rejected an omt_wish submission
+  reviewedAt     DateTime?
+  processedAt    DateTime  @default(now())
 
-  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invoice Invoice? @relation(fields: [invoiceId], references: [id])
-  refunds Refund[]
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice    Invoice? @relation(fields: [invoiceId], references: [id])
+  reviewedBy User?    @relation("PaymentReviewedBy", fields: [reviewedById], references: [id])
+  refunds    Refund[]
 
   @@index([tenantId])
+  @@index([status])
   @@map("payments")
 }
 
