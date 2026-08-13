@@ -4,8 +4,9 @@ import { db } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult, agencyRoleDbName, AGENCY_ROLES, type AgencyRole } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
+import { sendEmail } from "@/lib/email";
+import { teamInviteEmail } from "@/lib/email-templates";
 
-/** No email delivery is wired in -- the invite row is created as PENDING and shown in the UI, same posture as Phase 2's mock integrations. */
 export async function inviteTeamMemberAction(email: string, role: AgencyRole) {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };
@@ -26,7 +27,9 @@ export async function inviteTeamMemberAction(email: string, role: AgencyRole) {
   const roleRow = await db.role.findUnique({ where: { name: agencyRoleDbName(role) } });
   if (!roleRow) return { ok: false as const, error: "Role not found." };
 
-  await db.teamInvite.create({
+  const tenant = await db.tenant.findUnique({ where: { id: session.tenantId! } });
+
+  const invite = await db.teamInvite.create({
     data: { tenantId: session.tenantId!, email: email.trim(), roleId: roleRow.id, invitedById: session.id },
   });
 
@@ -40,6 +43,14 @@ export async function inviteTeamMemberAction(email: string, role: AgencyRole) {
       device: "Desktop",
       browser: "Agency OS",
     },
+  });
+
+  // TeamInvite.id doubles as the accept-link token: cuids are already
+  // unguessable, so no separate token column is needed for this flow.
+  const acceptUrl = `${process.env.APP_URL ?? "http://localhost:3000"}/accept-invite?inviteId=${invite.id}`;
+  await sendEmail({
+    to: email.trim(),
+    ...teamInviteEmail(session.name, tenant?.companyName ?? "your team", acceptUrl),
   });
 
   revalidatePath("/agency/team");
