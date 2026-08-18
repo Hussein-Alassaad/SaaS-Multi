@@ -11,7 +11,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Avatar } from "@/components/ui/Avatar";
 import { timeAgo, cn } from "@/lib/utils";
 import { simulateInboundMessageAction } from "@/lib/actions/agency-inbox";
-import { getConversationThreadAction } from "@/lib/actions/agency-conversations";
+import { getConversationThreadAction, loadMoreConversationsAction } from "@/lib/actions/agency-conversations";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { Plus, MessageCircle } from "lucide-react";
 
@@ -55,7 +55,15 @@ const STAGE_VARIANT: Record<string, "neutral" | "warm" | "accent" | "success" | 
   LOST: "hot",
 };
 
-export function InboxClient({ conversations, lang }: { conversations: ConversationRow[]; lang: UiLanguage }) {
+export function InboxClient({
+  conversations: initialConversations,
+  initialNextCursor,
+  lang,
+}: {
+  conversations: ConversationRow[];
+  initialNextCursor: string | null;
+  lang: UiLanguage;
+}) {
   const t = getDictionary(lang);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -63,6 +71,20 @@ export function InboxClient({ conversations, lang }: { conversations: Conversati
   const [thread, setThread] = useState<ThreadData | null>(null);
   const [loadingThread, startThreadTransition] = useTransition();
   const [simulateOpen, setSimulateOpen] = useState(false);
+  const [conversations, setConversations] = useState(initialConversations);
+  const [nextCursor, setNextCursor] = useState(initialNextCursor);
+  const [loadingMore, startLoadMoreTransition] = useTransition();
+
+  const handleLoadMore = () => {
+    if (!nextCursor) return;
+    startLoadMoreTransition(async () => {
+      const result = await loadMoreConversationsAction(nextCursor);
+      if (result.ok) {
+        setConversations((prev) => [...prev, ...result.conversations]);
+        setNextCursor(result.nextCursor);
+      }
+    });
+  };
 
   const loadThread = useCallback((id: string) => {
     startThreadTransition(async () => {
@@ -131,6 +153,15 @@ export function InboxClient({ conversations, lang }: { conversations: Conversati
                   </div>
                 </button>
               ))}
+              {nextCursor && (
+                <button
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="w-full rounded-lg py-2 text-center text-xs font-medium text-[var(--text-4)] hover:bg-[var(--surface-2)]/60 disabled:opacity-50"
+                >
+                  {loadingMore ? t.common.loadingMore : t.common.loadMore}
+                </button>
+              )}
             </div>
           )}
         </Card>

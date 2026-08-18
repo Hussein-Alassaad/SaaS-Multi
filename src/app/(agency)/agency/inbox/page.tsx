@@ -8,9 +8,9 @@ export default async function InboxPage() {
   const tenantId = session!.tenantId!;
   const lang = (session!.uiLanguage as UiLanguage) ?? "EN";
 
-  const conversations = await getConversationsList(tenantId);
+  const { items, nextCursor } = await getConversationsList(tenantId);
 
-  const serialized = conversations.map((c) => ({
+  const serialized = items.map((c) => ({
     id: c.id,
     stage: c.stage,
     status: c.status,
@@ -27,5 +27,5 @@ export default async function InboxPage() {
       : null,
   }));
 
-  return <InboxClient conversations={serialized} lang={lang} />;
+  return <InboxClient conversations={serialized} initialNextCursor={nextCursor} lang={lang} />;
 }
