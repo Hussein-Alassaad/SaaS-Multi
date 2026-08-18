@@ -25,17 +25,19 @@ const NAV_KEY_MAP: Record<string, keyof ReturnType<typeof getDictionary>["nav"]>
   "/agency/settings": "settings",
 };
 
-export function AgencyMobileBottomBar({ lang }: { lang: UiLanguage }) {
+export function AgencyMobileBottomBar({ lang, enabledSections }: { lang: UiLanguage; enabledSections: string[] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const t = getDictionary(lang);
+  const enabledSet = new Set(enabledSections);
+  const visibleNavItems = AGENCY_NAV_ITEMS.filter((item) => enabledSet.has(item.href));
 
   const label = (href: string, fallback: string) => {
     const key = NAV_KEY_MAP[href];
     return key ? t.nav[key] : fallback;
   };
 
-  const current = AGENCY_NAV_ITEMS.find((n) =>
+  const current = visibleNavItems.find((n) =>
     n.href === "/agency" ? pathname === "/agency" : pathname.startsWith(n.href)
   );
 
@@ -43,20 +45,20 @@ export function AgencyMobileBottomBar({ lang }: { lang: UiLanguage }) {
     <>
       <nav className="fixed inset-x-0 bottom-0 z-30 flex h-14 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--surface-1)]/90 px-4 backdrop-blur-xl md:hidden">
         <span className="text-sm font-medium text-[var(--text-2)]">
-          {current ? label(current.href, current.label) : "Agency OS"}
+          {current ? label(current.href, current.label) : t.common.workspaceName}
         </span>
         <button
           onClick={() => setOpen(true)}
           className="flex items-center gap-1.5 rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-medium text-[var(--text-1)]"
         >
           <Menu className="h-3.5 w-3.5" />
-          Menu
+          {t.common.menu}
         </button>
       </nav>
 
-      <Drawer open={open} onOpenChange={setOpen} title="Navigate">
+      <Drawer open={open} onOpenChange={setOpen} title={t.common.navigate}>
         <div className="grid grid-cols-2 gap-2 pb-6">
-          {AGENCY_NAV_ITEMS.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const active =
               item.href === "/agency" ? pathname === "/agency" : pathname.startsWith(item.href);
