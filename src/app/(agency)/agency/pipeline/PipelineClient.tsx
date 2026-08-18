@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
 import { timeAgo, cn } from "@/lib/utils";
 import { updateConversationStageAction } from "@/lib/actions/agency-inbox";
+import { loadMorePipelineColumnAction } from "@/lib/actions/agency-pipeline";
 import { getDictionary, isRtl, type UiLanguage } from "@/lib/i18n";
 
 interface PipelineConversation {
@@ -28,13 +29,25 @@ interface PipelineConversation {
   lastMessageAt: string;
 }
 
-const STAGE_KEYS = ["NEW", "CONTACTED", "INTERESTED", "MEETING_PENDING", "MEETING_BOOKED", "WON", "LOST"] as const;
+interface ColumnData {
+  cards: PipelineConversation[];
+  nextCursor: string | null;
+}
 
-export function PipelineClient({ conversations: initial, lang }: { conversations: PipelineConversation[]; lang: UiLanguage }) {
+const STAGE_KEYS = ["NEW", "CONTACTED", "INTERESTED", "MEETING_PENDING", "MEETING_BOOKED", "WON", "LOST"] as const;
+type StageKey = (typeof STAGE_KEYS)[number];
+
+export function PipelineClient({
+  columns: initialColumns,
+  lang,
+}: {
+  columns: Record<string, ColumnData>;
+  lang: UiLanguage;
+}) {
   const t = getDictionary(lang);
   const rtl = isRtl(lang);
   const router = useRouter();
-  const [conversations, setConversations] = useState(initial);
+  const [columns, setColumns] = useState(initialColumns);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -51,26 +64,58 @@ export function PipelineClient({ conversations: initial, lang }: { conversations
     }
   }, [rtl]);
 
+  const findCard = (conversationId: string) => {
+    for (const stageKey of STAGE_KEYS) {
+      const card = columns[stageKey]?.cards.find((c) => c.id === conversationId);
+      if (card) return card;
+    }
+    return null;
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     setActiveId(null);
     const { active, over } = event;
     if (!over) return;
     const conversationId = active.id as string;
     const newStage = over.id as string;
-    const current = conversations.find((c) => c.id === conversationId);
+    const current = findCard(conversationId);
     if (!current || current.stage === newStage) return;
 
-    setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, stage: newStage } : c)));
+    const oldStage = current.stage;
+    setColumns((prev) => ({
+      ...prev,
+      [oldStage]: { ...prev[oldStage], cards: prev[oldStage].cards.filter((c) => c.id !== conversationId) },
+      [newStage]: { ...prev[newStage], cards: [{ ...current, stage: newStage }, ...prev[newStage].cards] },
+    }));
+
     startTransition(async () => {
       const result = await updateConversationStageAction(conversationId, newStage);
       if (!result.ok) {
-        setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, stage: current.stage } : c)));
+        setColumns((prev) => ({
+          ...prev,
+          [newStage]: { ...prev[newStage], cards: prev[newStage].cards.filter((c) => c.id !== conversationId) },
+          [oldStage]: { ...prev[oldStage], cards: [current, ...prev[oldStage].cards] },
+        }));
       }
       router.refresh();
     });
   };
 
-  const activeCard = conversations.find((c) => c.id === activeId);
+  const handleLoadMore = (stageKey: StageKey) => {
+    const cursor = columns[stageKey]?.nextCursor;
+    if (!cursor) return;
+    startTransition(async () => {
+      const result = await loadMorePipelineColumnAction(stageKey, cursor);
+      if (result.ok) {
+        setColumns((prev) => ({
+          ...prev,
+          [stageKey]: { cards: [...prev[stageKey].cards, ...result.cards], nextCursor: result.nextCursor },
+        }));
+      }
+    });
+  };
+
+  const activeCard = activeId ? findCard(activeId) : null;
 
   return (
     <div className="space-y-6">
@@ -91,7 +136,9 @@ export function PipelineClient({ conversations: initial, lang }: { conversations
                 key={stageKey}
                 stageKey={stageKey}
                 label={t.stage[stageKey]}
-                cards={conversations.filter((c) => c.stage === stageKey)}
+                cards={columns[stageKey]?.cards ?? []}
+                hasMore={!!columns[stageKey]?.nextCursor}
+                onLoadMore={() => handleLoadMore(stageKey)}
                 lang={lang}
               />
             ))}
@@ -108,13 +155,18 @@ function PipelineColumn({
   stageKey,
   label,
   cards,
+  hasMore,
+  onLoadMore,
   lang,
 }: {
   stageKey: string;
   label: string;
   cards: PipelineConversation[];
+  hasMore: boolean;
+  onLoadMore: () => void;
   lang: UiLanguage;
 }) {
+  const t = getDictionary(lang);
   const { setNodeRef, isOver } = useDroppable({ id: stageKey });
 
   return (
@@ -134,6 +186,14 @@ function PipelineColumn({
         {cards.map((c) => (
           <DraggableCard key={c.id} conversation={c} lang={lang} />
         ))}
+        {hasMore && (
+          <button
+            onClick={onLoadMore}
+            className="w-full rounded-lg py-1.5 text-center text-[11px] font-medium text-[var(--text-4)] hover:bg-[var(--surface-2)]/60"
+          >
+            {t.common.loadMore}
+          </button>
+        )}
       </div>
     </div>
   );
