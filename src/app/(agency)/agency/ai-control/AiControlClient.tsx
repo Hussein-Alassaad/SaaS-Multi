@@ -80,7 +80,9 @@ export function AiControlClient({
                   <p className="text-sm font-medium text-[var(--text-1)]">{t.channel[c.provider as keyof typeof t.channel] ?? c.provider}</p>
                   <p className="text-xs text-[var(--text-4)]">{c.displayName ?? t.aiControl.notConnected}</p>
                 </div>
-                <Badge variant={c.status === "CONNECTED" ? "success" : "outline"}>{c.status}</Badge>
+                <Badge variant={c.status === "CONNECTED" ? "success" : "outline"}>
+                  {c.status === "CONNECTED" ? t.integrations.statusConnected : t.integrations.statusDisconnected}
+                </Badge>
               </div>
               <Toggle
                 checked={c.status === "CONNECTED"}

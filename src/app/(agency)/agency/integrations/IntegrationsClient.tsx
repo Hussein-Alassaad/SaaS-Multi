@@ -76,7 +76,9 @@ export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[];
                   </div>
                   <div>
                     <p className="text-sm font-medium text-[var(--text-1)]">{meta?.label ?? c.provider}</p>
-                    <Badge variant={connected ? "success" : "outline"}>{c.status}</Badge>
+                    <Badge variant={connected ? "success" : "outline"}>
+                      {connected ? t.integrations.statusConnected : t.integrations.statusDisconnected}
+                    </Badge>
                   </div>
                 </div>
               </div>
