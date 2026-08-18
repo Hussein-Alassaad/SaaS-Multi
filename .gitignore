@@ -44,6 +44,9 @@ prisma/*.db-journal
 # vercel
 .vercel
 
+# separate client project (own repo/git history, not part of this codebase)
+/outreach/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
