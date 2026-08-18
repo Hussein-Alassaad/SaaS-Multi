@@ -1,10 +1,9 @@
 "use client";
 
-import { motion, type HTMLMotionProps } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { forwardRef } from "react";
 
-interface CardProps extends HTMLMotionProps<"div"> {
+interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
   hover?: boolean;
   padding?: "none" | "sm" | "md" | "lg";
 }
@@ -16,16 +15,16 @@ const paddings = {
   lg: "p-6",
 };
 
+// Plain div, not motion.div: the hover-lift effect is handled entirely by
+// the .glass-hover CSS class (see globals.css), and no motion props
+// (initial/animate/etc.) were ever used here -- framer-motion was dead
+// weight on every page that renders a Card (i.e. all of them).
 export const Card = forwardRef<HTMLDivElement, CardProps>(
   ({ className, hover = true, padding = "md", children, ...props }, ref) => {
     return (
-      <motion.div
-        ref={ref}
-        className={cn("glass", hover && "glass-hover", paddings[padding], className)}
-        {...props}
-      >
+      <div ref={ref} className={cn("glass", hover && "glass-hover", paddings[padding], className)} {...props}>
         {children}
-      </motion.div>
+      </div>
     );
   }
 );

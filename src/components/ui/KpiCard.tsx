@@ -1,6 +1,5 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { Card } from "./Card";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
@@ -27,17 +26,14 @@ export function KpiCard({ label, value, delta, icon, highlight, className }: Kpi
           </div>
         )}
       </div>
-      <motion.div
-        initial={{ opacity: 0, y: 4 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
+      <div
         className={cn(
-          "mt-2 text-2xl font-semibold tracking-tight",
+          "mt-2 text-2xl font-semibold tracking-tight animate-kpi-in",
           highlight ? "text-gradient" : "text-[var(--text-1)]"
         )}
       >
         {value}
-      </motion.div>
+      </div>
       {delta && (
         <div
           className={cn(

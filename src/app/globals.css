@@ -238,6 +238,23 @@ body {
   }
 }
 
+/* KpiCard value fade-in-on-mount -- was a framer-motion one-shot animation,
+   moved to CSS since it's simple enough not to need JS (removes
+   framer-motion from a component rendered on every dashboard page). */
+@keyframes kpi-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-kpi-in {
+  animation: kpi-in 0.3s ease-out;
+}
+
 .shimmer {
   background: linear-gradient(
     110deg,
