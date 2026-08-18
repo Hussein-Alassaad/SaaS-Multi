@@ -1,13 +1,12 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
-import { useUiStore } from "@/lib/store/ui";
+import { useImpersonation } from "@/lib/store/impersonation";
 import { endImpersonationAction } from "@/lib/actions/impersonation";
 import { UserCog, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export function ImpersonationBanner() {
-  const impersonation = useUiStore((s) => s.impersonation);
-  const endImpersonation = useUiStore((s) => s.endImpersonation);
+  const { impersonation, endImpersonation } = useImpersonation();
 
   const handleExit = async () => {
     if (impersonation?.sessionId) {
@@ -17,15 +16,14 @@ export function ImpersonationBanner() {
   };
 
   return (
-    <AnimatePresence>
-      {impersonation && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: "auto", opacity: 1 }}
-          exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="sticky top-0 z-40 overflow-hidden"
-        >
+    <div
+      className={cn(
+        "sticky top-0 z-40 grid overflow-hidden transition-all duration-200 ease-out",
+        impersonation ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+      )}
+    >
+      <div className="min-h-0">
+        {impersonation && (
           <div className="flex items-center justify-center gap-3 bg-accent-gradient px-4 py-2 text-sm font-medium text-white">
             <UserCog className="h-4 w-4" />
             <span>
@@ -39,8 +37,8 @@ export function ImpersonationBanner() {
               Exit impersonation
             </button>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        )}
+      </div>
+    </div>
   );
 }

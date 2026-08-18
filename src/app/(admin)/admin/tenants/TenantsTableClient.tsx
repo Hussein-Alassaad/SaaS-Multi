@@ -9,7 +9,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { formatCents, formatDate } from "@/lib/utils";
-import { useUiStore } from "@/lib/store/ui";
+import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
 import { UserCog } from "lucide-react";
 
@@ -29,7 +29,7 @@ interface TenantRow {
 
 export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
   const router = useRouter();
-  const startImpersonation = useUiStore((s) => s.startImpersonation);
+  const { startImpersonation } = useImpersonation();
   const [search, setSearch] = useState("");
 
   const filtered = tenants.filter(
