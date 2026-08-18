@@ -8,9 +8,9 @@ export default async function ClientsPage() {
   const tenantId = session!.tenantId!;
   const lang = (session!.uiLanguage as UiLanguage) ?? "EN";
 
-  const clients = await getNexarisClientsList(tenantId);
+  const { items, nextCursor } = await getNexarisClientsList(tenantId);
 
-  const rows = clients.map((c) => ({
+  const rows = items.map((c) => ({
     id: c.id,
     name: c.name,
     phone: c.phone,
@@ -21,5 +21,5 @@ export default async function ClientsPage() {
     updatedAt: c.updatedAt.toISOString(),
   }));
 
-  return <ClientsListClient clients={rows} lang={lang} />;
+  return <ClientsListClient clients={rows} initialNextCursor={nextCursor} lang={lang} />;
 }

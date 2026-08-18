@@ -1,11 +1,13 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Badge } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
 import { timeAgo } from "@/lib/utils";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
+import { loadMoreClientsAction } from "@/lib/actions/agency-clients";
 
 interface ClientRow {
   id: string;
@@ -26,9 +28,31 @@ const TAG_VARIANT: Record<string, "neutral" | "warm" | "accent" | "success" | "h
   CONVERTED: "success",
 };
 
-export function ClientsListClient({ clients, lang }: { clients: ClientRow[]; lang: UiLanguage }) {
+export function ClientsListClient({
+  clients: initialClients,
+  initialNextCursor,
+  lang,
+}: {
+  clients: ClientRow[];
+  initialNextCursor: string | null;
+  lang: UiLanguage;
+}) {
   const t = getDictionary(lang);
   const router = useRouter();
+  const [clients, setClients] = useState(initialClients);
+  const [nextCursor, setNextCursor] = useState(initialNextCursor);
+  const [loadingMore, startLoadMoreTransition] = useTransition();
+
+  const handleLoadMore = () => {
+    if (!nextCursor) return;
+    startLoadMoreTransition(async () => {
+      const result = await loadMoreClientsAction(nextCursor);
+      if (result.ok) {
+        setClients((prev) => [...prev, ...result.clients]);
+        setNextCursor(result.nextCursor);
+      }
+    });
+  };
 
   const columns: Column<ClientRow>[] = [
     {
@@ -70,6 +94,18 @@ export function ClientsListClient({ clients, lang }: { clients: ClientRow[]; lan
         emptyMessage={t.clients.emptyMessage}
         onRowClick={(c) => router.push(`/agency/clients/${c.id}`)}
       />
+
+      {nextCursor && (
+        <div className="flex justify-center">
+          <button
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+            className="rounded-lg px-4 py-2 text-xs font-medium text-[var(--text-4)] hover:bg-[var(--surface-2)] disabled:opacity-50"
+          >
+            {loadingMore ? t.common.loadingMore : t.common.loadMore}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

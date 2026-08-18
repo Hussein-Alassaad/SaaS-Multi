@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/Select";
 import { Avatar } from "@/components/ui/Avatar";
 import { formatDate, formatDateTime, cn } from "@/lib/utils";
 import { updateClientTagAction, updateClientNotesAction } from "@/lib/actions/agency-inbox";
+import { loadMoreClientHistoryAction } from "@/lib/actions/agency-clients";
 import { getDictionary, isRtl, type UiLanguage } from "@/lib/i18n";
 import { ArrowLeft, ArrowRight, MessageSquare, CalendarClock } from "lucide-react";
 
@@ -42,6 +43,7 @@ interface ClientDetail {
   createdAt: string;
   conversations: ClientConversation[];
   meetingRequests: ClientMeetingRequest[];
+  conversationsNextCursor: string | null;
 }
 
 const CLIENT_TAGS = ["REPLIED", "INTERESTED", "NOT_RESPONDING", "LOST", "CONVERTED"] as const;
@@ -53,6 +55,20 @@ export function ClientDetailClient({ client, lang }: { client: ClientDetail; lan
   const [tag, setTag] = useState(client.tag);
   const [notes, setNotes] = useState(client.notes ?? "");
   const [pending, startTransition] = useTransition();
+  const [conversations, setConversations] = useState(client.conversations);
+  const [historyNextCursor, setHistoryNextCursor] = useState(client.conversationsNextCursor);
+  const [loadingMoreHistory, startHistoryTransition] = useTransition();
+
+  const handleLoadMoreHistory = () => {
+    if (!historyNextCursor) return;
+    startHistoryTransition(async () => {
+      const result = await loadMoreClientHistoryAction(client.id, historyNextCursor);
+      if (result.ok) {
+        setConversations((prev) => [...prev, ...result.conversations]);
+        setHistoryNextCursor(result.nextCursor);
+      }
+    });
+  };
 
   const handleTagChange = (v: string) => {
     setTag(v);
@@ -150,10 +166,10 @@ export function ClientDetailClient({ client, lang }: { client: ClientDetail; lan
           <CardTitle>{t.clientDetail.conversationHistory}</CardTitle>
         </CardHeader>
         <div className="space-y-4">
-          {client.conversations.length === 0 && (
+          {conversations.length === 0 && (
             <p className="py-6 text-center text-sm text-[var(--text-4)]">{t.clientDetail.noConversations}</p>
           )}
-          {client.conversations.map((conv) => (
+          {conversations.map((conv) => (
             <div key={conv.id} className="rounded-lg border border-[var(--border-hairline)] p-3">
               <div className="mb-2 flex items-center gap-2">
                 <MessageSquare className="h-3.5 w-3.5 text-[var(--text-4)]" />
@@ -180,6 +196,15 @@ export function ClientDetailClient({ client, lang }: { client: ClientDetail; lan
               </div>
             </div>
           ))}
+          {historyNextCursor && (
+            <button
+              onClick={handleLoadMoreHistory}
+              disabled={loadingMoreHistory}
+              className="w-full rounded-lg py-2 text-center text-xs font-medium text-[var(--text-4)] hover:bg-[var(--surface-2)] disabled:opacity-50"
+            >
+              {loadingMoreHistory ? t.common.loadingMore : t.common.loadMore}
+            </button>
+          )}
         </div>
       </Card>
     </div>

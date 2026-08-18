@@ -44,6 +44,7 @@ export default async function ClientDetailPage({
       status: r.status,
       slotStartsAt: r.slot.startsAt.toISOString(),
     })),
+    conversationsNextCursor: client.conversationsNextCursor,
   };
 
   return <ClientDetailClient client={serialized} lang={lang} />;
