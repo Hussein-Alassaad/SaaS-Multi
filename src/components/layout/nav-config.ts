@@ -10,6 +10,7 @@ import {
   Activity,
   ShieldCheck,
   Lock,
+  AlertTriangle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -33,6 +34,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Notifications", href: "/admin/notifications", icon: Bell },
   { label: "Feature Requests", href: "/admin/feature-requests", icon: MessageSquarePlus },
   { label: "Audit Logs", href: "/admin/audit-logs", icon: ScrollText },
+  { label: "Error Logs", href: "/admin/error-logs", icon: AlertTriangle },
   { label: "Monitoring", href: "/admin/monitoring", icon: Activity },
   { label: "Roles", href: "/admin/roles", icon: ShieldCheck },
   { label: "Security", href: "/admin/security", icon: Lock },
