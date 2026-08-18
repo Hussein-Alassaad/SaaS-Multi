@@ -105,6 +105,7 @@ model Tenant {
   aiUsageLogs           AiUsageLog[]
   supportTickets        SupportTicket[]
   auditLogs             AuditLog[]
+  errorLogs             ErrorLog[]
   impersonationSessions ImpersonationSession[]
   teamInvites           TeamInvite[]
 
@@ -398,6 +399,28 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+// Captures failures in operations that would otherwise fail silently (only
+// visible in server logs) -- AI reply generation, email sending, etc.
+// Distinct from AuditLog, which records successful actor-initiated actions;
+// this records unexpected failures regardless of whether a user was involved.
+model ErrorLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  source    String // e.g. "ai.generate_reply", "email.send", "payment.review"
+  message   String
+  stack     String?
+  context   String? // JSON-encoded, e.g. {conversationId, provider}
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([source])
+  @@index([createdAt])
+  @@map("error_logs")
+}
+
 model ImpersonationSession {
   id        String    @id @default(cuid())
   adminId   String
@@ -530,6 +553,8 @@ model NexarisClient {
   meetingRequests MeetingRequest[]
 
   @@index([tenantId])
+  @@index([tenantId, updatedAt]) // Clients list: filter by tenant, sort by recency
+  @@index([tenantId, phone]) // simulate-inbound-message lookup: find existing client by phone within tenant
   @@map("nexaris_clients")
 }
 
@@ -556,6 +581,9 @@ model Conversation {
   @@index([channelId])
   @@index([nexarisClientId])
   @@index([stage])
+  @@index([tenantId, lastMessageAt]) // Live Inbox / Pipeline list: filter by tenant, sort by recency
+  @@index([tenantId, stage, lastMessageAt]) // Pipeline board: filter by tenant+stage, sort by recency
+  @@index([nexarisClientId, createdAt]) // Client History: filter by client, sort chronologically
   @@map("conversations")
 }
 
@@ -575,6 +603,7 @@ model Message {
 
   @@index([conversationId])
   @@index([status])
+  @@index([conversationId, createdAt]) // message thread: filter by conversation, sort chronologically
   @@map("messages")
 }
 
