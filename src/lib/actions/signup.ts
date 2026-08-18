@@ -104,7 +104,7 @@ export async function createTenantAndOwner(input: SignupInput) {
 
 export async function signupAction(_prevState: SignupState, formData: FormData): Promise<SignupState> {
   const ip = await getRequestIp();
-  const limit = rateLimit(`signup:${ip}`, 5, 60_000);
+  const limit = await rateLimit(`signup:${ip}`, 5, 60_000);
   if (!limit.ok) {
     return { error: "Too many signup attempts. Please try again in a minute." };
   }

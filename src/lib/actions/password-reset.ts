@@ -25,7 +25,7 @@ export async function requestPasswordResetAction(
   formData: FormData
 ): Promise<ForgotPasswordState> {
   const ip = await getRequestIp();
-  const limit = rateLimit(`reset-request:${ip}`, 3, 60_000);
+  const limit = await rateLimit(`reset-request:${ip}`, 3, 60_000);
   if (!limit.ok) {
     return { error: "Too many requests. Please try again in a minute." };
   }
