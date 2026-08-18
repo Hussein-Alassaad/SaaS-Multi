@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
+import { logError } from "@/lib/error-log";
 
 function periodEndFor(billingCycle: string, from: Date): Date {
   const end = new Date(from);
@@ -31,25 +32,35 @@ export async function approvePaymentAction(paymentId: string) {
   });
   const now = new Date();
 
-  await db.$transaction([
-    db.payment.update({
-      where: { id: paymentId },
-      data: { status: "SUCCEEDED", reviewedById: session.id, reviewedAt: now },
-    }),
-    db.tenant.update({ where: { id: payment.tenantId }, data: { status: "ACTIVE" } }),
-    ...(subscription
-      ? [
-          db.subscription.update({
-            where: { id: subscription.id },
-            data: {
-              status: "ACTIVE",
-              currentPeriodStart: now,
-              currentPeriodEnd: periodEndFor(subscription.billingCycle, now),
-            },
-          }),
-        ]
-      : []),
-  ]);
+  try {
+    await db.$transaction([
+      db.payment.update({
+        where: { id: paymentId },
+        data: { status: "SUCCEEDED", reviewedById: session.id, reviewedAt: now },
+      }),
+      db.tenant.update({ where: { id: payment.tenantId }, data: { status: "ACTIVE" } }),
+      ...(subscription
+        ? [
+            db.subscription.update({
+              where: { id: subscription.id },
+              data: {
+                status: "ACTIVE",
+                currentPeriodStart: now,
+                currentPeriodEnd: periodEndFor(subscription.billingCycle, now),
+              },
+            }),
+          ]
+        : []),
+    ]);
+  } catch (err) {
+    await logError({
+      source: "payment.review.approve",
+      error: err,
+      tenantId: payment.tenantId,
+      context: { paymentId },
+    });
+    return { ok: false as const, error: "Failed to approve payment. Please try again." };
+  }
 
   await db.auditLog.create({
     data: {

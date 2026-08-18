@@ -71,6 +71,8 @@ export async function simulateInboundMessageAction(input: {
     clientName: nexarisClient.name,
     knowledgeEntries: knowledgeEntries.map((k) => ({ title: k.title, body: k.body })),
     settings,
+    tenantId,
+    conversationId: conversation.id,
   });
 
   await db.message.create({

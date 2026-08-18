@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { logError } from "@/lib/error-log";
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
@@ -28,6 +29,7 @@ export async function sendEmail(opts: {
     return { ok: true };
   } catch (err) {
     console.error("Failed to send email", err);
+    await logError({ source: "email.send", error: err, context: { to: opts.to, subject: opts.subject } });
     return { ok: false, error: "Failed to send email." };
   }
 }

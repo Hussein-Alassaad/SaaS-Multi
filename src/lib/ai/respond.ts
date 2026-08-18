@@ -1,22 +1,16 @@
 /**
- * AI response generation for Nexaris conversations.
- *
- * TODO(claude-api-key): This is a deterministic stub, not a real model call.
- * Once an Anthropic API key is available (console.anthropic.com), replace
- * generateAiReply()'s body with a real `@anthropic-ai/sdk` call:
- *   - model: tenant's AiSettings.model (defaults to "claude-sonnet-4-5")
- *   - system prompt: buildSystemPrompt() below already assembles tone,
- *     language, qualification rules, and Knowledge Base entries -- reuse it
- *     as the `system` param.
- *   - conversation history: pass prior Messages in the conversation as the
- *     `messages` array (map sender CUSTOMER->user, AI->assistant; drop HUMAN
- *     sender or fold it in as assistant too since it's a human-sent reply).
- * Until then, callers get a canned Arabic-first acknowledgement so the rest
- * of the pipeline (approval queue, pipeline stage transitions, meeting
- * offers) can be built and tested end-to-end without a live model.
+ * AI response generation for Nexaris conversations. Calls the real Claude
+ * API when ANTHROPIC_API_KEY is set; falls back to a deterministic stub
+ * reply otherwise (dev/demo environments without a key still work end to
+ * end -- approval queue, pipeline stage transitions, etc. all still exercise
+ * real code paths, just with placeholder text instead of a live model).
  */
 
 import type { AiSettings } from "@prisma/client";
+import Anthropic from "@anthropic-ai/sdk";
+import { logError } from "@/lib/error-log";
+
+const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
 
 interface ConversationContext {
   customerMessage: string;
@@ -24,6 +18,8 @@ interface ConversationContext {
   clientName: string | null;
   knowledgeEntries: { title: string; body: string }[];
   settings: AiSettings;
+  tenantId?: string;
+  conversationId?: string;
 }
 
 export function buildSystemPrompt(ctx: ConversationContext): string {
@@ -63,10 +59,14 @@ export interface AiReplyResult {
 const SENSITIVE_KEYWORDS_AR = ["سعر", "تكلفة", "دفع", "عقد", "اجتماع", "موعد"];
 const SENSITIVE_KEYWORDS_EN = ["price", "cost", "payment", "contract", "meeting", "schedule"];
 
-/**
- * TODO(claude-api-key): swap this stub for a real Claude call. Signature is
- * already async so callers won't need to change when it's wired up.
- */
+function stubReply(ctx: ConversationContext): string {
+  const isArabic = ctx.language === "AR";
+  const greeting = ctx.clientName ? `أهلاً ${ctx.clientName}` : "أهلاً وسهلاً";
+  return isArabic
+    ? `${greeting}، شكراً لتواصلك معنا. [مسودة رد تجريبية -- سيتم استبدالها بردّ الذكاء الاصطناعي الفعلي بعد ربط مفتاح API]`
+    : `Hello${ctx.clientName ? ` ${ctx.clientName}` : ""}, thanks for reaching out. [Draft placeholder reply -- will be replaced by a real AI response once the API key is connected]`;
+}
+
 export async function generateAiReply(ctx: ConversationContext): Promise<AiReplyResult> {
   const isArabic = ctx.language === "AR";
   const lowerMsg = ctx.customerMessage.toLowerCase();
@@ -74,10 +74,30 @@ export async function generateAiReply(ctx: ConversationContext): Promise<AiReply
     ? SENSITIVE_KEYWORDS_AR.some((k) => ctx.customerMessage.includes(k))
     : SENSITIVE_KEYWORDS_EN.some((k) => lowerMsg.includes(k));
 
-  const greeting = ctx.clientName ? `أهلاً ${ctx.clientName}` : "أهلاً وسهلاً";
-  const body = isArabic
-    ? `${greeting}، شكراً لتواصلك معنا. [مسودة رد تجريبية -- سيتم استبدالها بردّ الذكاء الاصطناعي الفعلي بعد ربط مفتاح API]`
-    : `Hello${ctx.clientName ? ` ${ctx.clientName}` : ""}, thanks for reaching out. [Draft placeholder reply -- will be replaced by a real AI response once the API key is connected]`;
+  let body: string;
+  if (anthropic) {
+    try {
+      const response = await anthropic.messages.create({
+        model: ctx.settings.model || "claude-sonnet-4-5",
+        max_tokens: 512,
+        system: buildSystemPrompt(ctx),
+        messages: [{ role: "user", content: ctx.customerMessage }],
+      });
+      const textBlock = response.content.find((block) => block.type === "text");
+      body = textBlock?.type === "text" ? textBlock.text : stubReply(ctx);
+    } catch (err) {
+      console.error("Claude API call failed, falling back to stub reply", err);
+      await logError({
+        source: "ai.generate_reply",
+        error: err,
+        tenantId: ctx.tenantId,
+        context: { conversationId: ctx.conversationId, language: ctx.language, model: ctx.settings.model },
+      });
+      body = stubReply(ctx);
+    }
+  } else {
+    body = stubReply(ctx);
+  }
 
   return {
     body,
