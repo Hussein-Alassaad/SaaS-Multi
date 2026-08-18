@@ -12,7 +12,7 @@ export default async function TenantDetailPage({
   const result = await getTenantDetail(tenantId);
   if (!result) notFound();
 
-  const { tenant, flags } = result;
+  const { tenant, flags, sections } = result;
 
   const serialized = {
     id: tenant.id,
@@ -106,6 +106,7 @@ export default async function TenantDetailPage({
       scope: f.scope,
       enabled: f.enabled,
     })),
+    sections,
   };
 
   return <TenantDetailClient tenant={serialized} />;

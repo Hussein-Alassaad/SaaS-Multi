@@ -17,9 +17,9 @@ import {
   PriorityBadge,
 } from "@/components/ui/StatusBadge";
 import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
-import { useUiStore } from "@/lib/store/ui";
+import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
-import { setFeatureFlagEnabledAction } from "@/lib/actions/feature-flags";
+import { setFeatureFlagEnabledAction, setTenantSectionEnabledAction } from "@/lib/actions/feature-flags";
 import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, type LucideIcon } from "lucide-react";
 
 interface TenantUser {
@@ -104,6 +104,13 @@ interface TenantFlag {
   scope: string;
   enabled: boolean;
 }
+interface TenantSection {
+  key: string;
+  label: string;
+  href: string;
+  core?: boolean;
+  enabled: boolean;
+}
 
 interface TenantDetail {
   id: string;
@@ -124,6 +131,7 @@ interface TenantDetail {
   auditLogs: TenantAuditEntry[];
   impersonationSessions: TenantImpersonation[];
   flags: TenantFlag[];
+  sections: TenantSection[];
 }
 
 interface Props {
@@ -137,6 +145,7 @@ const TABS = [
   "AI",
   "Invoices",
   "Logs",
+  "Sections",
   "Flags",
   "Files",
   "API Keys",
@@ -148,7 +157,7 @@ const TABS = [
 
 export function TenantDetailClient({ tenant }: Props) {
   const router = useRouter();
-  const startImpersonation = useUiStore((s) => s.startImpersonation);
+  const { startImpersonation } = useImpersonation();
   const [tab, setTab] = useState("General");
   const [flagState, setFlagState] = useState(
     Object.fromEntries(tenant.flags.map((f) => [f.id, f.enabled]))
@@ -166,6 +175,25 @@ export function TenantDetailClient({ tenant }: Props) {
         setFlagState((s) => ({ ...s, [flagId]: previous }));
       }
       setPendingFlagId(null);
+    });
+  };
+
+  const [sectionState, setSectionState] = useState(
+    Object.fromEntries(tenant.sections.map((s) => [s.key, s.enabled]))
+  );
+  const [pendingSectionKey, setPendingSectionKey] = useState<string | null>(null);
+  const [, startSectionTransition] = useTransition();
+
+  const handleSectionToggle = (sectionKey: string, next: boolean) => {
+    const previous = sectionState[sectionKey];
+    setSectionState((s) => ({ ...s, [sectionKey]: next }));
+    setPendingSectionKey(sectionKey);
+    startSectionTransition(async () => {
+      const result = await setTenantSectionEnabledAction(tenant.id, tenant.product.slug, sectionKey, next);
+      if (!result.ok) {
+        setSectionState((s) => ({ ...s, [sectionKey]: previous }));
+      }
+      setPendingSectionKey(null);
     });
   };
 
@@ -338,6 +366,32 @@ export function TenantDetailClient({ tenant }: Props) {
 
         <TabsContent value="Logs">
           <AuditTable logs={tenant.auditLogs} title="Activity Logs" />
+        </TabsContent>
+
+        <TabsContent value="Sections">
+          <Card>
+            <CardHeader>
+              <CardTitle>Sections</CardTitle>
+              <CardDescription>
+                Control which {tenant.product.name} sections this workspace can see. Core sections are always on.
+              </CardDescription>
+            </CardHeader>
+            <div className="space-y-3">
+              {tenant.sections.map((s) => (
+                <Toggle
+                  key={s.key}
+                  checked={sectionState[s.key]}
+                  onCheckedChange={(v) => handleSectionToggle(s.key, v)}
+                  disabled={s.core || pendingSectionKey === s.key}
+                  label={s.label}
+                  description={s.core ? "Always on" : s.href}
+                />
+              ))}
+              {tenant.sections.length === 0 && (
+                <EmptyState label="No configurable sections for this product yet." />
+              )}
+            </div>
+          </Card>
         </TabsContent>
 
         <TabsContent value="Flags">

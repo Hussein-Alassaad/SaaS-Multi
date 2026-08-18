@@ -18,7 +18,17 @@ interface CurrentUser {
   role: string;
 }
 
-export function AgencySidebar({ currentUser, lang }: { currentUser: CurrentUser | null; lang: UiLanguage }) {
+export function AgencySidebar({
+  currentUser,
+  lang,
+  enabledSections,
+}: {
+  currentUser: CurrentUser | null;
+  lang: UiLanguage;
+  enabledSections: string[];
+}) {
+  const enabledSet = new Set(enabledSections);
+  const visibleNavItems = AGENCY_NAV_ITEMS.filter((item) => enabledSet.has(item.href));
   const pathname = usePathname();
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -82,7 +92,7 @@ export function AgencySidebar({ currentUser, lang }: { currentUser: CurrentUser 
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-2">
-        {AGENCY_NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const active = isActive(item.href);
           const Icon = item.icon;
           return (

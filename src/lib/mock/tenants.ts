@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { getTenantSectionToggles } from "@/lib/agency/sections";
 
 export async function getTenantsList() {
   const tenants = await db.tenant.findMany({
@@ -34,5 +35,7 @@ export async function getTenantDetail(tenantId: string) {
     where: { OR: [{ scope: "TENANT", scopeId: tenantId }, { scope: "GLOBAL" }] },
   });
 
-  return { tenant, flags };
+  const sections = await getTenantSectionToggles(tenantId, tenant.product.slug);
+
+  return { tenant, flags, sections };
 }
