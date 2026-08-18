@@ -7,7 +7,11 @@ export function PageTransition({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   return (
-    <AnimatePresence mode="wait">
+    // mode="wait" (the previous setting) blocks the incoming page from
+    // mounting until the outgoing page's exit animation fully finishes --
+    // under load (larger pages, data fetching) this reads as a freeze when
+    // switching sections. Default mode animates enter/exit concurrently.
+    <AnimatePresence>
       <motion.div
         key={pathname}
         initial={{ opacity: 0, y: 8 }}
