@@ -2,10 +2,12 @@
 
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip } from "recharts";
 import { ChartShell, ChartTooltip } from "./ChartShell";
+import { getDictionary, type UiLanguage } from "@/lib/i18n";
 
-export function ClientGrowthChart({ data }: { data: { date: string; clients: number }[] }) {
+export function ClientGrowthChart({ data, lang }: { data: { date: string; clients: number }[]; lang: UiLanguage }) {
+  const t = getDictionary(lang);
   return (
-    <ChartShell title="Conversation Volume" description="Daily conversations, last 14 days">
+    <ChartShell title={t.analytics.conversationVolume} description={t.analytics.conversationVolumeSubtitle}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border-hairline)" vertical={false} />
@@ -21,7 +23,7 @@ export function ClientGrowthChart({ data }: { data: { date: string; clients: num
           <Line
             type="monotone"
             dataKey="clients"
-            name="Clients"
+            name={t.analytics.conversations}
             stroke="var(--accent-to)"
             strokeWidth={2}
             dot={false}

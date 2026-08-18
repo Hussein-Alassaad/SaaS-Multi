@@ -38,8 +38,8 @@ export default async function AnalyticsPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <LeadStageChart data={stageBreakdown} />
-        <ClientGrowthChart data={growthSeries} />
+        <LeadStageChart data={stageBreakdown} lang={lang} />
+        <ClientGrowthChart data={growthSeries} lang={lang} />
       </div>
 
       <Card padding="md">

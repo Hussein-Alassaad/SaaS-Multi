@@ -53,7 +53,7 @@ export async function getAgencyDashboardKpis(tenantId: string) {
 export async function getPipelineStageBreakdown(tenantId: string) {
   const conversations = await db.conversation.findMany({ where: { tenantId }, select: { stage: true } });
   return PIPELINE_STAGES.map((stage) => ({
-    stage: stage.replace(/_/g, " "),
+    stage,
     count: conversations.filter((c) => c.stage === stage).length,
   }));
 }
