@@ -119,6 +119,18 @@ model Tenant {
   featureRequests  TenantFeatureRequest[]
   aiSettings       AiSettings?
 
+  // Outreach tenant platform
+  outreachAccounts        OutreachAccount[]
+  outreachSettings        OutreachSettings?
+  outreachLeads           OutreachLead[]
+  outreachMessages        OutreachMessage[]
+  outreachPipelineHistory OutreachPipelineHistory[]
+  outreachFollowUps       OutreachFollowUp[]
+  outreachClientHistory   OutreachClientHistory[]
+  outreachNotifications   OutreachNotificationLog[]
+  outreachRuns            OutreachRun[]
+  outreachReplies         OutreachReply[]
+
   @@index([productId])
   @@map("tenants")
 }
@@ -163,6 +175,9 @@ model User {
   meetingsDecided       MeetingRequest[]       @relation("MeetingDecidedBy")
   knowledgeEntriesAdded KnowledgeEntry[]       @relation("KnowledgeEntryAuthor")
   featureRequestsFiled  TenantFeatureRequest[] @relation("FeatureRequestAuthor")
+
+  // Outreach tenant platform
+  outreachApprovalsDecided OutreachMessage[] @relation("OutreachMessageApprovedBy")
 
   @@index([tenantId])
   @@index([roleId])
@@ -404,14 +419,15 @@ model AuditLog {
 // Distinct from AuditLog, which records successful actor-initiated actions;
 // this records unexpected failures regardless of whether a user was involved.
 model ErrorLog {
-  id        String   @id @default(cuid())
-  tenantId  String?
-  source    String // e.g. "ai.generate_reply", "email.send", "payment.review"
-  message   String
-  stack     String?
-  context   String? // JSON-encoded, e.g. {conversationId, provider}
-  resolved  Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id         String   @id @default(cuid())
+  tenantId   String?
+  source     String // e.g. "ai.generate_reply", "email.send", "payment.review", "outreach.discovery"
+  message    String
+  stack      String?
+  context    String? // JSON-encoded, e.g. {conversationId, provider}
+  resolved   Boolean  @default(false)
+  isExpected Boolean  @default(false) // true for routine/expected skips (e.g. Outreach's "not a real business" qualification miss) vs. real failures -- lets a source's UI offer a Real problems / Normal skips / All filter
+  createdAt  DateTime @default(now())
 
   tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -697,4 +713,283 @@ model AiSettings {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("ai_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Outreach tenant platform (AI lead-discovery & outreach agent)
+// Rebuilt multi-tenant from a prior single-tenant version. Every table below
+// carries tenantId; the Python agent (outside this Prisma schema) writes to
+// the same Postgres tables via the Supabase service-role key, so field names
+// are @map()'d to snake_case to match its existing repositories.py column
+// expectations without a rewrite of every dict-key reference.
+// String "enum" fields:
+//   OutreachAccount.status          active | warned | paused
+//   OutreachLead.platform            linkedin | instagram
+//   OutreachLead.status               discovered | analyzed | awaiting_approval | approved
+//                                     | manual_send_pending | contacted | replied | interested
+//                                     | meeting_booked | deal_closed | lost
+//   OutreachLead.temperature          hot | warm | cold
+//   OutreachMessage.channel            linkedin | whatsapp | instagram
+//   OutreachMessage.approvalStatus     awaiting | approved | held | edited
+//   OutreachMessage.sendStatus         pending | sent | manual_pending | failed
+//   OutreachSettings.messageStyle      direct | discovery
+//   OutreachFollowUp.status            scheduled | sent | cancelled | paused
+//   OutreachRun.status                 running | completed | error
+// ---------------------------------------------------------------------------
+
+model OutreachAccount {
+  id                 String    @id @default(cuid())
+  tenantId           String    @map("tenant_id")
+  label              String
+  platformHandles    String    @default("{}") @map("platform_handles") // JSON-encoded {linkedin, instagram}
+  runTime            String    @default("09:00") @map("run_time") // "HH:MM", interpreted in the tenant's configured timezone
+  igDailyLimit       Int       @default(20) @map("ig_daily_limit")
+  linkedinDailyLimit Int       @default(30) @map("linkedin_daily_limit")
+  proxyHost          String?   @map("proxy_host")
+  proxyPort          String?   @map("proxy_port")
+  proxyUsername      String?   @map("proxy_username")
+  proxyPasswordEnc   String?   @map("proxy_password_enc") // encrypted at rest (AES-256-GCM, see src/lib/outreach/crypto.ts) -- multiple real tenants' credentials now share this table, unlike the original single-tenant version
+  warmupCurrentLimit Int       @default(5) @map("warmup_current_limit")
+  status             String    @default("active")
+  warningType        String?   @map("warning_type")
+  warningReason      String?   @map("warning_reason")
+  redistributeFlag   Boolean   @default(false) @map("redistribute_flag")
+  lastActiveAt       DateTime? @map("last_active_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leads        OutreachLead[]
+  runs         OutreachRun[]
+  sentMessages OutreachMessage[] @relation("OutreachSentViaAccount")
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@map("outreach_accounts")
+}
+
+// Single row per tenant (was one single global row pre-rebuild).
+model OutreachSettings {
+  id                      String   @id @default(cuid())
+  tenantId                String   @unique @map("tenant_id")
+  targetNiche             String   @default("") @map("target_niche")
+  targetIndustry          String   @default("") @map("target_industry")
+  targetLocation          String   @default("") @map("target_location")
+  targetBusinessType      String   @default("") @map("target_business_type")
+  outreachLanguages       String   @default("[\"English\"]") @map("outreach_languages") // JSON-encoded string[]
+  messageStyle            String   @default("discovery") @map("message_style")
+  styleDurationDays       Int      @default(7) @map("style_duration_days")
+  styleLastRotatedAt      DateTime @default(now()) @map("style_last_rotated_at")
+  defaultRecontactGapDays Int      @default(30) @map("default_recontact_gap_days")
+  maxContactsPerLead      Int      @default(2) @map("max_contacts_per_lead")
+  whatsappRecipient1      String?  @map("whatsapp_recipient_1")
+  whatsappRecipient2      String?  @map("whatsapp_recipient_2")
+  approvalRequired        Boolean  @default(true) @map("approval_required")
+  approvalReminderHours   Int      @default(24) @map("approval_reminder_hours")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("outreach_settings")
+}
+
+model OutreachLead {
+  id                  String    @id @default(cuid())
+  tenantId            String    @map("tenant_id")
+  accountId           String?   @map("account_id")
+  platform            String
+  businessName        String?   @map("business_name")
+  profileUrl          String?   @map("profile_url")
+  profilePhotoUrl     String?   @map("profile_photo_url")
+  followerCount       Int?      @map("follower_count")
+  industry            String?
+  website             String?
+  socialPlatforms     String    @default("[]") @map("social_platforms") // JSON
+  companySize         String?   @map("company_size")
+  revenueTier         String?   @map("revenue_tier")
+  adsRunning          Boolean?  @map("ads_running")
+  weakPoints          String    @default("[]") @map("weak_points") // JSON
+  aiOpportunities     String    @default("[]") @map("ai_opportunities") // JSON
+  founderFound        Boolean   @default(false) @map("founder_found")
+  founderName         String?   @map("founder_name")
+  founderSourcePhrase String?   @map("founder_source_phrase")
+  whatsappFound       Boolean   @default(false) @map("whatsapp_found")
+  whatsappNumber      String?   @map("whatsapp_number")
+  score               Int?
+  temperature         String?
+  scoreReasoning      String?   @map("score_reasoning")
+  generatedMessage    String?   @map("generated_message")
+  messageStyleUsed    String?   @map("message_style_used")
+  status              String    @default("discovered")
+  contactCount        Int       @default(0) @map("contact_count")
+  firstContactedAt    DateTime? @map("first_contacted_at")
+  notes               String?
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account OutreachAccount? @relation(fields: [accountId], references: [id])
+
+  messages        OutreachMessage[]
+  pipelineHistory OutreachPipelineHistory[]
+  followUps       OutreachFollowUp[]
+  clientHistory   OutreachClientHistory[]
+  notifications   OutreachNotificationLog[]
+  replies         OutreachReply[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, score])
+  @@index([tenantId, updatedAt])
+  @@index([tenantId, accountId, createdAt])
+  @@index([tenantId, whatsappFound])
+  @@index([tenantId, profileUrl])
+  @@index([tenantId, platform])
+  @@map("outreach_leads")
+}
+
+model OutreachMessage {
+  id               String    @id @default(cuid())
+  tenantId         String    @map("tenant_id")
+  leadId           String    @map("lead_id")
+  channel          String
+  body             String
+  isFollowup       Boolean   @default(false) @map("is_followup")
+  isReengagement   Boolean   @default(false) @map("is_reengagement")
+  approvalStatus   String    @default("awaiting") @map("approval_status")
+  approvedById     String?   @map("approved_by_id")
+  approvedAt       DateTime? @map("approved_at")
+  editedBody       String?   @map("edited_body")
+  holdReason       String?   @map("hold_reason")
+  sendStatus       String    @default("pending") @map("send_status")
+  sentAt           DateTime? @map("sent_at")
+  sentViaAccountId String?   @map("sent_via_account_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead           OutreachLead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  sentViaAccount OutreachAccount? @relation("OutreachSentViaAccount", fields: [sentViaAccountId], references: [id])
+  approvedBy     User?            @relation("OutreachMessageApprovedBy", fields: [approvedById], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, leadId])
+  @@index([tenantId, approvalStatus])
+  @@index([tenantId, approvalStatus, sendStatus])
+  @@map("outreach_messages")
+}
+
+model OutreachPipelineHistory {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  leadId    String   @map("lead_id")
+  fromStage String?  @map("from_stage")
+  toStage   String   @map("to_stage")
+  changedBy String   @default("agent") @map("changed_by") // "agent" | User.id | "manual"
+  changedAt DateTime @default(now()) @map("changed_at")
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   OutreachLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([leadId, changedAt])
+  @@map("outreach_pipeline_history")
+}
+
+model OutreachFollowUp {
+  id             String    @id @default(cuid())
+  tenantId       String    @map("tenant_id")
+  leadId         String    @map("lead_id")
+  enabled        Boolean   @default(false)
+  scheduledFor   DateTime? @map("scheduled_for")
+  isReengagement Boolean   @default(false) @map("is_reengagement")
+  status         String    @default("scheduled")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   OutreachLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, enabled, status, scheduledFor])
+  @@map("outreach_follow_ups")
+}
+
+// Permanent record of every analyzed lead -- never resets, distinct from
+// the live outreach_leads feed.
+model OutreachClientHistory {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  leadId       String?  @map("lead_id")
+  businessName String?  @map("business_name")
+  platform     String?
+  industry     String?
+  score        Int?
+  temperature  String?
+  weakPoints   String?  @map("weak_points") // JSON
+  founderFound Boolean? @map("founder_found")
+  founderName  String?  @map("founder_name")
+  contacted    Boolean  @default(false)
+  snapshot     String? // JSON -- full lead snapshot at analysis time
+  analyzedAt   DateTime @default(now()) @map("analyzed_at")
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   OutreachLead? @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, analyzedAt])
+  @@map("outreach_client_history")
+}
+
+model OutreachNotificationLog {
+  id            String   @id @default(cuid())
+  tenantId      String   @map("tenant_id")
+  type          String // hot_lead | founder | warning | approval_reminder | daily_summary
+  recipients    String // JSON-encoded string[] of phone numbers
+  body          String?
+  relatedLeadId String?  @map("related_lead_id")
+  sentAt        DateTime @default(now()) @map("sent_at")
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  relatedLead OutreachLead? @relation(fields: [relatedLeadId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@map("outreach_notifications_log")
+}
+
+model OutreachRun {
+  id           String    @id @default(cuid())
+  tenantId     String    @map("tenant_id")
+  accountId    String?   @map("account_id")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+  leadsFound   Int       @default(0) @map("leads_found")
+  messagesSent Int       @default(0) @map("messages_sent")
+  status       String    @default("running")
+  notes        String?
+  skippedLeads String?   @map("skipped_leads") // JSON -- per-lead skip reasons
+
+  tenant  Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account OutreachAccount? @relation(fields: [accountId], references: [id])
+
+  @@index([tenantId])
+  @@index([tenantId, startedAt])
+  @@index([accountId, startedAt])
+  @@map("outreach_runs")
+}
+
+model OutreachReply {
+  id         String   @id @default(cuid())
+  tenantId   String   @map("tenant_id")
+  leadId     String   @map("lead_id")
+  accountId  String?  @map("account_id")
+  channel    String
+  body       String
+  repliedAt  DateTime @map("replied_at")
+  detectedAt DateTime @default(now()) @map("detected_at")
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  lead   OutreachLead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([leadId, repliedAt])
+  @@map("outreach_replies")
 }
