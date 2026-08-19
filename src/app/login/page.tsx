@@ -26,16 +26,6 @@ export default function LoginPage() {
 
           <LoginForm />
         </Card>
-
-        <div className="mt-5 rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-1)]/60 px-4 py-3 text-center">
-          <p className="text-[11px] font-medium uppercase tracking-wide text-[var(--text-5)]">
-            Demo credentials
-          </p>
-          <p className="mt-1.5 text-xs text-[var(--text-4)]">
-            Owner — <span className="text-[var(--text-3)]">ava.owner@platform.example.com</span> /{" "}
-            <span className="text-[var(--text-3)]">owner123!</span>
-          </p>
-        </div>
       </div>
     </div>
   );
