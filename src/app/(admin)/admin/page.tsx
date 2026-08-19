@@ -30,19 +30,26 @@ import {
   getApiRequestsSeries,
   getActiveUsersSeries,
   getRecentActivity,
+  getAiUsageLogsForSeries,
 } from "@/lib/mock/dashboard";
 
 export default async function DashboardPage() {
-  const [kpis, revenue, tenantGrowth, aiUsage, apiRequests, activeUsers, activity] =
-    await Promise.all([
-      getDashboardKpis(),
-      getRevenueGrowthSeries(),
-      getTenantGrowthSeries(),
-      getAiUsageSeries(),
-      getApiRequestsSeries(),
-      getActiveUsersSeries(),
-      getRecentActivity(),
-    ]);
+  // AI usage logs are fetched once (in parallel with everything else below)
+  // and shared between getAiUsageSeries and getApiRequestsSeries -- both
+  // used to independently pull the entire table, doubling a real network
+  // round-trip to Supabase for no reason.
+  const [kpis, revenue, tenantGrowth, aiUsageLogs, activeUsers, activity] = await Promise.all([
+    getDashboardKpis(),
+    getRevenueGrowthSeries(),
+    getTenantGrowthSeries(),
+    getAiUsageLogsForSeries(),
+    getActiveUsersSeries(),
+    getRecentActivity(),
+  ]);
+  const [aiUsage, apiRequests] = await Promise.all([
+    getAiUsageSeries(aiUsageLogs),
+    getApiRequestsSeries(aiUsageLogs),
+  ]);
 
   return (
     <div className="space-y-6">

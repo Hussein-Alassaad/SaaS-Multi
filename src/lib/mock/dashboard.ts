@@ -10,6 +10,7 @@ export async function getDashboardKpis() {
     payments,
     aiLogsToday,
     aiLogsAll,
+    activeSubs,
   ] = await Promise.all([
     db.tenant.count(),
     db.tenant.count({ where: { status: "ACTIVE" } }),
@@ -21,6 +22,12 @@ export async function getDashboardKpis() {
       where: { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } },
     }),
     db.aiUsageLog.findMany(),
+    // MRR approximation: sum of active subscriptions' plan monthly price.
+    // Pulled into the same Promise.all as everything else above -- this
+    // used to be a separate `await` after the batch, adding one full
+    // extra network round-trip to Supabase per dashboard load for no
+    // reason (it doesn't depend on any of the other queries' results).
+    db.subscription.findMany({ where: { status: "ACTIVE" }, include: { plan: true } }),
   ]);
 
   const now = new Date();
@@ -34,11 +41,6 @@ export async function getDashboardKpis() {
     .filter((p) => p.processedAt >= startOfMonth)
     .reduce((s, p) => s + p.amountCents, 0);
 
-  // MRR approximation: sum of active subscriptions' plan monthly price
-  const activeSubs = await db.subscription.findMany({
-    where: { status: "ACTIVE" },
-    include: { plan: true },
-  });
   const mrr = activeSubs.reduce((s, sub) => s + sub.plan.monthlyPrice, 0);
 
   const aiCostToday = aiLogsToday.reduce((s, l) => s + l.costCents, 0);
@@ -92,8 +94,26 @@ export async function getTenantGrowthSeries() {
   return days;
 }
 
-export async function getAiUsageSeries() {
-  const logs = await db.aiUsageLog.findMany({ select: { createdAt: true, costCents: true, tokens: true } });
+type AiUsageLogForSeries = { createdAt: Date; costCents: number; tokens: number; success: boolean };
+
+/**
+ * Shared fetch for getAiUsageSeries + getApiRequestsSeries -- both used to
+ * independently findMany() the entire AiUsageLog table (same rows, two
+ * different field selections). Each network round-trip to Supabase costs
+ * real latency now that this runs against remote Postgres instead of local
+ * SQLite, so calling both series functions from the dashboard page's
+ * Promise.all doesn't save anything here: neither was ever gated on the
+ * other, they were just duplicating the same read. Callers that need both
+ * series (see admin dashboard page.tsx) should fetch once via this and
+ * pass the result into both functions below, instead of each calling this
+ * on its own.
+ */
+export function getAiUsageLogsForSeries(): Promise<AiUsageLogForSeries[]> {
+  return db.aiUsageLog.findMany({ select: { createdAt: true, costCents: true, tokens: true, success: true } });
+}
+
+export async function getAiUsageSeries(preloadedLogs?: AiUsageLogForSeries[]) {
+  const logs = preloadedLogs ?? (await getAiUsageLogsForSeries());
   const days: { date: string; cost: number; tokens: number }[] = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date();
@@ -111,9 +131,9 @@ export async function getAiUsageSeries() {
   return days;
 }
 
-export async function getApiRequestsSeries() {
+export async function getApiRequestsSeries(preloadedLogs?: AiUsageLogForSeries[]) {
   // Derived from AI usage logs as a proxy for API request volume.
-  const logs = await db.aiUsageLog.findMany({ select: { createdAt: true, success: true } });
+  const logs = preloadedLogs ?? (await getAiUsageLogsForSeries());
   const days: { date: string; requests: number; errors: number }[] = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date();

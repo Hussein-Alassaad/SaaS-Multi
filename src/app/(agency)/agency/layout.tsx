@@ -6,7 +6,6 @@ import { AmbientWordmark } from "@/components/layout/AmbientWordmark";
 import { PageTransition } from "@/components/layout/PageTransition";
 import { getTenantSession } from "@/lib/auth";
 import { isRtl, type UiLanguage } from "@/lib/i18n";
-import { db } from "@/lib/db";
 import { getEnabledSectionHrefs } from "@/lib/agency/sections";
 
 export default async function AgencyLayout({ children }: { children: React.ReactNode }) {
@@ -20,11 +19,12 @@ export default async function AgencyLayout({ children }: { children: React.React
   const lang = (session.uiLanguage as UiLanguage) ?? "EN";
   const rtl = isRtl(lang);
 
-  const tenant = await db.tenant.findUnique({
-    where: { id: session.tenantId! },
-    select: { product: { select: { slug: true } } },
-  });
-  const enabledSections = await getEnabledSectionHrefs(session.tenantId!, tenant?.product.slug ?? "marketing");
+  // Unlike Outreach's layout, this route group has no cross-product guard
+  // (a tenant fetch here was previously unused dead weight -- every
+  // /agency session's product is "marketing", nothing else ever routes
+  // here), so the section lookup can run directly without an extra
+  // Supabase round-trip to look up a value nothing checks.
+  const enabledSections = await getEnabledSectionHrefs(session.tenantId!, "marketing");
 
   return (
     <div dir={rtl ? "rtl" : "ltr"} className="relative min-h-screen">

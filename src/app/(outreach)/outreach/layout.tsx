@@ -17,18 +17,24 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   if (!session) redirect("/outreach-login");
   const currentUser = { name: session.name, role: session.role?.name ?? "" };
 
-  const tenant = await db.tenant.findUnique({
-    where: { id: session.tenantId! },
-    select: { product: { select: { slug: true } } },
-  });
+  // Tenant-product lookup (cross-product guard) and section-flags lookup
+  // both only need tenantId and don't depend on each other's result -- run
+  // them together instead of two sequential round-trips. Each Supabase
+  // round-trip costs real network latency now that this runs against
+  // remote Postgres, and this layout re-runs on every Outreach page load.
+  const [tenant, enabledSections] = await Promise.all([
+    db.tenant.findUnique({
+      where: { id: session.tenantId! },
+      select: { product: { select: { slug: true } } },
+    }),
+    getEnabledSectionHrefs(session.tenantId!, "outreach"),
+  ]);
   // Cross-product guard: a Marketing tenant's session is still TENANT-scoped
   // and would pass the proxy's scope check on /outreach/*, but their tenant
   // doesn't belong to the outreach product -- bounce them to their own
   // product's login instead of rendering Outreach's layout with no real
   // outreach data behind it.
   if (tenant?.product.slug !== "outreach") redirect("/outreach-login");
-
-  const enabledSections = await getEnabledSectionHrefs(session.tenantId!, "outreach");
 
   return (
     <div className="relative min-h-screen">
