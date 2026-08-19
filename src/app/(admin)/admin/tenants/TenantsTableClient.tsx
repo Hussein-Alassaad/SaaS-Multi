@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/Input";
 import { formatCents, formatDate } from "@/lib/utils";
 import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
-import { UserCog } from "lucide-react";
+import { UserCog, Plus } from "lucide-react";
+import { CreateTenantModal } from "./CreateTenantModal";
 
 interface TenantRow {
   id: string;
@@ -31,6 +32,7 @@ export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
   const router = useRouter();
   const { startImpersonation } = useImpersonation();
   const [search, setSearch] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
 
   const filtered = tenants.filter(
     (t) =>
@@ -118,7 +120,13 @@ export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
-        <span className="text-xs text-[var(--text-4)]">{filtered.length} tenants</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-[var(--text-4)]">{filtered.length} tenants</span>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New Tenant
+          </Button>
+        </div>
       </div>
       <DataTable
         columns={columns}
@@ -127,6 +135,7 @@ export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
         onRowClick={(t) => router.push(`/admin/tenants/${t.id}`)}
         emptyMessage="No tenants match your search."
       />
+      <CreateTenantModal open={createOpen} onOpenChange={setCreateOpen} />
     </div>
   );
 }

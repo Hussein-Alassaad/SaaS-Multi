@@ -1,7 +1,5 @@
 import { getTenantsList } from "@/lib/mock/tenants";
 import { TenantsTableClient } from "./TenantsTableClient";
-import { Button } from "@/components/ui/Button";
-import { Plus } from "lucide-react";
 
 export default async function TenantsPage() {
   const tenants = await getTenantsList();
@@ -22,17 +20,11 @@ export default async function TenantsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">Tenants</h1>
-          <p className="text-sm text-[var(--text-4)] mt-1">
-            Manage every tenant across all products from one CRM view.
-          </p>
-        </div>
-        <Button>
-          <Plus className="h-4 w-4" />
-          New Tenant
-        </Button>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">Tenants</h1>
+        <p className="text-sm text-[var(--text-4)] mt-1">
+          Manage every tenant across all products from one CRM view.
+        </p>
       </div>
 
       <TenantsTableClient tenants={rows} />
