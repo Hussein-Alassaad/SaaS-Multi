@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { PERMISSION_MATRIX, type SystemRole } from "../src/lib/permissions";
 import { AGENCY_PERMISSION_MATRIX, agencyRoleDbName, type AgencyRole } from "../src/lib/agency-permissions";
+import { OUTREACH_PERMISSION_MATRIX, outreachRoleDbName, type OutreachRole } from "../src/lib/outreach-permissions";
 
 const db = new PrismaClient();
 
@@ -111,6 +112,34 @@ async function main() {
     agencyRoles[name] = role;
   }
 
+  // Outreach roles — same generation pattern, stored under a distinguishing
+  // DB name (outreachRoleDbName) since Role.name is globally unique and
+  // "Owner"/"Manager" collide with both platform and Agency role names.
+  const outreachRoleDefs: Record<OutreachRole, { resource: string; action: string }[]> = Object.fromEntries(
+    Object.entries(OUTREACH_PERMISSION_MATRIX).map(([roleName, resourceMap]) => {
+      const perms: { resource: string; action: string }[] = [];
+      for (const [resource, actions] of Object.entries(resourceMap)) {
+        for (const action of actions ?? []) {
+          perms.push({ resource, action });
+        }
+      }
+      return [roleName, perms];
+    })
+  ) as Record<OutreachRole, { resource: string; action: string }[]>;
+
+  const outreachRoles: Record<OutreachRole, { id: string }> = {} as Record<OutreachRole, { id: string }>;
+  for (const [name, perms] of Object.entries(outreachRoleDefs) as [OutreachRole, { resource: string; action: string }[]][]) {
+    const role = await db.role.create({
+      data: {
+        name: outreachRoleDbName(name),
+        description: `${name} — Outreach tenant role`,
+        isSystem: true,
+        permissions: { create: perms },
+      },
+    });
+    outreachRoles[name] = role;
+  }
+
   // -------------------------------------------------------------------
   // Products
   // -------------------------------------------------------------------
@@ -135,6 +164,18 @@ async function main() {
       version: "0.1.0",
       maintenanceMode: false,
       config: JSON.stringify({ primaryColor: "#22c55e", icon: "dumbbell", supportEmail: "support@gym.example.com" }),
+    },
+  });
+
+  const outreach = await db.product.create({
+    data: {
+      slug: "outreach",
+      name: "Outreach",
+      description: "AI lead discovery and outreach agent across LinkedIn and Instagram, with human-in-the-loop approval.",
+      status: "ACTIVE",
+      version: "1.0.0",
+      maintenanceMode: false,
+      config: JSON.stringify({ primaryColor: "#7c5cff", icon: "radar", supportEmail: "support@outreach.example.com" }),
     },
   });
 
@@ -235,14 +276,23 @@ async function main() {
     { company: "Ironclad Fitness Group", sub: "ironclad", product: gym, status: "TRIAL", plan: basic },
     { company: "Peak Form Studios", sub: "peakform", product: gym, status: "ACTIVE", plan: pro },
     { company: "Riverside Wellness", sub: "riverside", product: marketing, status: "SUSPENDED", plan: basic },
+    { company: "Vantage Outreach Co.", sub: "vantage", product: outreach, status: "ACTIVE", plan: pro },
   ];
 
-  const tenants: { id: string; companyName: string; productId: string; sub: string; isAgency: boolean }[] = [];
+  const tenants: {
+    id: string;
+    companyName: string;
+    productId: string;
+    sub: string;
+    isAgency: boolean;
+    isOutreach: boolean;
+  }[] = [];
 
   for (const t of tenantDefs) {
     const isAgency = t.product.id === marketing.id;
-    const ownerPassword = "agency123!";
-    const ownerPasswordHash = isAgency ? await bcrypt.hash(ownerPassword, 10) : undefined;
+    const isOutreach = t.product.id === outreach.id;
+    const ownerPassword = isOutreach ? "outreach123!" : "agency123!";
+    const ownerPasswordHash = isAgency || isOutreach ? await bcrypt.hash(ownerPassword, 10) : undefined;
 
     const ownerUser = await db.user.create({
       data: {
@@ -251,7 +301,7 @@ async function main() {
         scope: "TENANT",
         status: "ACTIVE",
         uiLanguage: t.sub === "northwind" ? "AR" : "EN",
-        roleId: isAgency ? agencyRoles.Owner.id : undefined,
+        roleId: isAgency ? agencyRoles.Owner.id : isOutreach ? outreachRoles.Owner.id : undefined,
         passwordHash: ownerPasswordHash,
         lastLoginAt: daysAgo(randInt(0, 14)),
       },
@@ -286,7 +336,14 @@ async function main() {
       });
     }
 
-    tenants.push({ id: tenant.id, companyName: tenant.companyName, productId: tenant.productId, sub: t.sub, isAgency });
+    tenants.push({
+      id: tenant.id,
+      companyName: tenant.companyName,
+      productId: tenant.productId,
+      sub: t.sub,
+      isAgency,
+      isOutreach,
+    });
 
     // Subscription
     const subStatus =
@@ -765,9 +822,67 @@ async function main() {
     ],
   });
 
+  // -------------------------------------------------------------------
+  // Outreach tenant platform -- settings + a starter dataset so the
+  // rebuilt pages have something real to render against.
+  // -------------------------------------------------------------------
+  for (const t of tenants.filter((t) => t.isOutreach)) {
+    await db.outreachSettings.create({
+      data: {
+        tenantId: t.id,
+        targetNiche: "boutique fitness studios",
+        targetIndustry: "health & wellness",
+        targetLocation: "United States",
+        targetBusinessType: "small business",
+      },
+    });
+
+    const account1 = await db.outreachAccount.create({
+      data: {
+        tenantId: t.id,
+        label: "Account 1",
+        runTime: "09:00",
+        status: "active",
+        lastActiveAt: daysAgo(0),
+      },
+    });
+    const account2 = await db.outreachAccount.create({
+      data: {
+        tenantId: t.id,
+        label: "Account 2",
+        runTime: "11:00",
+        status: "active",
+        lastActiveAt: daysAgo(1),
+      },
+    });
+
+    const leadDefs = [
+      { name: "Solstice Yoga Studio", platform: "linkedin", stage: "discovered", temp: null, account: account1 },
+      { name: "Pulse Fitness Co.", platform: "instagram", stage: "analyzed", temp: "warm", account: account1 },
+      { name: "Ironwell CrossFit", platform: "linkedin", stage: "awaiting_approval", temp: "hot", account: account2 },
+      { name: "Bloom Pilates Studio", platform: "instagram", stage: "contacted", temp: "warm", account: account2 },
+      { name: "Summit Strength Lab", platform: "linkedin", stage: "replied", temp: "hot", account: account1 },
+    ];
+    for (const l of leadDefs) {
+      await db.outreachLead.create({
+        data: {
+          tenantId: t.id,
+          accountId: l.account.id,
+          platform: l.platform,
+          businessName: l.name,
+          status: l.stage,
+          temperature: l.temp,
+          score: l.temp === "hot" ? randInt(8, 10) : l.temp === "warm" ? randInt(5, 7) : null,
+          createdAt: daysAgo(randInt(0, 10)),
+        },
+      });
+    }
+  }
+
   const agencyTenantCount = tenants.filter((t) => t.isAgency).length;
+  const outreachTenantCount = tenants.filter((t) => t.isOutreach).length;
   console.log(
-    `Seeded: 2 products, ${tenants.length} tenants, ${plans.length} plans, 6 platform roles, 6 agency roles, Nexaris tenant platform data (channels/conversations/messages/clients/meetings/knowledge base) for ${agencyTenantCount} tenants.`
+    `Seeded: 3 products, ${tenants.length} tenants, ${plans.length} plans, 6 platform roles, 6 agency roles, 3 outreach roles, Nexaris tenant platform data for ${agencyTenantCount} tenants, Outreach starter data for ${outreachTenantCount} tenants.`
   );
 }
 

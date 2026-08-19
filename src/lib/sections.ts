@@ -33,6 +33,21 @@ export const PRODUCT_SECTIONS: Record<string, SectionDef[]> = {
     { key: "team", label: "Team", href: "/agency/team" },
     { key: "settings", label: "Settings", href: "/agency/settings", core: true },
   ],
+  outreach: [
+    { key: "dashboard", label: "Live Feed", href: "/outreach", core: true },
+    { key: "approvals", label: "Approval Queue", href: "/outreach/approvals" },
+    { key: "instagram-manual", label: "Instagram Manual Send", href: "/outreach/instagram-manual" },
+    { key: "linkedin", label: "LinkedIn Activity", href: "/outreach/linkedin" },
+    { key: "pipeline", label: "Pipeline", href: "/outreach/pipeline" },
+    { key: "clients", label: "Clients", href: "/outreach/clients" },
+    { key: "client-history", label: "Client History", href: "/outreach/client-history" },
+    { key: "analytics", label: "Analytics", href: "/outreach/analytics" },
+    { key: "accounts", label: "Account Health", href: "/outreach/accounts" },
+    { key: "run-status", label: "Run Status", href: "/outreach/run-status" },
+    { key: "errors", label: "Errors", href: "/outreach/errors" },
+    { key: "workflow", label: "Workflow", href: "/outreach/workflow" },
+    { key: "settings", label: "Settings", href: "/outreach/settings", core: true },
+  ],
 };
 
 export function getSectionsForProduct(productSlug: string): SectionDef[] {
