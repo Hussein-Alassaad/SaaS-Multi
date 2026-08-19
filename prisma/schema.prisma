@@ -741,14 +741,18 @@ model OutreachAccount {
   id                 String    @id @default(cuid())
   tenantId           String    @map("tenant_id")
   label              String
+  platform           String    @default("linkedin") // "instagram" | "linkedin" | "email" -- which channel this account sends through
   platformHandles    String    @default("{}") @map("platform_handles") // JSON-encoded {linkedin, instagram}
   runTime            String    @default("09:00") @map("run_time") // "HH:MM", interpreted in the tenant's configured timezone
   igDailyLimit       Int       @default(20) @map("ig_daily_limit")
   linkedinDailyLimit Int       @default(30) @map("linkedin_daily_limit")
+  emailDailyLimit    Int       @default(300) @map("email_daily_limit")
   proxyHost          String?   @map("proxy_host")
   proxyPort          String?   @map("proxy_port")
   proxyUsername      String?   @map("proxy_username")
   proxyPasswordEnc   String?   @map("proxy_password_enc") // encrypted at rest (AES-256-GCM, see src/lib/outreach/crypto.ts) -- multiple real tenants' credentials now share this table, unlike the original single-tenant version
+  sesFromEmail       String?   @map("ses_from_email") // verified SES sender identity -- only used when platform = "email"
+  sesFromName        String?   @map("ses_from_name")
   warmupCurrentLimit Int       @default(5) @map("warmup_current_limit")
   status             String    @default("active")
   warningType        String?   @map("warning_type")
@@ -764,6 +768,7 @@ model OutreachAccount {
 
   @@index([tenantId])
   @@index([tenantId, status])
+  @@index([tenantId, platform])
   @@map("outreach_accounts")
 }
 
@@ -775,6 +780,9 @@ model OutreachSettings {
   targetIndustry          String   @default("") @map("target_industry")
   targetLocation          String   @default("") @map("target_location")
   targetBusinessType      String   @default("") @map("target_business_type")
+  targetCompanySizeMin    Int?     @map("target_company_size_min")
+  targetCompanySizeMax    Int?     @map("target_company_size_max")
+  targetNeeds             String   @default("[]") @map("target_needs") // JSON-encoded string[] -- e.g. ["security systems","cameras"]
   outreachLanguages       String   @default("[\"English\"]") @map("outreach_languages") // JSON-encoded string[]
   messageStyle            String   @default("discovery") @map("message_style")
   styleDurationDays       Int      @default(7) @map("style_duration_days")
@@ -814,6 +822,7 @@ model OutreachLead {
   founderSourcePhrase String?   @map("founder_source_phrase")
   whatsappFound       Boolean   @default(false) @map("whatsapp_found")
   whatsappNumber      String?   @map("whatsapp_number")
+  contactEmail        String?   @map("contact_email") // discovered/verified email address -- only populated for platform="email" leads (added for SES-based Email Outreach; the original IG/LinkedIn-only app never captured one)
   score               Int?
   temperature         String?
   scoreReasoning      String?   @map("score_reasoning")
