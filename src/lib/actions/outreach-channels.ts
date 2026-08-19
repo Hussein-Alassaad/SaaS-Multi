@@ -1,0 +1,124 @@
+"use server";
+
+import { db } from "@/lib/db";
+import { getTenantSession } from "@/lib/auth";
+import { outreachGuardResult, type OutreachResource } from "@/lib/outreach-permissions";
+
+export async function getInstagramManualQueueAction() {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "instagram-manual", "view");
+  if (!permCheck.ok) return permCheck;
+
+  const messages = await db.outreachMessage.findMany({
+    where: { tenantId: session.tenantId!, channel: "instagram", sendStatus: "manual_send_pending" },
+    include: {
+      lead: { select: { id: true, businessName: true, profileUrl: true, contactCount: true, firstContactedAt: true, status: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return {
+    ok: true as const,
+    messages: messages.map((m) => ({
+      id: m.id,
+      body: m.body,
+      editedBody: m.editedBody,
+      lead: {
+        id: m.lead.id,
+        businessName: m.lead.businessName,
+        profileUrl: m.lead.profileUrl,
+      },
+    })),
+  };
+}
+
+/**
+ * Instagram never auto-sends -- mirrors agent/sending/instagram_queue.py's
+ * mark_sent() exactly: bump contact_count, set first_contacted_at only
+ * once, move the lead to "contacted".
+ */
+export async function markInstagramSentAction(messageId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "instagram-manual", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const message = await db.outreachMessage.findFirst({
+    where: { id: messageId, tenantId: session.tenantId! },
+    include: { lead: true },
+  });
+  if (!message) return { ok: false as const, error: "Message not found." };
+
+  const now = new Date();
+  const fromStage = message.lead.status;
+
+  await db.$transaction([
+    db.outreachMessage.update({ where: { id: messageId }, data: { sendStatus: "sent", sentAt: now } }),
+    db.outreachLead.update({
+      where: { id: message.leadId },
+      data: {
+        contactCount: { increment: 1 },
+        firstContactedAt: message.lead.firstContactedAt ?? now,
+        status: "contacted",
+      },
+    }),
+    db.outreachPipelineHistory.create({
+      data: { tenantId: session.tenantId!, leadId: message.leadId, fromStage, toStage: "contacted", changedBy: "agent" },
+    }),
+    db.outreachClientHistory.updateMany({ where: { leadId: message.leadId }, data: { contacted: true } }),
+  ]);
+
+  return { ok: true as const };
+}
+
+export async function getChannelActivityAction(channel: "linkedin" | "email") {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const resource: OutreachResource = channel === "email" ? "email" : "linkedin";
+  const permCheck = outreachGuardResult(session.role?.name ?? "", resource, "view");
+  if (!permCheck.ok) return permCheck;
+
+  const [messages, replies, accounts] = await Promise.all([
+    db.outreachMessage.findMany({
+      where: { tenantId: session.tenantId!, channel },
+      include: { lead: { select: { id: true, businessName: true, profileUrl: true, status: true } } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    db.outreachReply.findMany({
+      where: { tenantId: session.tenantId!, channel },
+      include: { lead: { select: { id: true, businessName: true } } },
+      orderBy: { repliedAt: "desc" },
+      take: 20,
+    }),
+    db.outreachAccount.findMany({ where: { tenantId: session.tenantId!, platform: channel } }),
+  ]);
+
+  return {
+    ok: true as const,
+    messages: messages.map((m) => ({
+      id: m.id,
+      body: m.body,
+      editedBody: m.editedBody,
+      sendStatus: m.sendStatus,
+      sentAt: m.sentAt?.toISOString() ?? null,
+      createdAt: m.createdAt.toISOString(),
+      lead: { id: m.lead.id, businessName: m.lead.businessName },
+    })),
+    replies: replies.map((r) => ({
+      id: r.id,
+      body: r.body,
+      repliedAt: r.repliedAt.toISOString(),
+      lead: { businessName: r.lead.businessName },
+    })),
+    accounts: accounts.map((a) => ({
+      id: a.id,
+      label: a.label,
+      status: a.status,
+      warningReason: a.warningReason,
+      dailyLimit: channel === "email" ? a.emailDailyLimit : a.linkedinDailyLimit,
+      warmupCurrentLimit: a.warmupCurrentLimit,
+    })),
+  };
+}
