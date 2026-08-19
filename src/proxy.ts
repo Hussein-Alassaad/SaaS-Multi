@@ -14,10 +14,19 @@ function getSecretKey() {
   return new TextEncoder().encode(secret);
 }
 
+// Every tenant-facing product path gets TENANT scope + its own login page.
+// Only /admin is PLATFORM scope. Add new product path prefixes here as they
+// ship (matches src/lib/sections.ts's PRODUCT_LOGIN_PATH keys).
+const TENANT_LOGIN_PATHS: Record<string, string> = {
+  "/agency": "/agency-login",
+  "/outreach": "/outreach-login",
+};
+
 export async function proxy(request: NextRequest) {
-  const isAgencyPath = request.nextUrl.pathname.startsWith("/agency");
-  const requiredScope = isAgencyPath ? "TENANT" : "PLATFORM";
-  const loginPath = isAgencyPath ? "/agency-login" : "/login";
+  const pathname = request.nextUrl.pathname;
+  const tenantPrefix = Object.keys(TENANT_LOGIN_PATHS).find((prefix) => pathname.startsWith(prefix));
+  const requiredScope = tenantPrefix ? "TENANT" : "PLATFORM";
+  const loginPath = tenantPrefix ? TENANT_LOGIN_PATHS[tenantPrefix] : "/login";
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
 
   if (!token) {
@@ -36,5 +45,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/agency/:path*"],
+  matcher: ["/admin/:path*", "/agency/:path*", "/outreach/:path*"],
 };

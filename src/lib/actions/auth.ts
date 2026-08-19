@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { createSessionToken, setSessionCookie, clearSessionCookie, verifyPassword, getSession } from "@/lib/auth";
+import { PRODUCT_DASHBOARD_PATH, PRODUCT_LOGIN_PATH } from "@/lib/sections";
 
 export interface LoginState {
   error?: string;
@@ -56,7 +57,7 @@ export async function loginTenantAction(_prevState: LoginState, formData: FormDa
 
   const user = await db.user.findFirst({
     where: { email, scope: "TENANT" },
-    include: { role: true, tenant: true },
+    include: { role: true, tenant: { include: { product: true } } },
   });
 
   if (!user || !user.passwordHash) {
@@ -85,12 +86,22 @@ export async function loginTenantAction(_prevState: LoginState, formData: FormDa
 
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
-  redirect("/agency");
+  redirect(PRODUCT_DASHBOARD_PATH[user.tenant.product.slug] ?? "/agency");
 }
 
 export async function logoutAction() {
   const session = await getSession();
-  const redirectTo = session?.scope === "TENANT" ? "/agency-login" : "/login";
+  let redirectTo = "/login";
+  if (session?.scope === "TENANT") {
+    redirectTo = "/agency-login";
+    if (session.tenantId) {
+      const tenant = await db.tenant.findUnique({
+        where: { id: session.tenantId },
+        include: { product: true },
+      });
+      if (tenant) redirectTo = PRODUCT_LOGIN_PATH[tenant.product.slug] ?? "/agency-login";
+    }
+  }
   await clearSessionCookie();
   redirect(redirectTo);
 }

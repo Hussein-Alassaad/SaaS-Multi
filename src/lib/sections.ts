@@ -38,3 +38,20 @@ export const PRODUCT_SECTIONS: Record<string, SectionDef[]> = {
 export function getSectionsForProduct(productSlug: string): SectionDef[] {
   return PRODUCT_SECTIONS[productSlug] ?? [];
 }
+
+/**
+ * Where a tenant of a given product lands after login, and which public
+ * login page they use. Centralized here (not hardcoded in auth actions)
+ * since it's needed by login redirect, logout redirect, and the
+ * cross-product route guard that stops e.g. a Marketing tenant's session
+ * from rendering Outreach's layout if they navigate there directly.
+ */
+export const PRODUCT_DASHBOARD_PATH: Record<string, string> = {
+  marketing: "/agency",
+  outreach: "/outreach",
+};
+
+export const PRODUCT_LOGIN_PATH: Record<string, string> = {
+  marketing: "/agency-login",
+  outreach: "/outreach-login",
+};
