@@ -1,11 +1,26 @@
-export default function OutreachLiveFeedPage() {
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">Live Feed</h1>
-        <p className="text-sm text-[var(--text-4)] mt-1">Today&apos;s leads, newest and highest-scoring first.</p>
-      </div>
-      <p className="text-sm text-[var(--text-4)]">Shell scaffold -- real content coming next.</p>
-    </div>
-  );
+import { getTenantSession } from "@/lib/auth";
+import { getLiveFeed } from "@/lib/outreach/leads";
+import { safeJsonParse } from "@/lib/utils";
+import { LiveFeedClient } from "./LiveFeedClient";
+
+export default async function OutreachLiveFeedPage() {
+  const session = await getTenantSession();
+  const tenantId = session!.tenantId!;
+
+  const { items, nextCursor } = await getLiveFeed(tenantId);
+
+  const leads = items.map((lead) => ({
+    id: lead.id,
+    platform: lead.platform,
+    businessName: lead.businessName,
+    industry: lead.industry,
+    score: lead.score,
+    temperature: lead.temperature,
+    founderFound: lead.founderFound,
+    founderName: lead.founderName,
+    weakPoints: safeJsonParse<string[]>(lead.weakPoints, []),
+    generatedMessage: lead.generatedMessage,
+  }));
+
+  return <LiveFeedClient tenantId={tenantId} initialLeads={leads} initialNextCursor={nextCursor} />;
 }
