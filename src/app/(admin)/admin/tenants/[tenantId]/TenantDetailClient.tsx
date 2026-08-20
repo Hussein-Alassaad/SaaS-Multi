@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Toggle } from "@/components/ui/Toggle";
 import { Avatar } from "@/components/ui/Avatar";
 import { DataTable, type Column } from "@/components/ui/DataTable";
+import { Modal } from "@/components/ui/Modal";
 import {
   TenantStatusBadge,
   TicketStatusBadge,
@@ -20,6 +21,7 @@ import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
 import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
 import { setFeatureFlagEnabledAction, setTenantSectionEnabledAction } from "@/lib/actions/feature-flags";
+import { resetTenantOwnerPasswordAction } from "@/lib/actions/admin-tenants";
 import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, type LucideIcon } from "lucide-react";
 
 interface TenantUser {
@@ -197,6 +199,22 @@ export function TenantDetailClient({ tenant }: Props) {
     });
   };
 
+  const [resetResult, setResetResult] = useState<{ email: string; password: string } | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetPending, startResetTransition] = useTransition();
+
+  const handleResetPassword = () => {
+    setResetError(null);
+    startResetTransition(async () => {
+      const result = await resetTenantOwnerPasswordAction(tenant.id);
+      if (!result.ok) {
+        setResetError(result.error ?? "Failed to reset password.");
+        return;
+      }
+      setResetResult({ email: result.email, password: result.password });
+    });
+  };
+
   const activeSub = tenant.subscriptions[0];
   const storagePct = activeSub
     ? Math.min(100, Math.round((tenant.storageUsedMb / activeSub.plan.storageLimitMb) * 100))
@@ -257,7 +275,23 @@ export function TenantDetailClient({ tenant }: Props) {
                 <Row label="Subdomain" value={`${tenant.subdomain}.example.com`} />
                 <Row label="Product" value={tenant.product.name} />
                 <Row label="Status" value={<TenantStatusBadge status={tenant.status} />} />
-                <Row label="Owner" value={tenant.owner ? `${tenant.owner.name} (${tenant.owner.email})` : "—"} />
+                <Row
+                  label="Owner"
+                  value={
+                    tenant.owner ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span>{`${tenant.owner.name} (${tenant.owner.email})`}</span>
+                        <Button size="sm" variant="outline" disabled={resetPending} onClick={handleResetPassword}>
+                          <Key className="h-3.5 w-3.5" />
+                          Reset password
+                        </Button>
+                      </div>
+                    ) : (
+                      "—"
+                    )
+                  }
+                />
+                {resetError && <p className="text-xs text-[var(--status-hot)]">{resetError}</p>}
                 <Row label="Created" value={formatDateTime(tenant.createdAt)} />
               </dl>
             </Card>
@@ -456,6 +490,31 @@ export function TenantDetailClient({ tenant }: Props) {
           <SupportTable tickets={tenant.supportTickets} />
         </TabsContent>
       </Tabs>
+
+      <Modal
+        open={!!resetResult}
+        onOpenChange={(open) => !open && setResetResult(null)}
+        title="Password reset"
+        description="Shown once -- copy it now and send it to the client. It cannot be viewed again after closing this."
+      >
+        {resetResult && (
+          <div className="space-y-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-5)]">Email</p>
+              <p className="mt-1 text-sm text-[var(--text-1)]">{resetResult.email}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-5)]">New password</p>
+              <p className="mt-1 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 px-3 py-2 font-mono text-sm text-[var(--text-1)]">
+                {resetResult.password}
+              </p>
+            </div>
+            <Button className="w-full" onClick={() => setResetResult(null)}>
+              Done
+            </Button>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

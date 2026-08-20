@@ -103,3 +103,45 @@ export async function createTenantAction(input: CreateTenantInput) {
   revalidatePath("/admin/tenants");
   return { ok: true as const, tenantId: tenant.id };
 }
+
+function generatePassword(): string {
+  return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+}
+
+/**
+ * Generates a brand new password for a tenant's owner and returns it
+ * once, in plaintext, to the admin who requested it -- the only way to
+ * hand a client working credentials after the fact, since passwords are
+ * hashed one-way and never stored/shown anywhere after creation (including
+ * right after createTenantAction() -- if the admin didn't copy it down at
+ * that moment, this is the only way back in).
+ */
+export async function resetTenantOwnerPasswordAction(tenantId: string) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "edit");
+
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, include: { owner: true } });
+  if (!tenant) return { ok: false as const, error: "Tenant not found." };
+  if (!tenant.owner) return { ok: false as const, error: "This tenant has no owner account set." };
+
+  const newPassword = generatePassword();
+  const passwordHash = await hashPassword(newPassword);
+
+  await db.$transaction([
+    db.user.update({ where: { id: tenant.owner.id }, data: { passwordHash } }),
+    db.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "tenant.owner_password_reset",
+        resource: "tenant",
+        tenantId: tenant.id,
+        device: "Desktop",
+        browser: "Admin",
+      },
+    }),
+  ]);
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  return { ok: true as const, email: tenant.owner.email, password: newPassword };
+}
