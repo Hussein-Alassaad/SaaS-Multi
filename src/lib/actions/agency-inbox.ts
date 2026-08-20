@@ -65,8 +65,19 @@ export async function simulateInboundMessageAction(input: {
   });
   const knowledgeEntries = await db.knowledgeEntry.findMany({ where: { tenantId }, take: 10 });
 
+  // Full thread so far, oldest first -- lets the AI hold context across
+  // turns (not re-ask what the customer already told it) instead of
+  // replying to each message in isolation.
+  const priorMessages = await db.message.findMany({
+    where: { conversationId: conversation.id },
+    orderBy: { createdAt: "asc" },
+  });
+
   const aiReply = await generateAiReply({
-    customerMessage: input.body,
+    history: priorMessages.map((m) => ({
+      sender: m.sender as "CUSTOMER" | "AI" | "HUMAN",
+      body: m.body,
+    })),
     language: settings.allowEnglish ? language : "AR",
     clientName: nexarisClient.name,
     knowledgeEntries: knowledgeEntries.map((k) => ({ title: k.title, body: k.body })),
@@ -82,6 +93,19 @@ export async function simulateInboundMessageAction(input: {
       body: aiReply.body,
       language: aiReply.language,
       status: aiReply.requiresApproval ? "PENDING_APPROVAL" : "SENT",
+    },
+  });
+
+  // Apply whatever the AI has learned about this lead so far -- overwrites
+  // rather than merges, since each extraction call sees the whole
+  // conversation and produces its best current summary, not just what's
+  // new this turn.
+  await db.nexarisClient.update({
+    where: { id: nexarisClient.id },
+    data: {
+      name: aiReply.extracted.name ?? nexarisClient.name,
+      needs: aiReply.extracted.needs ?? nexarisClient.needs,
+      tag: aiReply.extracted.readyForHandoff && nexarisClient.tag === "REPLIED" ? "INTERESTED" : undefined,
     },
   });
 

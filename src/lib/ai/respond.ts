@@ -12,9 +12,17 @@ import { logError } from "@/lib/error-log";
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
 
+export type ReplyLanguage = "AR" | "AR_MA" | "EN";
+
+export interface ConversationTurn {
+  sender: "CUSTOMER" | "AI" | "HUMAN";
+  body: string;
+}
+
 interface ConversationContext {
-  customerMessage: string;
-  language: "AR" | "EN";
+  /** Full conversation so far, oldest first, ending with the newest customer message -- lets the AI hold context across turns instead of replying to each message in isolation. */
+  history: ConversationTurn[];
+  language: ReplyLanguage;
   clientName: string | null;
   knowledgeEntries: { title: string; body: string }[];
   settings: AiSettings;
@@ -22,12 +30,18 @@ interface ConversationContext {
   conversationId?: string;
 }
 
+const LANGUAGE_NAME: Record<ReplyLanguage, string> = {
+  AR: "Modern Standard Arabic (فصحى)",
+  AR_MA: "Moroccan Darija (الدارجة المغربية)",
+  EN: "English",
+};
+
 export function buildSystemPrompt(ctx: ConversationContext): string {
   const toneLine =
     ctx.settings.tone === "FRIENDLY"
       ? "Warm and approachable, but still professional."
       : ctx.settings.tone === "FORMAL"
-        ? "Highly formal and respectful, using formal Arabic register."
+        ? "Highly formal and respectful, using a formal register."
         : "Professional, confident, and courteous.";
 
   const knowledgeBlock = ctx.knowledgeEntries.length
@@ -35,56 +49,133 @@ export function buildSystemPrompt(ctx: ConversationContext): string {
     : "(no knowledge base entries yet)";
 
   return [
-    `You are a professional sales & support agent responding on behalf of a business, primarily in Modern Standard Arabic (فصحى), with English fallback if the customer writes in English.`,
+    `You are a professional sales & support agent responding on behalf of a business, replying in ${LANGUAGE_NAME[ctx.language]} to match how the customer is writing.`,
     `Tone: ${toneLine}`,
     `Never invent pricing, services, or policies -- only use what's in the knowledge base below.`,
-    `Collect the customer's name, contact info, and needs naturally over the conversation, don't interrogate them in one message.`,
-    `If the customer wants to talk to a human or book a meeting, offer to check available times.`,
+    `You are having a real back-and-forth conversation, not answering each message in isolation -- remember what the customer already told you earlier in this thread and never ask for the same thing twice.`,
+    `Your job is to collect enough information to hand this lead off well: their name, what they need/are interested in, and how to reach them. Ask ONE natural follow-up question at a time, the way a real person would -- never a list of questions in one message.`,
+    `Once you have enough to make this a useful lead (you don't need everything, just enough to be useful), tell the customer to reach out on WhatsApp to continue -- naturally, as part of your reply, not as a canned line.`,
+    `If the customer wants to book a meeting, tell them you'll pass this to the team to arrange a time -- do not invent availability yourself.`,
     `\n## Knowledge Base\n${knowledgeBlock}`,
-    ctx.settings.qualificationRules
-      ? `\n## Qualification rules\n${ctx.settings.qualificationRules}`
-      : "",
+    ctx.settings.qualificationRules ? `\n## Qualification rules\n${ctx.settings.qualificationRules}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
 }
 
+export interface ExtractedLeadInfo {
+  name: string | null;
+  needs: string | null;
+  /** true once the AI judges it has collected enough to be a useful lead and has told the customer to continue on WhatsApp. */
+  readyForHandoff: boolean;
+}
+
 export interface AiReplyResult {
   body: string;
-  language: "AR" | "EN";
+  language: ReplyLanguage;
   /** true if this reply touches pricing/commitment and should queue for human approval. */
   requiresApproval: boolean;
+  extracted: ExtractedLeadInfo;
 }
 
 const SENSITIVE_KEYWORDS_AR = ["سعر", "تكلفة", "دفع", "عقد", "اجتماع", "موعد"];
 const SENSITIVE_KEYWORDS_EN = ["price", "cost", "payment", "contract", "meeting", "schedule"];
 
-function stubReply(ctx: ConversationContext): string {
-  const isArabic = ctx.language === "AR";
-  const greeting = ctx.clientName ? `أهلاً ${ctx.clientName}` : "أهلاً وسهلاً";
-  return isArabic
-    ? `${greeting}، شكراً لتواصلك معنا. [مسودة رد تجريبية -- سيتم استبدالها بردّ الذكاء الاصطناعي الفعلي بعد ربط مفتاح API]`
-    : `Hello${ctx.clientName ? ` ${ctx.clientName}` : ""}, thanks for reaching out. [Draft placeholder reply -- will be replaced by a real AI response once the API key is connected]`;
+const EXTRACT_TOOL: Anthropic.Tool = {
+  name: "save_lead_info",
+  description:
+    "Records what's been learned about this customer/lead so far from the whole conversation, and whether enough is known to hand off to the human team on WhatsApp. Call this on every turn, even if nothing new was learned (repeat what's already known).",
+  input_schema: {
+    type: "object",
+    properties: {
+      name: { type: ["string", "null"], description: "The customer's name, if they've given it. Null if unknown." },
+      needs: {
+        type: ["string", "null"],
+        description: "A short summary (1-2 sentences) of what the customer needs or is interested in, based on the whole conversation so far. Null if not yet clear.",
+      },
+      readyForHandoff: {
+        type: "boolean",
+        description: "True once enough is known to be a useful lead (roughly: what they want, and either a name or contact hint) AND your reply is telling them to continue on WhatsApp.",
+      },
+    },
+    required: ["name", "needs", "readyForHandoff"],
+  },
+};
+
+function stubReply(ctx: ConversationContext): { body: string; extracted: ExtractedLeadInfo } {
+  const greeting =
+    ctx.language === "EN"
+      ? `Hello${ctx.clientName ? ` ${ctx.clientName}` : ""}, thanks for reaching out.`
+      : ctx.clientName
+        ? `أهلاً ${ctx.clientName}`
+        : "أهلاً وسهلاً";
+  const body =
+    ctx.language === "EN"
+      ? `${greeting} [Draft placeholder reply -- will be replaced by a real AI response once the API key is connected]`
+      : `${greeting}، شكراً لتواصلك معنا. [مسودة رد تجريبية -- سيتم استبدالها بردّ الذكاء الاصطناعي الفعلي بعد ربط مفتاح API]`;
+  return { body, extracted: { name: ctx.clientName, needs: null, readyForHandoff: false } };
 }
 
 export async function generateAiReply(ctx: ConversationContext): Promise<AiReplyResult> {
-  const isArabic = ctx.language === "AR";
-  const lowerMsg = ctx.customerMessage.toLowerCase();
-  const touchesSensitive = isArabic
-    ? SENSITIVE_KEYWORDS_AR.some((k) => ctx.customerMessage.includes(k))
+  const latestMessage = ctx.history[ctx.history.length - 1]?.body ?? "";
+  const isArabicFamily = ctx.language === "AR" || ctx.language === "AR_MA";
+  const lowerMsg = latestMessage.toLowerCase();
+  const touchesSensitive = isArabicFamily
+    ? SENSITIVE_KEYWORDS_AR.some((k) => latestMessage.includes(k))
     : SENSITIVE_KEYWORDS_EN.some((k) => lowerMsg.includes(k));
 
   let body: string;
+  let extracted: ExtractedLeadInfo;
+
   if (anthropic) {
     try {
-      const response = await anthropic.messages.create({
+      // Two calls, not one: a forced tool_choice response doesn't also
+      // emit open-ended conversational text in the same turn, so the
+      // reply is drafted first, then a second call (with that draft
+      // appended to the conversation) extracts structured lead info from
+      // the whole thread including this reply.
+      const draft = await anthropic.messages.create({
         model: ctx.settings.model || "claude-sonnet-4-5",
         max_tokens: 512,
         system: buildSystemPrompt(ctx),
-        messages: [{ role: "user", content: ctx.customerMessage }],
+        messages: ctx.history.map((turn) => ({
+          role: turn.sender === "CUSTOMER" ? ("user" as const) : ("assistant" as const),
+          content: turn.body,
+        })),
       });
-      const textBlock = response.content.find((block) => block.type === "text");
-      body = textBlock?.type === "text" ? textBlock.text : stubReply(ctx);
+      const textBlock = draft.content.find((block) => block.type === "text");
+      body = textBlock?.type === "text" ? textBlock.text : stubReply(ctx).body;
+
+      try {
+        const extraction = await anthropic.messages.create({
+          model: ctx.settings.model || "claude-sonnet-4-5",
+          max_tokens: 512,
+          system:
+            "You extract structured lead information from a sales conversation. Call save_lead_info based on everything said so far, including the agent's latest reply.",
+          tools: [EXTRACT_TOOL],
+          tool_choice: { type: "tool", name: "save_lead_info" },
+          messages: [
+            ...ctx.history.map((turn) => ({
+              role: turn.sender === "CUSTOMER" ? ("user" as const) : ("assistant" as const),
+              content: turn.body,
+            })),
+            { role: "assistant" as const, content: body },
+          ],
+        });
+        const toolUse = extraction.content.find((block) => block.type === "tool_use");
+        extracted =
+          toolUse?.type === "tool_use"
+            ? (toolUse.input as ExtractedLeadInfo)
+            : { name: ctx.clientName, needs: null, readyForHandoff: false };
+      } catch (err) {
+        await logError({
+          source: "ai.extract_lead_info",
+          error: err,
+          tenantId: ctx.tenantId,
+          context: { conversationId: ctx.conversationId },
+        });
+        extracted = { name: ctx.clientName, needs: null, readyForHandoff: false };
+      }
     } catch (err) {
       console.error("Claude API call failed, falling back to stub reply", err);
       await logError({
@@ -93,20 +184,38 @@ export async function generateAiReply(ctx: ConversationContext): Promise<AiReply
         tenantId: ctx.tenantId,
         context: { conversationId: ctx.conversationId, language: ctx.language, model: ctx.settings.model },
       });
-      body = stubReply(ctx);
+      const stub = stubReply(ctx);
+      body = stub.body;
+      extracted = stub.extracted;
     }
   } else {
-    body = stubReply(ctx);
+    const stub = stubReply(ctx);
+    body = stub.body;
+    extracted = stub.extracted;
   }
 
   return {
     body,
     language: ctx.language,
     requiresApproval: touchesSensitive || ctx.settings.approvalRequired,
+    extracted,
   };
 }
 
-export function detectLanguage(text: string): "AR" | "EN" {
+/**
+ * Darija shares Arabic script with MSA and can't be told apart by script
+ * alone -- it's distinguished by specific loanwords/particles MSA doesn't
+ * use (French/Berber loanwords, distinctive function words). This is a
+ * heuristic, not a real classifier: good enough to route obviously-Darija
+ * messages to the Darija system prompt, not a guarantee on every message.
+ */
+const DARIJA_MARKERS = [
+  "بزاف", "واخا", "دابا", "غادي", "زوين", "شحال", "فين", "كيفاش", "ديال", "باش", "هاد",
+];
+
+export function detectLanguage(text: string): ReplyLanguage {
   const arabicPattern = /[؀-ۿ]/;
-  return arabicPattern.test(text) ? "AR" : "EN";
+  if (!arabicPattern.test(text)) return "EN";
+  const hasDarijaMarker = DARIJA_MARKERS.some((marker) => text.includes(marker));
+  return hasDarijaMarker ? "AR_MA" : "AR";
 }
