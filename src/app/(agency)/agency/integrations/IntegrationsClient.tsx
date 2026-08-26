@@ -1,14 +1,15 @@
 "use client";
 
-import { useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatDateTime } from "@/lib/utils";
-import { toggleChannelConnectionAction } from "@/lib/actions/agency-integrations";
+import { toggleChannelConnectionAction, disconnectOAuthChannelAction } from "@/lib/actions/agency-integrations";
+import { OAUTH_CHANNEL_PROVIDERS, type OAuthChannelProvider } from "@/lib/agency/channels";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
-import { MessageCircle, Camera, ThumbsUp } from "lucide-react";
+import { MessageCircle, Camera, ThumbsUp, Mail } from "lucide-react";
 
 interface ChannelRow {
   provider: string;
@@ -34,18 +35,60 @@ function getChannelMeta(t: ReturnType<typeof getDictionary>): Record<string, { l
       icon: ThumbsUp,
       description: t.integrations.facebookDescription,
     },
+    GMAIL: {
+      label: t.integrations.gmailLabel,
+      icon: Mail,
+      description: t.integrations.gmailDescription,
+    },
+    OUTLOOK: {
+      label: t.integrations.outlookLabel,
+      icon: Mail,
+      description: t.integrations.outlookDescription,
+    },
   };
+}
+
+function isOAuthProvider(provider: string): provider is OAuthChannelProvider {
+  return (OAUTH_CHANNEL_PROVIDERS as readonly string[]).includes(provider);
 }
 
 export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[]; lang: UiLanguage }) {
   const t = getDictionary(lang);
   const CHANNEL_META = getChannelMeta(t);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
+
+  // OAuth is a full-page redirect round trip (start/route.ts ->
+  // Google/Microsoft's own consent page -> callback/route.ts), so its
+  // result comes back as a query param on this same page, not a client-side
+  // action response the way the simulated toggle below works.
+  const oauthConnected = searchParams.get("oauthConnected");
+  const oauthError = searchParams.get("oauthError");
+
+  useEffect(() => {
+    if (oauthConnected || oauthError) {
+      // Clears the query params after showing the result once, so a
+      // refresh doesn't re-show a stale "connected"/error banner.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("oauthConnected");
+      url.searchParams.delete("oauthError");
+      url.searchParams.delete("oauthProvider");
+      router.replace(url.pathname + url.search, { scroll: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [oauthConnected, oauthError]);
 
   const handleToggle = (provider: string, connect: boolean) => {
     startTransition(async () => {
       await toggleChannelConnectionAction(provider as "WHATSAPP" | "INSTAGRAM" | "FACEBOOK", connect);
+      router.refresh();
+    });
+  };
+
+  const handleOAuthDisconnect = (provider: OAuthChannelProvider) => {
+    startTransition(async () => {
+      await disconnectOAuthChannelAction(provider);
       router.refresh();
     });
   };
@@ -62,11 +105,28 @@ export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[];
         </p>
       </div>
 
+      {oauthConnected && (
+        <div className="rounded-lg border border-[var(--status-cold)]/30 bg-[var(--status-cold)]/10 px-4 py-3 text-sm text-[var(--status-cold)]">
+          {CHANNEL_META[oauthConnected]?.label ?? oauthConnected} {t.integrations.statusConnected.toLowerCase()}.
+        </div>
+      )}
+      {oauthError && (
+        <div className="rounded-lg border border-[var(--status-hot)]/30 bg-[var(--status-hot)]/10 px-4 py-3 text-sm text-[var(--status-hot)]">
+          {oauthError === "not_configured"
+            ? t.integrations.oauthNotConfigured
+            : oauthError === "denied"
+              ? t.integrations.oauthDenied
+              : t.integrations.oauthFailed}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {channels.map((c) => {
           const meta = CHANNEL_META[c.provider];
           const Icon = meta?.icon ?? MessageCircle;
           const connected = c.status === "CONNECTED";
+          const oauth = isOAuthProvider(c.provider);
+
           return (
             <Card key={c.provider} padding="md">
               <div className="flex items-start justify-between">
@@ -83,18 +143,47 @@ export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[];
                 </div>
               </div>
               <p className="mt-3 text-xs text-[var(--text-4)]">{meta?.description}</p>
-              {connected && c.connectedAt && (
+              {connected && oauth && c.displayName && (
+                <p className="mt-2 text-[10px] text-[var(--text-5)]">
+                  {t.integrations.oauthConnectAs} {c.displayName}
+                </p>
+              )}
+              {connected && !oauth && c.connectedAt && (
                 <p className="mt-2 text-[10px] text-[var(--text-5)]">{t.integrations.connected} {formatDateTime(c.connectedAt)}</p>
               )}
-              <Button
-                className="mt-3 w-full"
-                variant={connected ? "outline" : "primary"}
-                size="sm"
-                disabled={pending}
-                onClick={() => handleToggle(c.provider, !connected)}
-              >
-                {connected ? t.common.disconnect : t.common.connect}
-              </Button>
+
+              {oauth ? (
+                connected ? (
+                  <Button
+                    className="mt-3 w-full"
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => isOAuthProvider(c.provider) && handleOAuthDisconnect(c.provider)}
+                  >
+                    {t.common.disconnect}
+                  </Button>
+                ) : (
+                  // Real full-page navigation to start/route.ts, not a
+                  // client-side action -- OAuth requires leaving this page
+                  // entirely to reach Google's/Microsoft's own login screen.
+                  <a href={`/api/oauth/${c.provider}/start`} className="mt-3 block">
+                    <Button className="w-full" variant="primary" size="sm">
+                      {t.common.connect}
+                    </Button>
+                  </a>
+                )
+              ) : (
+                <Button
+                  className="mt-3 w-full"
+                  variant={connected ? "outline" : "primary"}
+                  size="sm"
+                  disabled={pending}
+                  onClick={() => handleToggle(c.provider, !connected)}
+                >
+                  {connected ? t.common.disconnect : t.common.connect}
+                </Button>
+              )}
             </Card>
           );
         })}

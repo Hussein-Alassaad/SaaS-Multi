@@ -29,6 +29,7 @@ export const RESOURCES = [
   "monitoring",
   "roles",
   "security",
+  "agent-control",
 ] as const;
 export type Resource = (typeof RESOURCES)[number];
 
@@ -47,6 +48,7 @@ export const PERMISSION_MATRIX: PermissionMatrix = {
     "feature-flags": ALL_ACTIONS,
     "feature-requests": ALL_ACTIONS,
     monitoring: ALL_ACTIONS,
+    "agent-control": ALL_ACTIONS,
     "audit-logs": ["view"],
     ai: ["view", "edit", "manage"],
     tenants: ["view"],

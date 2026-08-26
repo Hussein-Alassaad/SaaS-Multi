@@ -37,6 +37,8 @@ export default async function OutreachLeadDetailPage({ params }: { params: Promi
     generatedMessage: lead.generatedMessage,
     messageStyleUsed: lead.messageStyleUsed,
     notes: lead.notes,
+    doNotContact: lead.doNotContact,
+    doNotContactReason: lead.doNotContactReason,
   };
 
   const history = lead.pipelineHistory.map((h) => ({

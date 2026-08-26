@@ -50,6 +50,46 @@ export function resetPasswordEmail(resetUrl: string): { subject: string; html: s
   };
 }
 
+export interface WeeklyDigestPlatformRow {
+  platform: string; // "linkedin" | "instagram" | "email"
+  sent: number;
+  replied: number;
+}
+
+export function weeklyDigestEmail(
+  tenantName: string,
+  rows: WeeklyDigestPlatformRow[],
+  dashboardUrl: string
+): { subject: string; html: string } {
+  const totalSent = rows.reduce((sum, r) => sum + r.sent, 0);
+  const totalReplied = rows.reduce((sum, r) => sum + r.replied, 0);
+  const platformLabel: Record<string, string> = { linkedin: "LinkedIn", instagram: "Instagram", email: "Email" };
+
+  const rowsHtml = rows
+    .map((r) => {
+      const rate = r.sent > 0 ? Math.round((r.replied / r.sent) * 100) : 0;
+      return `<tr>
+        <td style="padding:6px 0;color:#f5f5fa;font-size:14px;">${platformLabel[r.platform] ?? r.platform}</td>
+        <td style="padding:6px 0;color:#c7c7d6;font-size:14px;text-align:right;">${r.sent} sent</td>
+        <td style="padding:6px 0;color:#8a8aa0;font-size:13px;text-align:right;">${r.replied} replies (${rate}%)</td>
+      </tr>`;
+    })
+    .join("");
+
+  return {
+    subject: `Your weekly outreach digest — ${totalSent} sent, ${totalReplied} replies`,
+    html: wrapper(
+      "This week on Nexaris Outreach",
+      `<p><strong>${tenantName}</strong> — here's what the agent did over the last 7 days.</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:12px;border-top:1px solid #2a2a38;">
+        ${rowsHtml}
+      </table>
+      <p style="margin-top:16px;color:#c7c7d6;font-size:14px;"><strong>${totalSent}</strong> total messages sent, <strong>${totalReplied}</strong> replies.</p>
+      ${button(dashboardUrl, "View dashboard")}`
+    ),
+  };
+}
+
 export function teamInviteEmail(
   inviterName: string,
   tenantName: string,

@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Activity,
   AlertTriangle,
-  GitBranch,
+  MessageSquarePlus,
   Settings,
   type LucideIcon,
 } from "lucide-react";
@@ -38,7 +38,7 @@ export const OUTREACH_NAV_ITEMS: NavItem[] = [
   { label: "Account Health", href: "/outreach/accounts", icon: ShieldCheck },
   { label: "Run Status", href: "/outreach/run-status", icon: Activity },
   { label: "Errors", href: "/outreach/errors", icon: AlertTriangle },
-  { label: "Workflow", href: "/outreach/workflow", icon: GitBranch },
+  { label: "Feature Requests", href: "/outreach/feature-requests", icon: MessageSquarePlus },
   { label: "Settings", href: "/outreach/settings", icon: Settings },
 ];
 

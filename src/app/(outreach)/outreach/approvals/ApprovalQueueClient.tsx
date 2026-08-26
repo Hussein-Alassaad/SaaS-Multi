@@ -4,6 +4,7 @@ import { useState, useTransition, useCallback } from "react";
 import { motion, AnimatePresence, useMotionValue, useTransform, type PanInfo } from "framer-motion";
 import { CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useToast } from "@/components/ui/Toast";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
 import {
@@ -226,9 +227,13 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
           {messages.map((message) => (
             <DraggableCard key={message.id} onApprove={() => approve(message)} onHold={() => hold(message)}>
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold text-[var(--text-1)]">
+                <Link
+                  href={`/outreach/leads/${message.leadId}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="text-sm font-semibold text-[var(--text-1)] underline-offset-2 hover:text-[var(--accent-from)] hover:underline"
+                >
                   {message.lead.businessName || "Unknown business"}
-                </p>
+                </Link>
                 <span className="rounded-full border border-[var(--border-hairline-strong)] px-2 py-0.5 text-xs uppercase tracking-wide text-[var(--text-4)]">
                   {message.channel}
                 </span>

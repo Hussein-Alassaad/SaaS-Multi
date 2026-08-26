@@ -107,6 +107,15 @@ export default async function TenantDetailPage({
       enabled: f.enabled,
     })),
     sections,
+    outreachAccounts: tenant.outreachAccounts.map((a) => ({
+      id: a.id,
+      label: a.label,
+      platform: a.platform,
+      igDailyLimit: a.igDailyLimit,
+      linkedinDailyLimit: a.linkedinDailyLimit,
+      emailDailyLimit: a.emailDailyLimit,
+      status: a.status,
+    })),
   };
 
   return <TenantDetailClient tenant={serialized} />;

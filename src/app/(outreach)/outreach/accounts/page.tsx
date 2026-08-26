@@ -1,12 +1,26 @@
 import { getTenantSession } from "@/lib/auth";
-import { getAccountsList } from "@/lib/outreach/accounts";
+import { getAccountsList, getAccountReachStats } from "@/lib/outreach/accounts";
+import { getEnabledSectionKeys } from "@/lib/agency/sections";
 import { AccountHealthClient } from "./AccountHealthClient";
 
 export default async function OutreachAccountsPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const accounts = await getAccountsList(tenantId);
+  const [accounts, enabledSections, reachStats] = await Promise.all([
+    getAccountsList(tenantId),
+    getEnabledSectionKeys(tenantId, "outreach"),
+    getAccountReachStats(tenantId),
+  ]);
+  // Which channels this client can create accounts for -- an Admin-side per-
+  // tenant call (Sections tab on /admin/tenants/[tenantId]), not a hardcoded
+  // product decision. Every client gets a different mix depending on what
+  // they've actually signed up for.
+  const enabledPlatforms = {
+    linkedin: enabledSections.has("linkedin"),
+    email: enabledSections.has("email"),
+    instagram: enabledSections.has("instagram-manual"),
+  };
 
   const serialized = accounts.map((a) => ({
     id: a.id,
@@ -16,10 +30,20 @@ export default async function OutreachAccountsPage() {
     igDailyLimit: a.igDailyLimit,
     linkedinDailyLimit: a.linkedinDailyLimit,
     emailDailyLimit: a.emailDailyLimit,
+    sentToday: reachStats.get(a.id)?.sentToday ?? 0,
+    sentThisWeek: reachStats.get(a.id)?.sentThisWeek ?? 0,
+    repliedThisWeek: reachStats.get(a.id)?.repliedThisWeek ?? 0,
     proxyHost: a.proxyHost,
     proxyPort: a.proxyPort,
     proxyUsername: a.proxyUsername,
     hasProxyPassword: !!a.proxyPasswordEnc,
+    verifiedProxyIp: a.verifiedProxyIp,
+    loginEmail: a.loginEmail,
+    hasLoginPassword: !!a.loginPasswordEnc,
+    loginStatus: a.loginStatus,
+    loginError: a.loginError,
+    loginConnectedAt: a.loginConnectedAt ? a.loginConnectedAt.toISOString() : null,
+    loginConnectingAt: a.loginConnectingAt ? a.loginConnectingAt.toISOString() : null,
     sesFromEmail: a.sesFromEmail,
     sesFromName: a.sesFromName,
     warmupCurrentLimit: a.warmupCurrentLimit,
@@ -29,5 +53,5 @@ export default async function OutreachAccountsPage() {
     redistributeFlag: a.redistributeFlag,
   }));
 
-  return <AccountHealthClient tenantId={tenantId} initialAccounts={serialized} />;
+  return <AccountHealthClient tenantId={tenantId} initialAccounts={serialized} enabledPlatforms={enabledPlatforms} />;
 }

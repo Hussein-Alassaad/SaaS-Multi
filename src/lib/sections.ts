@@ -46,7 +46,7 @@ export const PRODUCT_SECTIONS: Record<string, SectionDef[]> = {
     { key: "accounts", label: "Account Health", href: "/outreach/accounts" },
     { key: "run-status", label: "Run Status", href: "/outreach/run-status" },
     { key: "errors", label: "Errors", href: "/outreach/errors" },
-    { key: "workflow", label: "Workflow", href: "/outreach/workflow" },
+    { key: "feature-requests", label: "Feature Requests", href: "/outreach/feature-requests" },
     { key: "settings", label: "Settings", href: "/outreach/settings", core: true },
   ],
 };

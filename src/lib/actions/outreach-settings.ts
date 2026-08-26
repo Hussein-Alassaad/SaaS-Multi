@@ -5,6 +5,8 @@ import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 
 export async function saveOutreachSettingsAction(input: {
+  businessName: string;
+  businessDescription: string;
   targetNiche: string;
   targetIndustry: string;
   targetLocation: string;
@@ -30,6 +32,8 @@ export async function saveOutreachSettingsAction(input: {
   await db.outreachSettings.update({
     where: { tenantId: session.tenantId! },
     data: {
+      businessName: input.businessName,
+      businessDescription: input.businessDescription,
       targetNiche: input.targetNiche,
       targetIndustry: input.targetIndustry,
       targetLocation: input.targetLocation,

@@ -21,8 +21,13 @@ import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
 import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
 import { setFeatureFlagEnabledAction, setTenantSectionEnabledAction } from "@/lib/actions/feature-flags";
-import { resetTenantOwnerPasswordAction } from "@/lib/actions/admin-tenants";
-import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, type LucideIcon } from "lucide-react";
+import {
+  resetTenantOwnerPasswordAction,
+  deactivateTenantAction,
+  reactivateTenantAction,
+  setOutreachDailyLimitAction,
+} from "@/lib/actions/admin-tenants";
+import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, UserX, UserCheck, type LucideIcon } from "lucide-react";
 
 interface TenantUser {
   id: string;
@@ -113,6 +118,15 @@ interface TenantSection {
   core?: boolean;
   enabled: boolean;
 }
+interface OutreachAccountRow {
+  id: string;
+  label: string;
+  platform: string; // "linkedin" | "instagram" | "email"
+  igDailyLimit: number;
+  linkedinDailyLimit: number;
+  emailDailyLimit: number;
+  status: string;
+}
 
 interface TenantDetail {
   id: string;
@@ -134,6 +148,7 @@ interface TenantDetail {
   impersonationSessions: TenantImpersonation[];
   flags: TenantFlag[];
   sections: TenantSection[];
+  outreachAccounts: OutreachAccountRow[];
 }
 
 interface Props {
@@ -148,6 +163,7 @@ const TABS = [
   "Invoices",
   "Logs",
   "Sections",
+  "Outreach Accounts",
   "Flags",
   "Files",
   "API Keys",
@@ -215,6 +231,36 @@ export function TenantDetailClient({ tenant }: Props) {
     });
   };
 
+  const [status, setStatus] = useState(tenant.status);
+  const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
+  const [deactivateError, setDeactivateError] = useState<string | null>(null);
+  const [deactivatePending, startDeactivateTransition] = useTransition();
+
+  const handleDeactivate = () => {
+    setDeactivateError(null);
+    startDeactivateTransition(async () => {
+      const result = await deactivateTenantAction(tenant.id);
+      if (!result.ok) {
+        setDeactivateError(result.error ?? "Failed to deactivate tenant.");
+        return;
+      }
+      setStatus("CHURNED");
+      setDeactivateModalOpen(false);
+    });
+  };
+
+  const handleReactivate = () => {
+    setDeactivateError(null);
+    startDeactivateTransition(async () => {
+      const result = await reactivateTenantAction(tenant.id);
+      if (!result.ok) {
+        setDeactivateError(result.error ?? "Failed to reactivate tenant.");
+        return;
+      }
+      setStatus("ACTIVE");
+    });
+  };
+
   const activeSub = tenant.subscriptions[0];
   const storagePct = activeSub
     ? Math.min(100, Math.round((tenant.storageUsedMb / activeSub.plan.storageLimitMb) * 100))
@@ -235,7 +281,7 @@ export function TenantDetailClient({ tenant }: Props) {
             <h1 className="text-xl font-semibold tracking-tight text-[var(--text-1)] truncate">
               {tenant.companyName}
             </h1>
-            <TenantStatusBadge status={tenant.status} />
+            <TenantStatusBadge status={status} />
           </div>
           <p className="text-sm text-[var(--text-4)]">
             {tenant.subdomain}.example.com · {tenant.product.name} · Created {formatDate(tenant.createdAt)}
@@ -251,7 +297,35 @@ export function TenantDetailClient({ tenant }: Props) {
           <UserCog className="h-4 w-4" />
           Login as Tenant
         </Button>
+        {status === "CHURNED" ? (
+          <Button variant="outline" disabled={deactivatePending} onClick={handleReactivate}>
+            <UserCheck className="h-4 w-4" />
+            Reactivate
+          </Button>
+        ) : (
+          <Button variant="destructive" onClick={() => setDeactivateModalOpen(true)}>
+            <UserX className="h-4 w-4" />
+            Remove tenant
+          </Button>
+        )}
       </div>
+      {deactivateError && <p className="text-xs text-[var(--status-hot)]">{deactivateError}</p>}
+
+      <Modal
+        open={deactivateModalOpen}
+        onOpenChange={setDeactivateModalOpen}
+        title="Remove this tenant?"
+        description={`${tenant.companyName} will be marked CHURNED -- their team loses login access immediately and every active session is revoked. All their data (leads, messages, billing history) stays intact and this can be reversed anytime with "Reactivate".`}
+      >
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={() => setDeactivateModalOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" disabled={deactivatePending} onClick={handleDeactivate}>
+            {deactivatePending ? "Removing..." : "Remove tenant"}
+          </Button>
+        </div>
+      </Modal>
 
       <Tabs value={tab} onValueChange={setTab}>
         <div className="scroll-x-container">
@@ -274,7 +348,7 @@ export function TenantDetailClient({ tenant }: Props) {
                 <Row label="Company" value={tenant.companyName} />
                 <Row label="Subdomain" value={`${tenant.subdomain}.example.com`} />
                 <Row label="Product" value={tenant.product.name} />
-                <Row label="Status" value={<TenantStatusBadge status={tenant.status} />} />
+                <Row label="Status" value={<TenantStatusBadge status={status} />} />
                 <Row
                   label="Owner"
                   value={
@@ -428,6 +502,25 @@ export function TenantDetailClient({ tenant }: Props) {
           </Card>
         </TabsContent>
 
+        <TabsContent value="Outreach Accounts">
+          <Card>
+            <CardHeader>
+              <CardTitle>Outreach Accounts</CardTitle>
+              <CardDescription>
+                Daily send/discovery caps -- Admin-only. Tenants see these as read-only on their own Account Health page.
+              </CardDescription>
+            </CardHeader>
+            <div className="space-y-3">
+              {tenant.outreachAccounts.map((a) => (
+                <OutreachAccountLimitRow key={a.id} account={a} tenantId={tenant.id} />
+              ))}
+              {tenant.outreachAccounts.length === 0 && (
+                <EmptyState label="No Outreach accounts for this tenant yet." />
+              )}
+            </div>
+          </Card>
+        </TabsContent>
+
         <TabsContent value="Flags">
           <Card>
             <CardHeader>
@@ -533,6 +626,61 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div>
       <div className="text-xs text-[var(--text-4)]">{label}</div>
       <div className="text-base font-semibold text-[var(--text-1)]">{value}</div>
+    </div>
+  );
+}
+
+/**
+ * One editable daily-limit row per Outreach account -- only the field
+ * relevant to that account's platform is shown/editable (an Instagram
+ * account has no email limit, an email account has no LinkedIn limit).
+ * Saves via setOutreachDailyLimitAction (Admin-only, see that action's own
+ * docstring for why this moved out of the tenant-editable Account Health
+ * page).
+ */
+function OutreachAccountLimitRow({ account, tenantId }: { account: OutreachAccountRow; tenantId: string }) {
+  const field =
+    account.platform === "email" ? "emailDailyLimit"
+    : account.platform === "instagram" ? "igDailyLimit"
+    : "linkedinDailyLimit";
+  const [value, setValue] = useState(String(account[field]));
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const save = () => {
+    const num = Number(value);
+    if (!Number.isFinite(num) || num < 0) {
+      setError("Enter a valid, non-negative number.");
+      return;
+    }
+    setError(null);
+    startTransition(async () => {
+      const result = await setOutreachDailyLimitAction(account.id, tenantId, field, num);
+      if (!result.ok) setError(result.error);
+    });
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-[var(--border-hairline)] py-2.5 last:border-0">
+      <div>
+        <p className="text-sm font-medium text-[var(--text-1)]">{account.label}</p>
+        <p className="text-xs text-[var(--text-4)] capitalize">
+          {account.platform} · {account.status}
+        </p>
+        {error && <p className="text-xs text-[var(--status-hot)]">{error}</p>}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={0}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="w-20 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2.5 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+        />
+        <Button size="sm" variant="outline" disabled={pending || value === String(account[field])} onClick={save}>
+          {pending ? "Saving..." : "Save"}
+        </Button>
+      </div>
     </div>
   );
 }

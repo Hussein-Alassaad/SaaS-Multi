@@ -8,7 +8,13 @@ import { Drawer } from "@/components/ui/Drawer";
 import { OUTREACH_NAV_ITEMS } from "./outreach-nav-config";
 import { cn } from "@/lib/utils";
 
-export function OutreachMobileBottomBar({ enabledSections }: { enabledSections: string[] }) {
+export function OutreachMobileBottomBar({
+  enabledSections,
+  unhealthyAccountCount = 0,
+}: {
+  enabledSections: string[];
+  unhealthyAccountCount?: number;
+}) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const enabledSet = new Set(enabledSections);
@@ -50,6 +56,9 @@ export function OutreachMobileBottomBar({ enabledSections }: { enabledSections: 
               >
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="truncate">{item.label}</span>
+                {item.href === "/outreach/accounts" && unhealthyAccountCount > 0 && (
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-hot)]" />
+                )}
               </Link>
             );
           })}

@@ -4,9 +4,13 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Ca
 import { Badge } from "@/components/ui/Badge";
 import { SystemFlowDiagram } from "@/components/diagram/SystemFlowDiagram";
 import { Activity, Timer, AlertOctagon, Server } from "lucide-react";
+import { agentControlAction } from "@/lib/actions/agent-control";
+import { AgentControlCard } from "./AgentControlCard";
 
 export default async function MonitoringPage() {
   const { errorRate, avgLatency, services, queues } = await getMonitoringOverview();
+  const agentStatusResult = await agentControlAction("status");
+  const agentStatus = agentStatusResult.ok ? agentStatusResult.status : "unknown";
 
   return (
     <div className="space-y-6">
@@ -28,6 +32,8 @@ export default async function MonitoringPage() {
         <h2 className="mb-3 text-sm font-semibold text-[var(--text-1)]">System Data Flow</h2>
         <SystemFlowDiagram />
       </div>
+
+      <AgentControlCard initialStatus={agentStatus} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>

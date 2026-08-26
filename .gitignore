@@ -47,6 +47,12 @@ prisma/*.db-journal
 # separate client project (own repo/git history, not part of this codebase)
 /outreach/
 
+# real client login credentials (plaintext) -- never committed
+/credentials/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+.env*

@@ -19,9 +19,11 @@ interface CurrentUser {
 export function OutreachSidebar({
   currentUser,
   enabledSections,
+  unhealthyAccountCount = 0,
 }: {
   currentUser: CurrentUser | null;
   enabledSections: string[];
+  unhealthyAccountCount?: number;
 }) {
   const enabledSet = new Set(enabledSections);
   const visibleNavItems = OUTREACH_NAV_ITEMS.filter((item) => enabledSet.has(item.href));
@@ -69,20 +71,28 @@ export function OutreachSidebar({
                   transition={{ type: "spring", stiffness: 400, damping: 32 }}
                 />
               )}
-              <Icon
-                className={cn(
-                  "relative z-10 h-4.5 w-4.5 shrink-0",
-                  active ? "text-[var(--text-1)]" : "text-[var(--text-4)]"
+              <span className="relative z-10 shrink-0">
+                <Icon
+                  className={cn(
+                    "h-4.5 w-4.5",
+                    active ? "text-[var(--text-1)]" : "text-[var(--text-4)]"
+                  )}
+                />
+                {item.href === "/outreach/accounts" && unhealthyAccountCount > 0 && (
+                  <span className="absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-[var(--status-hot)]" />
                 )}
-              />
+              </span>
               {expanded && (
                 <span
                   className={cn(
-                    "relative z-10 ms-3 whitespace-nowrap",
+                    "relative z-10 ms-3 flex min-w-0 items-center gap-1.5 whitespace-nowrap",
                     active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
                   )}
                 >
                   {item.label}
+                  {item.href === "/outreach/accounts" && unhealthyAccountCount > 0 && (
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-hot)]" />
+                  )}
                 </span>
               )}
             </Link>

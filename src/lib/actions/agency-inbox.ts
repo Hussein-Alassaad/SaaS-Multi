@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { generateAiReply, detectLanguage } from "@/lib/ai/respond";
+import { logError } from "@/lib/error-log";
 import { revalidatePath } from "next/cache";
 import type { ChannelProvider } from "@/lib/agency/channels";
 
@@ -73,6 +74,17 @@ export async function simulateInboundMessageAction(input: {
     orderBy: { createdAt: "asc" },
   });
 
+  // Real open slots the owner has created (Agency > Meetings) -- the AI is
+  // only ever shown genuinely bookable times, never invents one. Capped at
+  // 10 so the prompt doesn't grow unbounded for a tenant with a long open
+  // calendar; soonest-first already makes the earliest options the ones
+  // most likely to matter to a customer asking "when are you free".
+  const openSlots = await db.meetingSlot.findMany({
+    where: { tenantId, status: "AVAILABLE", startsAt: { gte: new Date() } },
+    orderBy: { startsAt: "asc" },
+    take: 10,
+  });
+
   const aiReply = await generateAiReply({
     history: priorMessages.map((m) => ({
       sender: m.sender as "CUSTOMER" | "AI" | "HUMAN",
@@ -84,6 +96,7 @@ export async function simulateInboundMessageAction(input: {
     settings,
     tenantId,
     conversationId: conversation.id,
+    availableSlots: openSlots.map((s) => ({ id: s.id, startsAt: s.startsAt.toISOString() })),
   });
 
   await db.message.create({
@@ -109,7 +122,43 @@ export async function simulateInboundMessageAction(input: {
     },
   });
 
-  const nextStage = conversation.stage === "NEW" ? "CONTACTED" : conversation.stage;
+  // The AI only ever PROPOSES a slot in its reply text -- creating the
+  // MeetingRequest here is what actually reserves it (PENDING_APPROVAL,
+  // never AVAILABLE->BOOKED directly; approveMeetingRequestAction is still
+  // the only place a slot becomes BOOKED). slotId is @unique on
+  // MeetingRequest, so a slot already claimed by an earlier request in the
+  // tiny gap between this action's own openSlots read and this write simply
+  // fails the create -- caught and swallowed rather than surfaced, since the
+  // reply text has already been sent either way and the customer's proposed
+  // time not actually being reservable is a "team will confirm" case the
+  // approval-stage human is better placed to resolve than a crashed request.
+  let meetingProposed = false;
+  if (aiReply.extracted.proposedSlotId) {
+    try {
+      await db.meetingRequest.create({
+        data: {
+          tenantId,
+          conversationId: conversation.id,
+          nexarisClientId: nexarisClient.id,
+          slotId: aiReply.extracted.proposedSlotId,
+        },
+      });
+      meetingProposed = true;
+    } catch (err) {
+      await logError({
+        source: "ai.propose_meeting",
+        error: err,
+        tenantId,
+        context: { conversationId: conversation.id, slotId: aiReply.extracted.proposedSlotId },
+      });
+    }
+  }
+
+  const nextStage = meetingProposed
+    ? "MEETING_PENDING"
+    : conversation.stage === "NEW"
+      ? "CONTACTED"
+      : conversation.stage;
   await db.conversation.update({
     where: { id: conversation.id },
     data: {
@@ -122,6 +171,7 @@ export async function simulateInboundMessageAction(input: {
   revalidatePath("/agency/inbox");
   revalidatePath("/agency/approvals");
   revalidatePath("/agency/pipeline");
+  revalidatePath("/agency/meetings");
   revalidatePath("/agency");
 
   return { ok: true as const, conversationId: conversation.id };

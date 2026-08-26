@@ -1,6 +1,24 @@
+import { cookies } from "next/headers";
+import { getSecurityPolicy, getActiveSessionsAction, getApiKeysAction, getIpAllowlistAction } from "@/lib/actions/security";
+import { SESSION_COOKIE_NAME, verifySessionToken } from "@/lib/auth";
 import { SecurityClient } from "./SecurityClient";
 
-export default function SecurityPage() {
+export default async function SecurityPage() {
+  // Read directly rather than via getSession() (which returns a plain User
+  // row, not the JWT payload) -- only this page needs the raw sessionId,
+  // purely to highlight "This device" in the Active Sessions list below.
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const payload = token ? await verifySessionToken(token) : null;
+  const currentSessionId = payload?.sessionId ?? null;
+
+  const [policy, sessionsResult, keysResult, allowlistResult] = await Promise.all([
+    getSecurityPolicy(),
+    getActiveSessionsAction(),
+    getApiKeysAction(),
+    getIpAllowlistAction(),
+  ]);
+
   return (
     <div className="space-y-6">
       <div>
@@ -10,7 +28,13 @@ export default function SecurityPage() {
         </p>
       </div>
 
-      <SecurityClient />
+      <SecurityClient
+        initialPolicy={{ mfaRequired: policy.mfaRequired, ssoEnforced: policy.ssoEnforced }}
+        initialSessions={sessionsResult.ok ? sessionsResult.sessions : []}
+        initialApiKeys={keysResult.ok ? keysResult.keys : []}
+        initialAllowlist={allowlistResult.ok ? allowlistResult.entries : []}
+        currentSessionId={currentSessionId}
+      />
     </div>
   );
 }

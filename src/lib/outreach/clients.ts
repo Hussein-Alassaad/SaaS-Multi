@@ -137,7 +137,7 @@ export async function getLeadReplies(tenantId: string, leadId: string) {
   const accountLabels: Record<string, string> = {};
   if (accountIds.length) {
     const accounts = await db.outreachAccount.findMany({
-      where: { id: { in: accountIds } },
+      where: { id: { in: accountIds }, tenantId },
       select: { id: true, label: true },
     });
     for (const a of accounts) accountLabels[a.id] = a.label;

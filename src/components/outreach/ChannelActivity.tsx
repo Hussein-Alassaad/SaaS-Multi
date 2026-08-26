@@ -42,6 +42,10 @@ const STATUS_RING: Record<string, string> = {
 const SEND_STATUS_STYLE: Record<string, string> = {
   sent: "bg-[#4fd293]/10 text-[#3fb87e]",
   failed: "bg-[var(--status-hot)]/10 text-[var(--status-hot)]",
+  // Approved but held back by the daily send-pacing cap (src/lib/actions/
+  // outreach-approvals.ts) -- distinct from "failed" so it doesn't read as
+  // broken: it's waiting its turn on purpose, protecting deliverability.
+  queued_for_pacing: "bg-[var(--status-warm)]/10 text-[var(--status-warm)]",
 };
 
 /**

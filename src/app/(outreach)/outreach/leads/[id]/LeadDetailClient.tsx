@@ -4,7 +4,8 @@ import { useState, useTransition } from "react";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
-import { saveLeadNotesAction, scheduleFollowUpAction } from "@/lib/actions/outreach-lead-detail";
+import { saveLeadNotesAction, scheduleFollowUpAction, setDoNotContactAction } from "@/lib/actions/outreach-lead-detail";
+import { Ban, CheckCircle2 } from "lucide-react";
 
 const section = { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 } };
 
@@ -61,6 +62,8 @@ export interface LeadDetailData {
   generatedMessage: string | null;
   messageStyleUsed: string | null;
   notes: string | null;
+  doNotContact: boolean;
+  doNotContactReason: string | null;
 }
 
 export interface StageHistoryItem {
@@ -75,8 +78,28 @@ export function LeadDetailClient({ lead, history }: { lead: LeadDetailData; hist
   const [notes, setNotes] = useState(lead.notes ?? "");
   const [followupEnabled, setFollowupEnabled] = useState(false);
   const [followupAt, setFollowupAt] = useState("");
+  const [doNotContact, setDoNotContact] = useState(lead.doNotContact);
+  const [dncReason, setDncReason] = useState("");
+  const [dncPending, startDncTransition] = useTransition();
   const [, startTransition] = useTransition();
   const { showToast } = useToast();
+
+  const toggleDoNotContact = () => {
+    const next = !doNotContact;
+    startDncTransition(async () => {
+      const result = await setDoNotContactAction(lead.id, next, next ? dncReason : undefined);
+      if (!result.ok) {
+        showToast({ title: "Failed to update", description: result.error, variant: "error" });
+        return;
+      }
+      setDoNotContact(next);
+      showToast({
+        title: next ? "Marked Do Not Contact" : "Do Not Contact removed",
+        description: next ? "This lead will never be messaged again on any channel." : undefined,
+        variant: "success",
+      });
+    });
+  };
 
   const saveNotes = () => {
     startTransition(async () => {
@@ -116,14 +139,58 @@ export function LeadDetailClient({ lead, history }: { lead: LeadDetailData; hist
             {lead.platform} · status: {lead.status}
           </p>
         </div>
-        {lead.temperature && (
-          <Badge variant={TEMPERATURE_VARIANT[lead.temperature] ?? "neutral"} dot className="capitalize">
-            {lead.temperature}
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {lead.temperature && (
+            <Badge variant={TEMPERATURE_VARIANT[lead.temperature] ?? "neutral"} dot className="capitalize">
+              {lead.temperature}
+            </Badge>
+          )}
+          {doNotContact && <Badge variant="hot">Do Not Contact</Badge>}
+        </div>
       </motion.header>
 
-      <motion.div {...section} transition={{ delay: 0.05 }} className="glass mt-6 grid grid-cols-2 gap-4 rounded-2xl p-4">
+      <motion.div {...section} transition={{ delay: 0.03 }} className="glass mt-4 rounded-2xl p-4">
+        {doNotContact ? (
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium text-[var(--text-1)]">Marked Do Not Contact</p>
+              {lead.doNotContactReason && (
+                <p className="mt-0.5 text-xs text-[var(--text-4)]">Reason: {lead.doNotContactReason}</p>
+              )}
+              <p className="mt-0.5 text-xs text-[var(--text-5)]">This lead will never be messaged again on any channel.</p>
+            </div>
+            <button
+              type="button"
+              disabled={dncPending}
+              onClick={toggleDoNotContact}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border-hairline-strong)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-2)]"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Allow contact again
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <input
+              value={dncReason}
+              onChange={(e) => setDncReason(e.target.value)}
+              placeholder="Optional reason (e.g. asked to stop)"
+              className="min-w-0 flex-1 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 px-3 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+            />
+            <button
+              type="button"
+              disabled={dncPending}
+              onClick={toggleDoNotContact}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--status-hot)]/30 bg-[var(--status-hot)]/10 px-3 py-1.5 text-xs font-semibold text-[var(--status-hot)] transition-colors hover:bg-[var(--status-hot)]/20"
+            >
+              <Ban className="h-3.5 w-3.5" />
+              Mark Do Not Contact
+            </button>
+          </div>
+        )}
+      </motion.div>
+
+      <motion.div {...section} transition={{ delay: 0.05 }} className="glass mt-4 grid grid-cols-2 gap-4 rounded-2xl p-4">
         <Field label="Score">{lead.score != null ? `${lead.score}/10` : null}</Field>
         <Field label="Industry">{lead.industry}</Field>
         <Field label="Company size">{lead.companySize}</Field>

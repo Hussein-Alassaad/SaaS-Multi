@@ -12,6 +12,8 @@ const inputClass =
 const labelClass = "text-xs font-medium uppercase tracking-wide text-[var(--text-5)]";
 
 export interface OutreachSettingsData {
+  businessName: string;
+  businessDescription: string;
   targetNiche: string;
   targetIndustry: string;
   targetLocation: string;
@@ -59,7 +61,36 @@ export function SettingsClient({ initial }: { initial: OutreachSettingsData }) {
         <p className="mt-1 text-sm text-[var(--text-4)]">Every control here is live -- changes apply on the agent&apos;s next run.</p>
       </motion.header>
 
-      <motion.section {...section} transition={{ delay: 0.05 }} className="glass mt-6 space-y-4 rounded-2xl p-4">
+      <motion.section {...section} transition={{ delay: 0.02 }} className="glass mt-6 space-y-4 rounded-2xl p-4">
+        <p className="text-sm font-semibold text-[var(--text-2)]">Your business</p>
+        <p className="text-xs text-[var(--text-5)]">
+          The AI signs every outreach message as this business -- get this right before running any campaign.
+        </p>
+        <label className="block">
+          <span className={labelClass}>Business name</span>
+          <input
+            className={inputClass}
+            placeholder="e.g. Nexaris"
+            value={settings.businessName}
+            onChange={(e) => set("businessName", e.target.value)}
+          />
+        </label>
+        <label className="block">
+          <span className={labelClass}>Business description</span>
+          <textarea
+            className={inputClass}
+            rows={3}
+            placeholder="e.g. a CGI, VFX, and 3D anamorphic billboard agency"
+            value={settings.businessDescription}
+            onChange={(e) => set("businessDescription", e.target.value)}
+          />
+          <p className="mt-1 text-xs text-[var(--text-5)]">
+            One short phrase describing what you do -- used directly in the AI&apos;s outreach messages.
+          </p>
+        </label>
+      </motion.section>
+
+      <motion.section {...section} transition={{ delay: 0.05 }} className="glass mt-4 space-y-4 rounded-2xl p-4">
         <p className="text-sm font-semibold text-[var(--text-2)]">Targeting</p>
         <label className="block">
           <span className={labelClass}>Target niche</span>
@@ -187,6 +218,13 @@ export function SettingsClient({ initial }: { initial: OutreachSettingsData }) {
           />
           Require approval before sending (hard gate)
         </label>
+        {!settings.approvalRequired && (
+          <p className="rounded-lg border border-[var(--status-hot)]/30 bg-[var(--status-hot)]/10 px-3 py-2 text-xs text-[var(--status-hot)]">
+            Off: the AI sends LinkedIn and email messages automatically as soon as they&apos;re generated -- no
+            human reviews them first. Instagram still always requires a manual send (platform policy), regardless
+            of this setting.
+          </p>
+        )}
         <label className="block">
           <span className={labelClass}>Remind me about pending approvals after (hours)</span>
           <input

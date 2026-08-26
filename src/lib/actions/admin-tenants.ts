@@ -145,3 +145,130 @@ export async function resetTenantOwnerPasswordAction(tenantId: string) {
   revalidatePath(`/admin/tenants/${tenantId}`);
   return { ok: true as const, email: tenant.owner.email, password: newPassword };
 }
+
+/**
+ * "Remove a tenant" -- deliberately a deactivation (status -> CHURNED), not
+ * a hard delete. This is real client data (leads, messages, payment
+ * history) that stays fully intact and reversible via reactivateTenantAction
+ * below; a permanent wipe is a much higher-risk, separate action this admin
+ * dashboard does not currently expose at all. Also revokes every one of the
+ * tenant's users' active sessions (same mechanism src/lib/actions/security.ts's
+ * revokeSessionAction uses) so a deactivated tenant's team is force-logged-out
+ * immediately, not just blocked from a future login attempt.
+ */
+export async function deactivateTenantAction(tenantId: string) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "delete");
+
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true, status: true } });
+  if (!tenant) return { ok: false as const, error: "Tenant not found." };
+  if (tenant.status === "CHURNED") return { ok: false as const, error: "This tenant is already deactivated." };
+
+  await db.$transaction([
+    db.tenant.update({ where: { id: tenantId }, data: { status: "CHURNED" } }),
+    db.userSession.updateMany({
+      where: { user: { tenantId }, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+    db.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "tenant.deactivated",
+        resource: "tenant",
+        tenantId,
+        oldValue: JSON.stringify({ status: tenant.status }),
+        newValue: JSON.stringify({ status: "CHURNED" }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    }),
+  ]);
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  revalidatePath("/admin/tenants");
+  return { ok: true as const };
+}
+
+/** Reverses deactivateTenantAction -- status back to ACTIVE. Sessions stay
+ * revoked (the team must log back in fresh, not get silently restored). */
+export async function reactivateTenantAction(tenantId: string) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "delete");
+
+  const tenant = await db.tenant.findUnique({ where: { id: tenantId }, select: { id: true, status: true } });
+  if (!tenant) return { ok: false as const, error: "Tenant not found." };
+  if (tenant.status !== "CHURNED") return { ok: false as const, error: "This tenant is not deactivated." };
+
+  await db.$transaction([
+    db.tenant.update({ where: { id: tenantId }, data: { status: "ACTIVE" } }),
+    db.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "tenant.reactivated",
+        resource: "tenant",
+        tenantId,
+        oldValue: JSON.stringify({ status: "CHURNED" }),
+        newValue: JSON.stringify({ status: "ACTIVE" }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    }),
+  ]);
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  revalidatePath("/admin/tenants");
+  return { ok: true as const };
+}
+
+/**
+ * Sets an Outreach account's daily send/discovery caps -- deliberately
+ * Admin-only (guard("tenants", "edit") checks a PLATFORM session, not
+ * outreachGuardResult()'s tenant-scoped check). These 3 fields used to be
+ * client-editable on Account Health; that path is now locked to read-only
+ * display (see src/lib/actions/outreach-accounts.ts's saveAccountDraftAction,
+ * which strips them from what a tenant session can submit) so a client
+ * can no longer raise their own daily limits -- e.g. to avoid the exact
+ * warm-up/pacing safety limits this project's own architecture is built
+ * around (see outreach/agent/core/warmup.py). Only the field the caller
+ * actually sends gets written -- an Instagram account's linkedinDailyLimit
+ * is left untouched, and vice versa, matching which field the UI shows
+ * for that account's platform.
+ */
+export async function setOutreachDailyLimitAction(
+  accountId: string,
+  tenantId: string,
+  field: "igDailyLimit" | "linkedinDailyLimit" | "emailDailyLimit",
+  value: number
+) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "edit");
+
+  if (!Number.isFinite(value) || value < 0) {
+    return { ok: false as const, error: "Enter a valid, non-negative number." };
+  }
+
+  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+  if (!account) return { ok: false as const, error: "Account not found." };
+
+  const oldValue = account[field];
+  await db.outreachAccount.update({ where: { id: accountId }, data: { [field]: value } });
+
+  await db.auditLog.create({
+    data: {
+      actorId: session.id,
+      action: "outreach_account.daily_limit_changed",
+      resource: "outreach_account",
+      tenantId,
+      oldValue: JSON.stringify({ [field]: oldValue }),
+      newValue: JSON.stringify({ [field]: value }),
+      device: "Desktop",
+      browser: "Admin",
+    },
+  });
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  return { ok: true as const };
+}

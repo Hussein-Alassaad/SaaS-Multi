@@ -4,10 +4,13 @@ import { OutreachMobileTopBar } from "@/components/layout/OutreachMobileTopBar";
 import { OutreachMobileBottomBar } from "@/components/layout/OutreachMobileBottomBar";
 import { AmbientWordmark } from "@/components/layout/AmbientWordmark";
 import { PageTransition } from "@/components/layout/PageTransition";
+import { AnnouncementBanner } from "@/components/layout/AnnouncementBanner";
 import { OutreachRealtimeToasts } from "@/components/outreach/OutreachRealtimeToasts";
 import { getTenantSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getEnabledSectionHrefs } from "@/lib/agency/sections";
+import { getTenantNotifications } from "@/lib/notifications";
+import { getUnhealthyAccountCount } from "@/lib/outreach/accounts";
 
 export default async function OutreachLayout({ children }: { children: React.ReactNode }) {
   const session = await getTenantSession();
@@ -22,12 +25,15 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   // them together instead of two sequential round-trips. Each Supabase
   // round-trip costs real network latency now that this runs against
   // remote Postgres, and this layout re-runs on every Outreach page load.
-  const [tenant, enabledSections] = await Promise.all([
+  // product.id (not just slug) is now also selected, for
+  // getTenantNotifications' PRODUCT_TENANTS matching below.
+  const [tenant, enabledSections, unhealthyAccountCount] = await Promise.all([
     db.tenant.findUnique({
       where: { id: session.tenantId! },
-      select: { product: { select: { slug: true } } },
+      select: { product: { select: { id: true, slug: true } } },
     }),
     getEnabledSectionHrefs(session.tenantId!, "outreach"),
+    getUnhealthyAccountCount(session.tenantId!),
   ]);
   // Cross-product guard: a Marketing tenant's session is still TENANT-scoped
   // and would pass the proxy's scope check on /outreach/*, but their tenant
@@ -36,16 +42,31 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   // outreach data behind it.
   if (tenant?.product.slug !== "outreach") redirect("/outreach-login");
 
+  const announcements = await getTenantNotifications(session.tenantId!, tenant.product.id);
+
   return (
     <div className="relative min-h-screen">
-      <OutreachSidebar currentUser={currentUser} enabledSections={enabledSections} />
+      <OutreachSidebar
+        currentUser={currentUser}
+        enabledSections={enabledSections}
+        unhealthyAccountCount={unhealthyAccountCount}
+      />
       <AmbientWordmark word="OUTREACH" />
       <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
         <OutreachMobileTopBar currentUser={currentUser} />
         <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
+          <AnnouncementBanner
+            items={announcements.map((a) => ({
+              id: a.id,
+              title: a.title,
+              body: a.body,
+              imageUrl: a.imageUrl,
+              sentAt: a.sentAt?.toISOString() ?? null,
+            }))}
+          />
           <PageTransition>{children}</PageTransition>
         </main>
-        <OutreachMobileBottomBar enabledSections={enabledSections} />
+        <OutreachMobileBottomBar enabledSections={enabledSections} unhealthyAccountCount={unhealthyAccountCount} />
       </div>
       <OutreachRealtimeToasts tenantId={session.tenantId!} />
     </div>

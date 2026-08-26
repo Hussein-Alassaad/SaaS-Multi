@@ -27,6 +27,9 @@ export async function getTenantDetail(tenantId: string) {
       supportTickets: { orderBy: { createdAt: "desc" }, include: { assignee: true } },
       auditLogs: { orderBy: { createdAt: "desc" }, take: 30, include: { actor: true } },
       impersonationSessions: { orderBy: { startedAt: "desc" }, include: { admin: true } },
+      // Empty array for a non-Outreach tenant (e.g. marketing) -- harmless,
+      // the admin UI only renders this tab when it finds rows here.
+      outreachAccounts: { orderBy: { label: "asc" } },
     },
   });
   if (!tenant) return null;

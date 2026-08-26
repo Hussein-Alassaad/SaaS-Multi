@@ -18,6 +18,7 @@ export default async function NotificationsPage() {
           id: n.id,
           title: n.title,
           body: n.body,
+          imageUrl: n.imageUrl,
           audience: n.audience,
           status: n.status,
           scheduledAt: n.scheduledAt?.toISOString() ?? null,

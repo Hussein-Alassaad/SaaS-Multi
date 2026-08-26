@@ -49,6 +49,16 @@ export async function sendOutreachEmail(opts: {
             Body: { Html: { Data: opts.html, Charset: "UTF-8" } },
           },
         },
+        // Required for src/app/api/webhooks/ses-bounce/route.ts to ever
+        // receive anything -- without a configuration set attached to the
+        // send, SES has no SNS destination to notify on bounce/complaint,
+        // so bounceCount stays 0 forever regardless of real deliverability.
+        // Unset by default (fails open, not closed) since the AWS-side SNS
+        // topic/subscription this points at doesn't exist until someone
+        // creates it in the SES console.
+        ...(process.env.AWS_SES_CONFIGURATION_SET
+          ? { ConfigurationSetName: process.env.AWS_SES_CONFIGURATION_SET }
+          : {}),
       })
     );
     return { ok: true, messageId: result.MessageId };

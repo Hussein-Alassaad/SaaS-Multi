@@ -36,10 +36,16 @@ export async function getOutreachErrorsAction() {
 
   const [leads, accounts] = await Promise.all([
     leadIds.size
-      ? db.outreachLead.findMany({ where: { id: { in: [...leadIds] } }, select: { id: true, businessName: true } })
+      ? db.outreachLead.findMany({
+          where: { id: { in: [...leadIds] }, tenantId: session.tenantId! },
+          select: { id: true, businessName: true },
+        })
       : Promise.resolve([]),
     accountIds.size
-      ? db.outreachAccount.findMany({ where: { id: { in: [...accountIds] } }, select: { id: true, label: true } })
+      ? db.outreachAccount.findMany({
+          where: { id: { in: [...accountIds] }, tenantId: session.tenantId! },
+          select: { id: true, label: true },
+        })
       : Promise.resolve([]),
   ]);
   const leadNames = Object.fromEntries(leads.map((l) => [l.id, l.businessName]));

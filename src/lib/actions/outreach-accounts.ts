@@ -7,23 +7,31 @@ import { encryptSecret } from "@/lib/outreach/crypto";
 
 /**
  * Draft shape submitted by AccountHealthClient's per-account edit form.
- * Platform-specific fields (igDailyLimit/linkedinDailyLimit/proxy* vs.
- * emailDailyLimit/sesFromEmail/sesFromName) are all optional here since the
- * client only ever fills in the subset relevant to that account's
- * `platform` -- this action just persists whichever fields are present.
- * `proxyPassword` is the plaintext the user just typed (if anything) --
- * never the stored ciphertext, and an empty/omitted value means "leave the
- * existing encrypted password untouched" (see crypto.ts / accounts.ts).
+ * Platform-specific fields (proxy* vs. sesFromEmail/sesFromName) are all
+ * optional here since the client only ever fills in the subset relevant to
+ * that account's `platform` -- this action just persists whichever fields
+ * are present. `proxyPassword` is the plaintext the user just typed (if
+ * anything) -- never the stored ciphertext, and an empty/omitted value
+ * means "leave the existing encrypted password untouched" (see crypto.ts /
+ * accounts.ts).
+ *
+ * igDailyLimit/linkedinDailyLimit/emailDailyLimit are DELIBERATELY not
+ * accepted here -- those are Admin-only now (see
+ * src/lib/actions/admin-tenants.ts's setOutreachDailyLimitAction()), a
+ * tenant's own session can no longer raise its own daily send/discovery
+ * caps. AccountHealthClient shows them as read-only display fields, never
+ * sends them in a draft submission -- even if a request were crafted by
+ * hand with these fields set, this action has no code path that would
+ * write them, so the client-side lock isn't the only thing enforcing this.
  */
 export interface AccountDraftInput {
   runTime?: string; // "HH:MM"
-  igDailyLimit?: number;
-  linkedinDailyLimit?: number;
-  emailDailyLimit?: number;
   proxyHost?: string;
   proxyPort?: string;
   proxyUsername?: string;
   proxyPassword?: string;
+  loginEmail?: string;
+  loginPassword?: string;
   sesFromEmail?: string;
   sesFromName?: string;
 }
@@ -40,10 +48,6 @@ export async function saveAccountDraftAction(accountId: string, draft: AccountDr
   const data: Record<string, unknown> = {};
 
   if (draft.runTime) data.runTime = draft.runTime.length === 5 ? `${draft.runTime}:00` : draft.runTime;
-  if (draft.igDailyLimit != null && !Number.isNaN(draft.igDailyLimit)) data.igDailyLimit = draft.igDailyLimit;
-  if (draft.linkedinDailyLimit != null && !Number.isNaN(draft.linkedinDailyLimit))
-    data.linkedinDailyLimit = draft.linkedinDailyLimit;
-  if (draft.emailDailyLimit != null && !Number.isNaN(draft.emailDailyLimit)) data.emailDailyLimit = draft.emailDailyLimit;
 
   if (draft.proxyHost !== undefined) data.proxyHost = draft.proxyHost || null;
   if (draft.proxyPort !== undefined) data.proxyPort = draft.proxyPort || null;
@@ -53,10 +57,86 @@ export async function saveAccountDraftAction(accountId: string, draft: AccountDr
   // shown blank by default (see AccountHealthClient's placeholder UX).
   if (draft.proxyPassword) data.proxyPasswordEnc = encryptSecret(draft.proxyPassword);
 
+  // A deliberate proxy-host/port/username change means the tenant is
+  // intentionally swapping this account onto a different proxy (e.g. the
+  // old one lapsed, a genuine provider change) -- clear the recorded
+  // verifiedProxyIp baseline so the Python agent's next run establishes a
+  // FRESH baseline against the new proxy instead of comparing it to the
+  // old one and refusing to proceed forever (see
+  // outreach/agent/core/session.py's verify_proxy_ip()/ProxyIpMismatch).
+  // Only clears on an actual value change, not merely re-submitting the
+  // same host/port/username unchanged.
+  const proxyIdentityChanged =
+    (draft.proxyHost !== undefined && draft.proxyHost !== (account.proxyHost ?? "")) ||
+    (draft.proxyPort !== undefined && draft.proxyPort !== (account.proxyPort ?? "")) ||
+    (draft.proxyUsername !== undefined && draft.proxyUsername !== (account.proxyUsername ?? ""));
+  if (proxyIdentityChanged) data.verifiedProxyIp = null;
+
+  // Submitting new LinkedIn/Instagram login credentials re-arms the agent to
+  // attempt a fresh unsupervised login on its next scheduled run -- status
+  // flips to "pending_first_login" (not "connected" -- that only happens
+  // once the Python agent's own login flow actually succeeds and reports
+  // back, see outreach/agent/core/session.py's ensure_logged_in()) and any
+  // stale error from a previous failed attempt is cleared, since a fresh
+  // credential submission deserves a fresh attempt, not a stale error
+  // banner sitting on top of it.
+  if (draft.loginEmail !== undefined) data.loginEmail = draft.loginEmail || null;
+  if (draft.loginPassword) {
+    data.loginPasswordEnc = encryptSecret(draft.loginPassword);
+    data.loginStatus = "pending_first_login";
+    data.loginError = null;
+  }
+
   if (draft.sesFromEmail !== undefined) data.sesFromEmail = draft.sesFromEmail || null;
   if (draft.sesFromName !== undefined) data.sesFromName = draft.sesFromName || null;
 
-  await db.outreachAccount.update({ where: { id: accountId }, data });
+  await db.outreachAccount.updateMany({ where: { id: accountId, tenantId: session.tenantId! }, data });
+
+  return { ok: true as const };
+}
+
+export interface CreateAccountInput {
+  label: string;
+  platform: "linkedin" | "instagram" | "email";
+}
+
+/**
+ * Tenant-side account creation -- the piece that was missing entirely before
+ * this feature: AccountHealthClient could only edit accounts that already
+ * existed (seeded, or created some other way outside this app). A client
+ * adding their own LinkedIn/Instagram/email channel now starts here, then
+ * fills in login/proxy/SES details via saveAccountDraftAction on the same
+ * row this creates.
+ */
+export async function createOutreachAccountAction(input: CreateAccountInput) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "create");
+  if (!permCheck.ok) return permCheck;
+
+  const label = input.label.trim();
+  if (!label) return { ok: false as const, error: "Account label is required." };
+  if (!["linkedin", "instagram", "email"].includes(input.platform)) {
+    return { ok: false as const, error: "Invalid platform." };
+  }
+
+  const account = await db.outreachAccount.create({
+    data: { tenantId: session.tenantId!, label, platform: input.platform },
+  });
+
+  return { ok: true as const, accountId: account.id };
+}
+
+export async function deleteOutreachAccountAction(accountId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "delete");
+  if (!permCheck.ok) return permCheck;
+
+  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
+  if (!account) return { ok: false as const, error: "Account not found." };
+
+  await db.outreachAccount.deleteMany({ where: { id: accountId, tenantId: session.tenantId! } });
 
   return { ok: true as const };
 }
@@ -70,8 +150,8 @@ export async function toggleRedistributeAction(accountId: string) {
   const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
   if (!account) return { ok: false as const, error: "Account not found." };
 
-  await db.outreachAccount.update({
-    where: { id: accountId },
+  await db.outreachAccount.updateMany({
+    where: { id: accountId, tenantId: session.tenantId! },
     data: { redistributeFlag: !account.redistributeFlag },
   });
 
@@ -87,8 +167,8 @@ export async function resumeAccountAction(accountId: string) {
   const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
   if (!account) return { ok: false as const, error: "Account not found." };
 
-  await db.outreachAccount.update({
-    where: { id: accountId },
+  await db.outreachAccount.updateMany({
+    where: { id: accountId, tenantId: session.tenantId! },
     data: { status: "active", warningType: null, warningReason: null, redistributeFlag: false },
   });
 

@@ -36,7 +36,7 @@
 //   TeamInvite.status                 PENDING | ACCEPTED | REVOKED
 //
 // Nexaris tenant platform (AI Sales & Support) — string "enum" fields:
-//   Channel.provider                 WHATSAPP | INSTAGRAM | FACEBOOK
+//   Channel.provider                 WHATSAPP | INSTAGRAM | FACEBOOK | GMAIL | OUTLOOK
 //   Channel.status                   CONNECTED | DISCONNECTED | ERROR
 //   Conversation.status              OPEN | PENDING_APPROVAL | AWAITING_CUSTOMER | CLOSED
 //   Conversation.stage               NEW | CONTACTED | INTERESTED | MEETING_PENDING | MEETING_BOOKED | WON | LOST
@@ -179,9 +179,90 @@ model User {
   // Outreach tenant platform
   outreachApprovalsDecided OutreachMessage[] @relation("OutreachMessageApprovedBy")
 
+  sessions         UserSession[]
+  createdApiKeys   ApiKey[]
+  createdAllowlist IpAllowlistEntry[]
+
   @@index([tenantId])
   @@index([roleId])
   @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Real session tracking (added 2026-08-22) -- replaces the previously fully
+// stateless-JWT login (a valid signature was the ONLY check; there was no
+// database record of who was logged in from where, and therefore no way to
+// list or revoke one specific browser session). Every login now creates one
+// row here, whose id is embedded in the session JWT itself
+// (SessionPayload.sessionId, src/lib/auth.ts) -- verifySessionToken() now
+// ALSO looks up this row and rejects the token if it's missing or
+// revokedAt is set, so revoking a session here takes effect immediately
+// project-wide (Admin AND every tenant/client login, platform-wide per the
+// explicit requirement this was built to), not just next time the JWT
+// happens to expire on its own.
+model UserSession {
+  id           String    @id @default(cuid())
+  userId       String
+  device       String? // parsed from User-Agent at login time, e.g. "Chrome on macOS"
+  ip           String?
+  createdAt    DateTime  @default(now())
+  lastActiveAt DateTime  @default(now()) // touched opportunistically on requests, not every single one -- see verifySessionToken()'s throttling comment
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_sessions")
+}
+
+// Platform-level API keys for external integrations (Admin -> Security page).
+// The real secret is shown to the admin exactly once, at creation
+// (createApiKeyAction's return value) -- only its SHA-256 hash is ever
+// persisted, same reasoning as a password hash: this table being read
+// (backup, breach, careless query in a debugger) must not itself hand out
+// working credentials.
+model ApiKey {
+  id          String    @id @default(cuid())
+  label       String
+  keyHash     String // SHA-256 hex of the real key -- never the plaintext key itself
+  keyPreview  String // last 4 chars of the real key, shown in the UI so an admin can tell keys apart without re-seeing the secret
+  createdById String?
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+
+  createdBy User? @relation(fields: [createdById], references: [id])
+
+  @@map("api_keys")
+}
+
+// IP allowlist for restricting Admin platform access -- see
+// src/middleware.ts for where this is actually enforced.
+model IpAllowlistEntry {
+  id          String   @id @default(cuid())
+  cidr        String // single IP or CIDR range, e.g. "203.0.113.0/24"
+  label       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  createdBy User? @relation(fields: [createdById], references: [id])
+
+  @@unique([cidr])
+  @@map("ip_allowlist_entries")
+}
+
+// Platform-wide security policy toggles (MFA/SSO requirements) -- a
+// single row, not per-tenant (Admin's Security page is platform-owner-only;
+// see agencyGuardResult/guard's "billing"/"security" resource split for
+// tenant-level settings, which are separate and already covered by
+// AiSettings and similar per-tenant models).
+model SecurityPolicy {
+  id          String   @id @default("singleton")
+  mfaRequired Boolean  @default(false)
+  ssoEnforced Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+
+  @@map("security_policy")
 }
 
 model Role {
@@ -483,6 +564,7 @@ model Notification {
   id          String    @id @default(cuid())
   title       String
   body        String
+  imageUrl    String? // optional attached image, served from public/uploads (see src/lib/storage.ts)
   audience    String    @default("ALL_TENANTS")
   audienceRef String? // productId or tenantId depending on audience
   status      String    @default("DRAFT")
@@ -535,13 +617,28 @@ model TeamInvite {
 model Channel {
   id          String    @id @default(cuid())
   tenantId    String
-  provider    String // WHATSAPP | INSTAGRAM | FACEBOOK
+  provider    String // WHATSAPP | INSTAGRAM | FACEBOOK | GMAIL | OUTLOOK
   status      String    @default("DISCONNECTED") // CONNECTED | DISCONNECTED | ERROR
   displayName String? // e.g. connected page/number name, shown in Integrations UI
   config      String    @default("{}") // JSON-encoded, e.g. { phoneNumberId } -- never store raw secrets here in prod
   connectedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  // GMAIL/OUTLOOK OAuth (added 2026-08-22) -- real "Connect Gmail/Outlook"
+  // flow, distinct from WHATSAPP/INSTAGRAM/FACEBOOK's still-simulated
+  // connection (see agency-integrations.ts's toggleChannelConnectionAction
+  // comment). The tenant authorizes via Google/Microsoft's own OAuth
+  // consent page; this app never sees or stores their password, only the
+  // resulting tokens -- which ARE real secrets and, unlike the loose
+  // `config` JSON above, are encrypted at rest (src/lib/crypto.ts, same
+  // AES-256-GCM scheme Outreach uses for proxy passwords, but under
+  // APP_ENCRYPTION_KEY, a separate key). Null/empty for every other
+  // provider.
+  oauthEmail        String? // the connected mailbox address, e.g. "owner@gmail.com" -- shown in the UI, not secret
+  oauthAccessToken  String? // encrypted (encryptSecret()) -- short-lived, refreshed via oauthRefreshToken
+  oauthRefreshToken String? // encrypted (encryptSecret()) -- long-lived, what actually lets this app keep sending/reading without the tenant re-authorizing
+  oauthExpiresAt    DateTime? // when oauthAccessToken expires -- callers refresh proactively past this, not on a 401
 
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversations Conversation[]
@@ -731,7 +828,7 @@ model AiSettings {
 //   OutreachLead.temperature          hot | warm | cold
 //   OutreachMessage.channel            linkedin | whatsapp | instagram
 //   OutreachMessage.approvalStatus     awaiting | approved | held | edited
-//   OutreachMessage.sendStatus         pending | sent | manual_pending | failed
+//   OutreachMessage.sendStatus         pending | sent | manual_pending | failed | queued_for_pacing
 //   OutreachSettings.messageStyle      direct | discovery
 //   OutreachFollowUp.status            scheduled | sent | cancelled | paused
 //   OutreachRun.status                 running | completed | error
@@ -746,11 +843,50 @@ model OutreachAccount {
   runTime            String    @default("09:00") @map("run_time") // "HH:MM", interpreted in the tenant's configured timezone
   igDailyLimit       Int       @default(20) @map("ig_daily_limit")
   linkedinDailyLimit Int       @default(30) @map("linkedin_daily_limit")
-  emailDailyLimit    Int       @default(300) @map("email_daily_limit")
+  // Default lowered 2026-08-21: 300/day was this column's original value,
+  // but every real client onboarded so far targets ~300 EMAILS PER MONTH
+  // (roughly 10/day) -- 300/day was never actually a client's real target,
+  // it was this column's placeholder default from before any real client
+  // existed. 10/day also happens to land right at the safe week-1 warm-up
+  // pace the strategy doc recommends (Downloads/
+  // B2B_AI_Outreach_System_Complete_Guide.md, Part 5) rather than needing a
+  // separate ramp-up mechanic the way LinkedIn/Instagram's warmupCurrentLimit
+  // does -- a client's actual monthly target is naturally a safe daily pace
+  // already, so no additional warm-up ramp was built for this field.
+  emailDailyLimit    Int       @default(10) @map("email_daily_limit")
+  sentCount          Int       @default(0) @map("sent_count") // real SES sends via this account, all-time -- denominator for bounceRate below
+  bounceCount        Int       @default(0) @map("bounce_count") // incremented only by a real SES bounce notification (see src/app/api/webhooks/ses-bounce/route.ts), never guessed
   proxyHost          String?   @map("proxy_host")
   proxyPort          String?   @map("proxy_port")
   proxyUsername      String?   @map("proxy_username")
   proxyPasswordEnc   String?   @map("proxy_password_enc") // encrypted at rest (AES-256-GCM, see src/lib/outreach/crypto.ts) -- multiple real tenants' credentials now share this table, unlike the original single-tenant version
+  verifiedProxyIp    String?   @map("verified_proxy_ip") // the real outbound IP this account's proxy resolved to on its first successful verified run -- checked on every later run (agent/core/session.py's verify_proxy_ip()) so an account never runs through a DIFFERENT IP than it always has (the exact "HARD RULE" this model's proxyHost/proxyPort/proxyUsername fields document, now actually enforced at runtime, not just assumed)
+  // Platform login credentials -- the TENANT enters their own account's real
+  // email/password directly in the Account Health dashboard (self-service,
+  // no admin/agency-owner in the loop -- see src/lib/outreach/crypto.ts for
+  // the same AES-256-GCM-at-rest scheme already used for proxyPasswordEnc).
+  // The Python agent performs the actual browser login using these, through
+  // this account's proxy above. Only meaningful when platform = "linkedin"
+  // or "instagram" -- unused for platform = "email" (that channel sends via
+  // SES using sesFromEmail/sesFromName below, no login/browser involved at
+  // all). Login is unsupervised by design (tenant's explicit choice) -- see
+  // outreach/PROGRESS.md's dated entry on this feature for the accepted
+  // tradeoff (a fresh automated login is LinkedIn/Instagram's single
+  // highest-risk moment for a security challenge the agent can't solve
+  // blind, vs. reusing an already-established session).
+  loginEmail         String?   @map("login_email")
+  loginPasswordEnc   String?   @map("login_password_enc")
+  loginStatus        String    @default("not_connected") @map("login_status") // not_connected | pending_first_login | connecting | connected | failed
+  loginError         String?   @map("login_error") // human-readable reason from the last failed login attempt, cleared on the next success
+  loginConnectedAt   DateTime? @map("login_connected_at")
+  // Set the moment a live "Connect account" websocket session starts (see
+  // outreach/agent/live_login/), alongside loginStatus="connecting". Lets the
+  // UI detect and recover from a stuck "Connecting..." state if the droplet
+  // process crashes mid-session and never gets to write a final status --
+  // AccountHealthClient treats "connecting" older than ~15 minutes as
+  // effectively failed and offers a retry, rather than showing a
+  // permanently-stuck badge with no way out.
+  loginConnectingAt  DateTime? @map("login_connecting_at")
   sesFromEmail       String?   @map("ses_from_email") // verified SES sender identity -- only used when platform = "email"
   sesFromName        String?   @map("ses_from_name")
   warmupCurrentLimit Int       @default(5) @map("warmup_current_limit")
@@ -776,6 +912,8 @@ model OutreachAccount {
 model OutreachSettings {
   id                      String   @id @default(cuid())
   tenantId                String   @unique @map("tenant_id")
+  businessName            String   @default("") @map("business_name")
+  businessDescription     String   @default("") @map("business_description")
   targetNiche             String   @default("") @map("target_niche")
   targetIndustry          String   @default("") @map("target_industry")
   targetLocation          String   @default("") @map("target_location")
@@ -793,6 +931,13 @@ model OutreachSettings {
   whatsappRecipient2      String?  @map("whatsapp_recipient_2")
   approvalRequired        Boolean  @default(true) @map("approval_required")
   approvalReminderHours   Int      @default(24) @map("approval_reminder_hours")
+  // IANA zone name (e.g. "America/New_York") that every OutreachAccount.runTime
+  // for this tenant is interpreted against -- Admin-only editable (see
+  // setOutreachTimezoneAction in src/lib/actions/admin-tenants.ts), shown
+  // read-only on the tenant's own Settings page. Falls back to the agent's
+  // config.TIMEZONE if this row is somehow missing (new-tenant safety net,
+  // not expected in normal operation since this column always has a default).
+  timezone                String   @default("Asia/Beirut")
   updatedAt               DateTime @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -831,6 +976,8 @@ model OutreachLead {
   status              String    @default("discovered")
   contactCount        Int       @default(0) @map("contact_count")
   firstContactedAt    DateTime? @map("first_contacted_at")
+  doNotContact        Boolean   @default(false) @map("do_not_contact") // permanent opt-out -- independent of `status` (a lead's pipeline stage), checked before every send on every channel
+  doNotContactReason  String?   @map("do_not_contact_reason")
   notes               String?
   createdAt           DateTime  @default(now()) @map("created_at")
   updatedAt           DateTime  @updatedAt @map("updated_at")

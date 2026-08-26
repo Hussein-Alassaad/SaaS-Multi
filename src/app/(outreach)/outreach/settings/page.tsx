@@ -10,6 +10,8 @@ export default async function OutreachSettingsPage() {
   const settings = await db.outreachSettings.findUniqueOrThrow({ where: { tenantId } });
 
   const initial = {
+    businessName: settings.businessName,
+    businessDescription: settings.businessDescription,
     targetNiche: settings.targetNiche,
     targetIndustry: settings.targetIndustry,
     targetLocation: settings.targetLocation,

@@ -35,7 +35,7 @@ export const OUTREACH_RESOURCES = [
   "run-status",
   "errors",
   "settings",
-  "workflow",
+  "feature-requests",
 ] as const;
 export type OutreachResource = (typeof OUTREACH_RESOURCES)[number];
 
@@ -66,7 +66,7 @@ export const OUTREACH_PERMISSION_MATRIX: OutreachPermissionMatrix = {
     "run-status": ["view"],
     errors: ["view", "edit"],
     settings: ALL_ACTIONS,
-    workflow: ["view"],
+    "feature-requests": ["view", "create"],
   },
   Operator: {
     dashboard: ["view"],
@@ -81,7 +81,6 @@ export const OUTREACH_PERMISSION_MATRIX: OutreachPermissionMatrix = {
     analytics: ["view"],
     "run-status": ["view"],
     errors: ["view"],
-    workflow: ["view"],
   },
 };
 

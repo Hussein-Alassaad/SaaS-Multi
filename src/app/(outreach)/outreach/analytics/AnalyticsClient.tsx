@@ -201,6 +201,7 @@ export function AnalyticsClient({ leads }: { leads: AnalyticsLeadRow[] }) {
     const cold = scoped.filter((l) => l.temperature === "cold").length;
     const contacted = scoped.filter((l) => l.contactCount > 0 || l.status === "contacted").length;
     const replied = scoped.filter((l) => l.status === "replied").length;
+    const replyRate = contacted > 0 ? Math.round((replied / contacted) * 100) : 0;
     const linkedinCount = scoped.filter((l) => l.platform === "linkedin").length;
     const instagramCount = scoped.filter((l) => l.platform === "instagram").length;
     const emailCount = scoped.filter((l) => l.platform === "email").length;
@@ -233,13 +234,13 @@ export function AnalyticsClient({ leads }: { leads: AnalyticsLeadRow[] }) {
     ];
 
     return {
-      total, hot, warm, cold, contacted, replied, linkedinCount, instagramCount, emailCount,
+      total, hot, warm, cold, contacted, replied, replyRate, linkedinCount, instagramCount, emailCount,
       dailyCounts, totalTrend, hotTrend, warmTrend, coldTrend, temperatureData, platformData,
     };
   }, [leads, rangeKey, customStart, customEnd]);
 
   const {
-    total, hot, warm, cold, contacted, replied, linkedinCount, instagramCount, emailCount,
+    total, hot, warm, cold, contacted, replied, replyRate, linkedinCount, instagramCount, emailCount,
     dailyCounts, totalTrend, hotTrend, warmTrend, coldTrend, temperatureData, platformData,
   } = derived;
 
@@ -280,6 +281,7 @@ export function AnalyticsClient({ leads }: { leads: AnalyticsLeadRow[] }) {
         <KpiCard label="Cold" value={String(cold)} trend={coldTrend} />
         <KpiCard label="Contacted" value={String(contacted)} />
         <KpiCard label="Replied" value={String(replied)} />
+        <KpiCard label="Reply rate" value={`${replyRate}%`} />
         <KpiCard label="LinkedIn leads" value={String(linkedinCount)} />
         <KpiCard label="Instagram leads" value={String(instagramCount)} />
         <KpiCard label="Email leads" value={String(emailCount)} />
