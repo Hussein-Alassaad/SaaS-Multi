@@ -3,7 +3,7 @@
 import { db } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
-import { sendOutreachEmail } from "@/lib/outreach/ses";
+import { sendOutreachEmail } from "@/lib/outreach/resend-email";
 import { logError } from "@/lib/error-log";
 
 function serializeApprovalMessage(

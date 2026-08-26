@@ -116,6 +116,7 @@ export default async function TenantDetailPage({
       emailDailyLimit: a.emailDailyLimit,
       status: a.status,
     })),
+    outreachTimezone: tenant.outreachSettings?.timezone ?? null,
   };
 
   return <TenantDetailClient tenant={serialized} />;

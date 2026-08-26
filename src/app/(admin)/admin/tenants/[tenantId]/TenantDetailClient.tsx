@@ -26,6 +26,7 @@ import {
   deactivateTenantAction,
   reactivateTenantAction,
   setOutreachDailyLimitAction,
+  setOutreachTimezoneAction,
 } from "@/lib/actions/admin-tenants";
 import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, UserX, UserCheck, type LucideIcon } from "lucide-react";
 
@@ -149,6 +150,7 @@ interface TenantDetail {
   flags: TenantFlag[];
   sections: TenantSection[];
   outreachAccounts: OutreachAccountRow[];
+  outreachTimezone: string | null;
 }
 
 interface Props {
@@ -503,6 +505,18 @@ export function TenantDetailClient({ tenant }: Props) {
         </TabsContent>
 
         <TabsContent value="Outreach Accounts">
+          {tenant.outreachAccounts.length > 0 && (
+            <Card className="mb-4">
+              <CardHeader>
+                <CardTitle>Scheduling Timezone</CardTitle>
+                <CardDescription>
+                  Every account&apos;s run time below is interpreted in this timezone -- Admin-only.
+                  Tenants see this as read-only on their own Outreach Settings page.
+                </CardDescription>
+              </CardHeader>
+              <OutreachTimezoneRow tenantId={tenant.id} timezone={tenant.outreachTimezone ?? "Asia/Beirut"} />
+            </Card>
+          )}
           <Card>
             <CardHeader>
               <CardTitle>Outreach Accounts</CardTitle>
@@ -678,6 +692,58 @@ function OutreachAccountLimitRow({ account, tenantId }: { account: OutreachAccou
           className="w-20 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2.5 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
         />
         <Button size="sm" variant="outline" disabled={pending || value === String(account[field])} onClick={save}>
+          {pending ? "Saving..." : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Populated once, client-side, from the browser/Node's own IANA database
+// (no npm dependency needed) -- module scope so it's computed once, not
+// re-derived on every render.
+const IANA_TIMEZONES = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+
+/**
+ * The IANA timezone every account's run_time (below, in Outreach Accounts)
+ * is scheduled against for this tenant -- Admin-only, see
+ * setOutreachTimezoneAction's own docstring for why this isn't
+ * tenant-editable (a tenant targeting a foreign market, e.g. MJivity's
+ * US/UK/Europe reach, needs this set correctly for their own "9:00 AM"
+ * send time to mean anything relative to their actual audience).
+ */
+function OutreachTimezoneRow({ tenantId, timezone }: { tenantId: string; timezone: string }) {
+  const [value, setValue] = useState(timezone);
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const save = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await setOutreachTimezoneAction(tenantId, value);
+      if (!result.ok) setError(result.error);
+    });
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        {error && <p className="text-xs text-[var(--status-hot)]">{error}</p>}
+      </div>
+      <div className="flex items-center gap-2">
+        <select
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2.5 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+        >
+          {!IANA_TIMEZONES.includes(value) && <option value={value}>{value}</option>}
+          {IANA_TIMEZONES.map((tz) => (
+            <option key={tz} value={tz}>
+              {tz}
+            </option>
+          ))}
+        </select>
+        <Button size="sm" variant="outline" disabled={pending || value === timezone} onClick={save}>
           {pending ? "Saving..." : "Save"}
         </Button>
       </div>

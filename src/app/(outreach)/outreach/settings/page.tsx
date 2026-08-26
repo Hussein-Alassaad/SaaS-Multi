@@ -12,6 +12,7 @@ export default async function OutreachSettingsPage() {
   const initial = {
     businessName: settings.businessName,
     businessDescription: settings.businessDescription,
+    timezone: settings.timezone,
     targetNiche: settings.targetNiche,
     targetIndustry: settings.targetIndustry,
     targetLocation: settings.targetLocation,

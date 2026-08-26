@@ -272,3 +272,49 @@ export async function setOutreachDailyLimitAction(
   revalidatePath(`/admin/tenants/${tenantId}`);
   return { ok: true as const };
 }
+
+/**
+ * Sets the IANA timezone that this tenant's OutreachAccount.runTime values
+ * are scheduled against (see outreach/agent/scheduler.py's
+ * build_daily_schedule() and core/account_pool.py's _local_now(), both of
+ * which resolve a per-tenant timezone via OutreachSettings.timezone,
+ * falling back to the agent's global config.TIMEZONE if unset). Admin-only,
+ * same posture as setOutreachDailyLimitAction above -- tenants see their
+ * effective timezone read-only on their own Outreach Settings page.
+ */
+export async function setOutreachTimezoneAction(tenantId: string, timezone: string) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "edit");
+
+  // Validate against the runtime's own IANA database rather than a
+  // hardcoded list -- Intl throws on an unrecognized zone name, which is
+  // exactly the check needed here (no new npm dependency required).
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timezone });
+  } catch {
+    return { ok: false as const, error: "Not a valid IANA timezone." };
+  }
+
+  const settings = await db.outreachSettings.findUnique({ where: { tenantId } });
+  if (!settings) return { ok: false as const, error: "This tenant has no Outreach settings yet." };
+
+  const oldValue = settings.timezone;
+  await db.outreachSettings.update({ where: { tenantId }, data: { timezone } });
+
+  await db.auditLog.create({
+    data: {
+      actorId: session.id,
+      action: "outreach_settings.timezone_changed",
+      resource: "outreach_settings",
+      tenantId,
+      oldValue: JSON.stringify({ timezone: oldValue }),
+      newValue: JSON.stringify({ timezone }),
+      device: "Desktop",
+      browser: "Admin",
+    },
+  });
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  return { ok: true as const };
+}

@@ -14,6 +14,7 @@ const labelClass = "text-xs font-medium uppercase tracking-wide text-[var(--text
 export interface OutreachSettingsData {
   businessName: string;
   businessDescription: string;
+  timezone: string;
   targetNiche: string;
   targetIndustry: string;
   targetLocation: string;
@@ -103,6 +104,18 @@ export function SettingsClient({ initial }: { initial: OutreachSettingsData }) {
         <label className="block">
           <span className={labelClass}>Target location</span>
           <input className={inputClass} value={settings.targetLocation} onChange={(e) => set("targetLocation", e.target.value)} />
+        </label>
+        <label className="block">
+          <span className={labelClass}>Scheduling timezone</span>
+          <div
+            className={`${inputClass} flex cursor-not-allowed items-center opacity-70`}
+            title="Set by your account manager -- not tenant-editable"
+          >
+            {settings.timezone}
+          </div>
+          <p className="mt-1 text-xs text-[var(--text-5)]">
+            Every account&apos;s run time (see Account Health) is interpreted in this timezone.
+          </p>
         </label>
         <label className="block">
           <span className={labelClass}>Target business type</span>

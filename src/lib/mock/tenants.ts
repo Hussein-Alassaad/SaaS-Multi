@@ -30,6 +30,10 @@ export async function getTenantDetail(tenantId: string) {
       // Empty array for a non-Outreach tenant (e.g. marketing) -- harmless,
       // the admin UI only renders this tab when it finds rows here.
       outreachAccounts: { orderBy: { label: "asc" } },
+      // Null for a non-Outreach tenant -- the admin UI's timezone control
+      // only renders when outreachAccounts is non-empty anyway, so a null
+      // here is never actually shown.
+      outreachSettings: true,
     },
   });
   if (!tenant) return null;
