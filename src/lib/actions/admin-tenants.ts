@@ -274,6 +274,55 @@ export async function setOutreachDailyLimitAction(
 }
 
 /**
+ * Sets the From address/name an Outreach email account sends cold email
+ * as (account.sesFromEmail/sesFromName, sent via Resend --
+ * src/lib/outreach/resend-email.ts). Admin-only, same posture as
+ * setOutreachDailyLimitAction above: the address lives under a domain
+ * (nxrs.tech) the platform owns and has verified in Resend, not the
+ * tenant's own domain, so the tenant can see it but not pick it --
+ * AccountHealthClient shows it read-only, never submits these fields in
+ * its own draft (see AccountDraftInput's comment in outreach-accounts.ts).
+ */
+export async function setOutreachSenderAction(
+  accountId: string,
+  tenantId: string,
+  fromEmail: string,
+  fromName: string
+) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "edit");
+
+  const trimmedEmail = fromEmail.trim();
+  if (trimmedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+    return { ok: false as const, error: "Enter a valid email address." };
+  }
+
+  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+  if (!account) return { ok: false as const, error: "Account not found." };
+
+  const oldValue = { sesFromEmail: account.sesFromEmail, sesFromName: account.sesFromName };
+  const newValue = { sesFromEmail: trimmedEmail || null, sesFromName: fromName.trim() || null };
+  await db.outreachAccount.update({ where: { id: accountId }, data: newValue });
+
+  await db.auditLog.create({
+    data: {
+      actorId: session.id,
+      action: "outreach_account.sender_changed",
+      resource: "outreach_account",
+      tenantId,
+      oldValue: JSON.stringify(oldValue),
+      newValue: JSON.stringify(newValue),
+      device: "Desktop",
+      browser: "Admin",
+    },
+  });
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  return { ok: true as const };
+}
+
+/**
  * Sets the IANA timezone that this tenant's OutreachAccount.runTime values
  * are scheduled against (see outreach/agent/scheduler.py's
  * build_daily_schedule() and core/account_pool.py's _local_now(), both of

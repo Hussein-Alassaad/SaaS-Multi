@@ -26,6 +26,7 @@ import {
   deactivateTenantAction,
   reactivateTenantAction,
   setOutreachDailyLimitAction,
+  setOutreachSenderAction,
   setOutreachTimezoneAction,
 } from "@/lib/actions/admin-tenants";
 import { ArrowLeft, UserCog, Key, Mail, Bell, Folder, UserX, UserCheck, type LucideIcon } from "lucide-react";
@@ -126,6 +127,8 @@ interface OutreachAccountRow {
   igDailyLimit: number;
   linkedinDailyLimit: number;
   emailDailyLimit: number;
+  sesFromEmail: string | null;
+  sesFromName: string | null;
   status: string;
 }
 
@@ -526,7 +529,10 @@ export function TenantDetailClient({ tenant }: Props) {
             </CardHeader>
             <div className="space-y-3">
               {tenant.outreachAccounts.map((a) => (
-                <OutreachAccountLimitRow key={a.id} account={a} tenantId={tenant.id} />
+                <div key={a.id}>
+                  <OutreachAccountLimitRow account={a} tenantId={tenant.id} />
+                  {a.platform === "email" && <OutreachSenderRow account={a} tenantId={tenant.id} />}
+                </div>
               ))}
               {tenant.outreachAccounts.length === 0 && (
                 <EmptyState label="No Outreach accounts for this tenant yet." />
@@ -695,6 +701,59 @@ function OutreachAccountLimitRow({ account, tenantId }: { account: OutreachAccou
           {pending ? "Saving..." : "Save"}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The From email/name this email account sends cold outreach as (via
+ * Resend -- see resend-email.ts). Admin-only, same posture as
+ * OutreachAccountLimitRow above: the address lives under the platform's
+ * own verified Resend domain (nxrs.tech), not the tenant's, so the tenant
+ * sees it read-only on their own Account Health page but can't set it
+ * themselves. See setOutreachSenderAction's own docstring.
+ */
+function OutreachSenderRow({ account, tenantId }: { account: OutreachAccountRow; tenantId: string }) {
+  const [fromEmail, setFromEmail] = useState(account.sesFromEmail ?? "");
+  const [fromName, setFromName] = useState(account.sesFromName ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const dirty = fromEmail !== (account.sesFromEmail ?? "") || fromName !== (account.sesFromName ?? "");
+
+  const save = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await setOutreachSenderAction(account.id, tenantId, fromEmail, fromName);
+      if (!result.ok) setError(result.error);
+    });
+  };
+
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-[var(--border-hairline)] py-2.5 pl-3 last:border-0">
+      <div className="flex-1">
+        <p className="text-xs text-[var(--text-4)]">From address (e.g. zimmar@nxrs.tech)</p>
+        {error && <p className="text-xs text-[var(--status-hot)]">{error}</p>}
+        <div className="mt-1 flex gap-2">
+          <input
+            type="email"
+            placeholder="sender@nxrs.tech"
+            value={fromEmail}
+            onChange={(e) => setFromEmail(e.target.value)}
+            className="w-48 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2.5 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+          />
+          <input
+            type="text"
+            placeholder="From name (optional)"
+            value={fromName}
+            onChange={(e) => setFromName(e.target.value)}
+            className="w-40 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2.5 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+          />
+        </div>
+      </div>
+      <Button size="sm" variant="outline" disabled={pending || !dirty} onClick={save}>
+        {pending ? "Saving..." : "Save"}
+      </Button>
     </div>
   );
 }

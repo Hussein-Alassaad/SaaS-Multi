@@ -52,8 +52,6 @@ interface AccountDraft {
   proxyPort: string;
   proxyUsername: string;
   proxyPassword: string; // always starts empty -- never seeded from a decrypted value
-  sesFromEmail: string;
-  sesFromName: string;
 }
 
 const LOGIN_STATUS_STYLE: Record<string, string> = {
@@ -142,8 +140,6 @@ function draftFrom(account: AccountHealthRow): AccountDraft {
     proxyPort: account.proxyPort || "",
     proxyUsername: account.proxyUsername || "",
     proxyPassword: "",
-    sesFromEmail: account.sesFromEmail || "",
-    sesFromName: account.sesFromName || "",
   };
 }
 
@@ -243,10 +239,7 @@ export function AccountHealthClient({
     if (!draft) return;
 
     const payload: AccountDraftInput = { runTime: draft.runTime || undefined };
-    if (account.platform === "email") {
-      payload.sesFromEmail = draft.sesFromEmail;
-      payload.sesFromName = draft.sesFromName;
-    } else {
+    if (account.platform !== "email") {
       payload.proxyHost = draft.proxyHost;
       payload.proxyPort = draft.proxyPort;
       payload.proxyUsername = draft.proxyUsername;
@@ -467,22 +460,22 @@ export function AccountHealthClient({
                       </div>
                     </label>
                     <label className="block">
-                      <span className={labelClass}>SES from email</span>
-                      <input
-                        className={inputClass}
-                        placeholder="sender@yourdomain.com"
-                        value={draft.sesFromEmail}
-                        onChange={(e) => setDraftField(account.id, "sesFromEmail", e.target.value)}
-                      />
+                      <span className={labelClass}>From email</span>
+                      <div
+                        className={`${inputClass} flex cursor-not-allowed items-center opacity-70`}
+                        title="Set by your account manager -- not tenant-editable"
+                      >
+                        {account.sesFromEmail || "not set"}
+                      </div>
                     </label>
                     <label className="col-span-2 block sm:col-span-3">
-                      <span className={labelClass}>SES from name</span>
-                      <input
-                        className={inputClass}
-                        placeholder="none set"
-                        value={draft.sesFromName}
-                        onChange={(e) => setDraftField(account.id, "sesFromName", e.target.value)}
-                      />
+                      <span className={labelClass}>From name</span>
+                      <div
+                        className={`${inputClass} flex cursor-not-allowed items-center opacity-70`}
+                        title="Set by your account manager -- not tenant-editable"
+                      >
+                        {account.sesFromName || "not set"}
+                      </div>
                     </label>
                   </>
                 ) : (

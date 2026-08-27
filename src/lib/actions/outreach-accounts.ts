@@ -15,14 +15,17 @@ import { encryptSecret } from "@/lib/outreach/crypto";
  * means "leave the existing encrypted password untouched" (see crypto.ts /
  * accounts.ts).
  *
- * igDailyLimit/linkedinDailyLimit/emailDailyLimit are DELIBERATELY not
- * accepted here -- those are Admin-only now (see
- * src/lib/actions/admin-tenants.ts's setOutreachDailyLimitAction()), a
- * tenant's own session can no longer raise its own daily send/discovery
- * caps. AccountHealthClient shows them as read-only display fields, never
- * sends them in a draft submission -- even if a request were crafted by
- * hand with these fields set, this action has no code path that would
- * write them, so the client-side lock isn't the only thing enforcing this.
+ * igDailyLimit/linkedinDailyLimit/emailDailyLimit/sesFromEmail/sesFromName
+ * are DELIBERATELY not accepted here -- those are Admin-only now (see
+ * src/lib/actions/admin-tenants.ts's setOutreachDailyLimitAction() and
+ * setOutreachSenderAction()), a tenant's own session can no longer raise
+ * its own daily send/discovery caps or pick its own From address (the
+ * address lives under the platform's own verified Resend domain, not the
+ * tenant's). AccountHealthClient shows them as read-only display fields,
+ * never sends them in a draft submission -- even if a request were
+ * crafted by hand with these fields set, this action has no code path
+ * that would write them, so the client-side lock isn't the only thing
+ * enforcing this.
  */
 export interface AccountDraftInput {
   runTime?: string; // "HH:MM"
@@ -32,8 +35,6 @@ export interface AccountDraftInput {
   proxyPassword?: string;
   loginEmail?: string;
   loginPassword?: string;
-  sesFromEmail?: string;
-  sesFromName?: string;
 }
 
 export async function saveAccountDraftAction(accountId: string, draft: AccountDraftInput) {
@@ -86,9 +87,6 @@ export async function saveAccountDraftAction(accountId: string, draft: AccountDr
     data.loginStatus = "pending_first_login";
     data.loginError = null;
   }
-
-  if (draft.sesFromEmail !== undefined) data.sesFromEmail = draft.sesFromEmail || null;
-  if (draft.sesFromName !== undefined) data.sesFromName = draft.sesFromName || null;
 
   await db.outreachAccount.updateMany({ where: { id: accountId, tenantId: session.tenantId! }, data });
 

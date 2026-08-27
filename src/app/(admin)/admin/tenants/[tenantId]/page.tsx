@@ -114,6 +114,8 @@ export default async function TenantDetailPage({
       igDailyLimit: a.igDailyLimit,
       linkedinDailyLimit: a.linkedinDailyLimit,
       emailDailyLimit: a.emailDailyLimit,
+      sesFromEmail: a.sesFromEmail,
+      sesFromName: a.sesFromName,
       status: a.status,
     })),
     outreachTimezone: tenant.outreachSettings?.timezone ?? null,
