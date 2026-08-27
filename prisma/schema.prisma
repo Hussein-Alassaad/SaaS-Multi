@@ -1012,6 +1012,17 @@ model OutreachMessage {
   body             String
   isFollowup       Boolean   @default(false) @map("is_followup")
   isReengagement   Boolean   @default(false) @map("is_reengagement")
+  // A tenant-written reply sent from the "Reply Here" dashboard page
+  // (src/app/(outreach)/outreach/replies/), not agent-generated cold
+  // outreach -- tells the Python send-side (sending/*_send.py) to deliver
+  // this INTO the lead's existing conversation thread (reply-in-thread)
+  // instead of opening a fresh connection request / new email thread.
+  // Always created with approvalStatus="approved" already set (the tenant
+  // typing it and hitting Send IS the approval -- no separate review step),
+  // and picked up by a fast-polling loop (scheduler.py's
+  // run_reply_send_cycle(), ~every 2-3 min) rather than the normal daily
+  // full-cycle send, so a reply feels close to real-time.
+  isReply          Boolean   @default(false) @map("is_reply")
   approvalStatus   String    @default("awaiting") @map("approval_status")
   approvedById     String?   @map("approved_by_id")
   approvedAt       DateTime? @map("approved_at")
@@ -1031,6 +1042,7 @@ model OutreachMessage {
   @@index([tenantId, leadId])
   @@index([tenantId, approvalStatus])
   @@index([tenantId, approvalStatus, sendStatus])
+  @@index([tenantId, isReply, sendStatus])
   @@map("outreach_messages")
 }
 

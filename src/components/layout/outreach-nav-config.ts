@@ -1,6 +1,7 @@
 import {
   Radar,
   CheckCircle2,
+  MessagesSquare,
   Send,
   Briefcase,
   Mail,
@@ -28,6 +29,7 @@ export type { NavItem };
 export const OUTREACH_NAV_ITEMS: NavItem[] = [
   { label: "Live Feed", href: "/outreach", icon: Radar },
   { label: "Approval Queue", href: "/outreach/approvals", icon: CheckCircle2 },
+  { label: "Reply Here", href: "/outreach/replies", icon: MessagesSquare },
   { label: "Instagram Manual Send", href: "/outreach/instagram-manual", icon: Send },
   { label: "LinkedIn Activity", href: "/outreach/linkedin", icon: Briefcase },
   { label: "Email Outreach", href: "/outreach/email", icon: Mail },

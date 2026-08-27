@@ -24,6 +24,7 @@ export async function getInstagramManualQueueAction() {
       id: m.id,
       body: m.body,
       editedBody: m.editedBody,
+      isReply: m.isReply,
       lead: {
         id: m.lead.id,
         businessName: m.lead.businessName,
@@ -37,6 +38,14 @@ export async function getInstagramManualQueueAction() {
  * Instagram never auto-sends -- mirrors agent/sending/instagram_queue.py's
  * mark_sent() exactly: bump contact_count, set first_contacted_at only
  * once, move the lead to "contacted".
+ *
+ * A reply (isReply, from "Reply Here") skips all of that bookkeeping: the
+ * lead's first-contact/pipeline move already happened when the ORIGINAL
+ * outbound message was sent, so re-running it here would wrongly reset a
+ * lead that's already past "contacted" (e.g. "replied") back to
+ * "contacted", and double-count contact_count for what's actually an
+ * ongoing conversation, not a new contact. See instagram_queue.py's
+ * mark_sent() for the same guard on the Python side.
  */
 export async function markInstagramSentAction(messageId: string) {
   const session = await getTenantSession();
@@ -51,6 +60,12 @@ export async function markInstagramSentAction(messageId: string) {
   if (!message) return { ok: false as const, error: "Message not found." };
 
   const now = new Date();
+
+  if (message.isReply) {
+    await db.outreachMessage.update({ where: { id: messageId }, data: { sendStatus: "sent", sentAt: now } });
+    return { ok: true as const };
+  }
+
   const fromStage = message.lead.status;
 
   await db.$transaction([

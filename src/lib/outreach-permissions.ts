@@ -23,6 +23,7 @@ export function outreachRoleDbName(role: OutreachRole): string {
 export const OUTREACH_RESOURCES = [
   "dashboard",
   "approvals",
+  "replies",
   "instagram-manual",
   "linkedin",
   "email",
@@ -54,6 +55,7 @@ export const OUTREACH_PERMISSION_MATRIX: OutreachPermissionMatrix = {
   Manager: {
     dashboard: ["view"],
     approvals: ALL_ACTIONS,
+    replies: ALL_ACTIONS,
     "instagram-manual": ALL_ACTIONS,
     linkedin: ["view"],
     email: ["view"],
@@ -71,6 +73,7 @@ export const OUTREACH_PERMISSION_MATRIX: OutreachPermissionMatrix = {
   Operator: {
     dashboard: ["view"],
     approvals: ["view", "edit"], // approve/hold/edit messages, not settings/accounts
+    replies: ["view", "edit"], // read threads and send replies, not settings/accounts
     "instagram-manual": ["view", "edit"],
     linkedin: ["view"],
     email: ["view"],
