@@ -1023,6 +1023,14 @@ model OutreachMessage {
   // run_reply_send_cycle(), ~every 2-3 min) rather than the normal daily
   // full-cycle send, so a reply feels close to real-time.
   isReply          Boolean   @default(false) @map("is_reply")
+  // Optional media attachment on a reply (Vercel Blob URL -- see
+  // src/lib/outreach/reply-attachments.ts). Body can be empty when an
+  // attachment carries the whole message (e.g. a voice note with no typed
+  // text) -- sendReplyAction() only requires at least one of body/attachment,
+  // not both. Never set on agent-generated cold outreach.
+  attachmentUrl    String?   @map("attachment_url")
+  attachmentKind   String?   @map("attachment_kind") // "image" | "video" | "audio" | "file"
+  attachmentName   String?   @map("attachment_name") // original filename, for display
   approvalStatus   String    @default("awaiting") @map("approval_status")
   approvedById     String?   @map("approved_by_id")
   approvedAt       DateTime? @map("approved_at")

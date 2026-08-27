@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useTransition, useCallback, useMemo } from "react";
+import { useState, useTransition, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessagesSquare, Send, ExternalLink, AlertTriangle } from "lucide-react";
+import { MessagesSquare, Send, ExternalLink, AlertTriangle, Paperclip, Mic, Square, X, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
@@ -73,21 +73,53 @@ function LeadListItem({
 function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => void }) {
   const [draft, setDraft] = useState("");
   const [pending, startTransition] = useTransition();
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [recording, setRecording] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
   const { showToast } = useToast();
 
   const send = () => {
     const body = draft.trim();
-    if (!body) return;
+    if (!body && !attachment) return;
     startTransition(async () => {
-      const result = await sendReplyAction(thread.id, body);
+      const result = await sendReplyAction(thread.id, body, attachment);
       if (!result.ok) {
         showToast({ title: "Couldn't send", description: result.error, variant: "error" });
         return;
       }
       setDraft("");
+      setAttachment(null);
       showToast({ title: "Reply queued", description: "The agent will deliver it shortly.", variant: "success" });
       onSent();
     });
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      recordedChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(recordedChunksRef.current, { type: "audio/webm" });
+        setAttachment(new File([blob], `voice-note-${Date.now()}.webm`, { type: "audio/webm" }));
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      showToast({ title: "Couldn't access microphone", variant: "error" });
+    }
+  };
+
+  const stopRecording = () => {
+    mediaRecorderRef.current?.stop();
+    setRecording(false);
   };
 
   return (
@@ -124,7 +156,27 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
                     : "bg-[var(--surface-2)] text-[var(--text-1)]"
                 }`}
               >
-                <p className="whitespace-pre-wrap">{m.body}</p>
+                {m.attachmentUrl && m.attachmentKind === "image" && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={m.attachmentUrl} alt={m.attachmentName ?? "Attachment"} className="mb-1.5 max-h-64 rounded-lg" />
+                )}
+                {m.attachmentUrl && m.attachmentKind === "video" && (
+                  <video src={m.attachmentUrl} controls className="mb-1.5 max-h-64 rounded-lg" />
+                )}
+                {m.attachmentUrl && m.attachmentKind === "audio" && (
+                  <audio src={m.attachmentUrl} controls className="mb-1.5 w-full" />
+                )}
+                {m.attachmentUrl && m.attachmentKind === "file" && (
+                  <a
+                    href={m.attachmentUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mb-1.5 flex items-center gap-1.5 rounded-lg bg-black/10 px-2.5 py-1.5 text-xs underline"
+                  >
+                    <FileText className="h-3.5 w-3.5 shrink-0" /> {m.attachmentName ?? "Attachment"}
+                  </a>
+                )}
+                {m.body && <p className="whitespace-pre-wrap">{m.body}</p>}
                 <div className={`mt-1 flex items-center gap-1.5 text-[10px] ${m.from === "us" ? "text-white/70" : "text-[var(--text-5)]"}`}>
                   <span>{new Date(m.createdAt).toLocaleString()}</span>
                   {statusMeta && (
@@ -140,7 +192,48 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
       </div>
 
       <div className="border-t border-[var(--border-hairline)] p-3">
+        {attachment && (
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-[var(--surface-2)] px-2.5 py-1.5 text-xs text-[var(--text-3)]">
+            <span className="truncate">{attachment.name}</span>
+            <button type="button" onClick={() => setAttachment(null)} className="shrink-0 text-[var(--text-5)] hover:text-[var(--text-1)]">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,video/*,audio/*,application/pdf"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) setAttachment(file);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={pending || recording}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[var(--border-hairline-strong)] text-[var(--text-3)] transition-colors hover:bg-[var(--surface-2)] disabled:opacity-40"
+            title="Attach a photo, video, or file"
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={recording ? stopRecording : startRecording}
+            disabled={pending}
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border transition-colors disabled:opacity-40 ${
+              recording
+                ? "border-[var(--status-hot)]/40 bg-[var(--status-hot)]/10 text-[var(--status-hot)]"
+                : "border-[var(--border-hairline-strong)] text-[var(--text-3)] hover:bg-[var(--surface-2)]"
+            }`}
+            title={recording ? "Stop recording" : "Record a voice note"}
+          >
+            {recording ? <Square className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+          </button>
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -156,7 +249,7 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
           />
           <motion.button
             whileTap={{ scale: 0.96 }}
-            disabled={pending || !draft.trim()}
+            disabled={pending || (!draft.trim() && !attachment)}
             onClick={send}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-gradient text-white disabled:opacity-40"
           >

@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { revalidatePath } from "next/cache";
+import { saveReplyAttachment, AttachmentTooLarge } from "@/lib/outreach/reply-attachments";
 
 /**
  * "Reply Here" -- lets a tenant read and respond to a lead's real
@@ -35,6 +36,9 @@ interface ThreadMessage {
   sendStatus: string | null; // only set for "us" messages: "pending" | "sent" | "failed"
   sentAt: string | null;
   createdAt: string;
+  attachmentUrl: string | null; // only ever set for "us" messages -- replies we sent
+  attachmentKind: string | null; // "image" | "video" | "audio" | "file"
+  attachmentName: string | null;
 }
 
 export interface ReplyThreadLead {
@@ -71,7 +75,10 @@ export async function getReplyThreadsAction() {
       updatedAt: true,
       messages: {
         where: { sendStatus: { in: ["sent", "pending", "failed"] } },
-        select: { id: true, body: true, editedBody: true, isReply: true, sendStatus: true, sentAt: true, createdAt: true },
+        select: {
+          id: true, body: true, editedBody: true, isReply: true, sendStatus: true, sentAt: true, createdAt: true,
+          attachmentUrl: true, attachmentKind: true, attachmentName: true,
+        },
         orderBy: { createdAt: "asc" },
       },
       replies: {
@@ -90,6 +97,9 @@ export async function getReplyThreadsAction() {
       sendStatus: m.sendStatus,
       sentAt: m.sentAt?.toISOString() ?? null,
       createdAt: m.createdAt.toISOString(),
+      attachmentUrl: m.attachmentUrl,
+      attachmentKind: m.attachmentKind,
+      attachmentName: m.attachmentName,
     }));
     const inbound: ThreadMessage[] = lead.replies.map((r) => ({
       id: r.id,
@@ -98,6 +108,9 @@ export async function getReplyThreadsAction() {
       sendStatus: null,
       sentAt: null,
       createdAt: r.repliedAt.toISOString(),
+      attachmentUrl: null,
+      attachmentKind: null,
+      attachmentName: null,
     }));
     const messages = [...outbound, ...inbound].sort(
       (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
@@ -132,14 +145,24 @@ export async function getReplyThreadsAction() {
  * the normal once-daily full cycle, since a reply should feel close to
  * real-time -- see that function's own docstring.
  */
-export async function sendReplyAction(leadId: string, body: string) {
+/**
+ * `attachment` is optional -- a reply can be text-only (the common case),
+ * attachment-only (e.g. a voice note with nothing typed), or both. At
+ * least one of body/attachment is required; sending neither is rejected.
+ * File uploads to Vercel Blob (src/lib/outreach/reply-attachments.ts) --
+ * NOT src/lib/storage.ts's local-disk save, which doesn't survive Vercel's
+ * serverless filesystem. Next.js server actions accept a File argument
+ * directly from a client component call (no <form>/FormData needed), so
+ * RepliesClient just passes the File straight through.
+ */
+export async function sendReplyAction(leadId: string, body: string, attachment?: File | null) {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };
   const permCheck = outreachGuardResult(session.role?.name ?? "", "replies", "edit");
   if (!permCheck.ok) return permCheck;
 
   const trimmed = body.trim();
-  if (!trimmed) return { ok: false as const, error: "Reply can't be empty." };
+  if (!trimmed && !attachment) return { ok: false as const, error: "Reply can't be empty." };
 
   const lead = await db.outreachLead.findFirst({
     where: { id: leadId, tenantId: session.tenantId! },
@@ -148,6 +171,16 @@ export async function sendReplyAction(leadId: string, body: string) {
   if (!lead) return { ok: false as const, error: "Lead not found." };
   if (lead.doNotContact) return { ok: false as const, error: "This lead is marked Do Not Contact." };
 
+  let attachmentData: { url: string; kind: string; name: string } | null = null;
+  if (attachment && attachment.size > 0) {
+    try {
+      attachmentData = await saveReplyAttachment(session.tenantId!, leadId, attachment);
+    } catch (err) {
+      const message = err instanceof AttachmentTooLarge ? err.message : "Couldn't upload attachment.";
+      return { ok: false as const, error: message };
+    }
+  }
+
   const message = await db.outreachMessage.create({
     data: {
       tenantId: session.tenantId!,
@@ -155,6 +188,9 @@ export async function sendReplyAction(leadId: string, body: string) {
       channel: lead.platform,
       body: trimmed,
       isReply: true,
+      attachmentUrl: attachmentData?.url ?? null,
+      attachmentKind: attachmentData?.kind ?? null,
+      attachmentName: attachmentData?.name ?? null,
       approvalStatus: "approved",
       approvedById: session.id,
       approvedAt: new Date(),
