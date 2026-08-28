@@ -56,8 +56,23 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // The RUNNING APP's connection -- deliberately points at a restricted
+  // role (app_user, NOBYPASSRLS) once RLS is enabled, not the postgres
+  // superuser, so the database-level tenant-isolation policies in
+  // prisma/migrations_manual/enable_rls.sql actually apply (a BYPASSRLS
+  // role like postgres ignores every policy unconditionally -- FORCE ROW
+  // LEVEL SECURITY does not close this, see that file's own header comment).
+  url       = env("DATABASE_URL")
+  // Schema changes (prisma migrate/db push) still run as the postgres
+  // role -- DDL requires real ownership/admin privileges app_user
+  // deliberately doesn't have. Required whenever running a Prisma CLI
+  // command that touches the schema (migrate/db push/introspect) -- set
+  // this to the same connection string DATABASE_URL used before this
+  // split (the postgres role, session pooler on :5432 for real DDL --
+  // established convention this session, the :6543 transaction pooler
+  // hangs on DDL).
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 // ---------------------------------------------------------------------------
