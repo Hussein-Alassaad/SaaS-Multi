@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
 
 /**
@@ -7,17 +7,19 @@ import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
  * query. Reuses the tenantId+lastMessageAt composite index.
  */
 export async function getConversationsList(tenantId: string, cursor?: string, pageSize: number = DEFAULT_PAGE_SIZE) {
-  const rows = await db.conversation.findMany({
-    where: { tenantId },
-    include: {
-      channel: true,
-      nexarisClient: true,
-      messages: { orderBy: { createdAt: "desc" }, take: 1 },
-    },
-    orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.conversation.findMany({
+      where: { tenantId },
+      include: {
+        channel: true,
+        nexarisClient: true,
+        messages: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+      orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > pageSize;
   const items = hasMore ? rows.slice(0, pageSize) : rows;
@@ -25,15 +27,17 @@ export async function getConversationsList(tenantId: string, cursor?: string, pa
 }
 
 export async function getConversationDetail(tenantId: string, conversationId: string) {
-  return db.conversation.findFirst({
-    where: { id: conversationId, tenantId },
-    include: {
-      channel: true,
-      nexarisClient: true,
-      messages: { orderBy: { createdAt: "asc" } },
-      meetingRequests: { include: { slot: true }, orderBy: { createdAt: "desc" } },
-    },
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.conversation.findFirst({
+      where: { id: conversationId, tenantId },
+      include: {
+        channel: true,
+        nexarisClient: true,
+        messages: { orderBy: { createdAt: "asc" } },
+        meetingRequests: { include: { slot: true }, orderBy: { createdAt: "desc" } },
+      },
+    })
+  );
 }
 
 export const PIPELINE_STAGES = [
@@ -57,17 +61,19 @@ const PIPELINE_COLUMN_PAGE_SIZE = 25;
  * needs its own visible set.
  */
 export async function getPipelineColumn(tenantId: string, stage: PipelineStage, cursor?: string) {
-  const rows = await db.conversation.findMany({
-    where: { tenantId, stage },
-    include: {
-      channel: true,
-      nexarisClient: true,
-      messages: { orderBy: { createdAt: "desc" }, take: 1 },
-    },
-    orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
-    take: PIPELINE_COLUMN_PAGE_SIZE + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.conversation.findMany({
+      where: { tenantId, stage },
+      include: {
+        channel: true,
+        nexarisClient: true,
+        messages: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+      orderBy: [{ lastMessageAt: "desc" }, { id: "desc" }],
+      take: PIPELINE_COLUMN_PAGE_SIZE + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > PIPELINE_COLUMN_PAGE_SIZE;
   const items = hasMore ? rows.slice(0, PIPELINE_COLUMN_PAGE_SIZE) : rows;
@@ -84,11 +90,16 @@ export async function getPipelineBoard(tenantId: string) {
 }
 
 export async function getPendingApprovals(tenantId: string) {
-  return db.message.findMany({
-    where: { status: "PENDING_APPROVAL", conversation: { tenantId } },
-    include: {
-      conversation: { include: { nexarisClient: true, channel: true } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  // Message has no tenantId of its own -- it is scoped through its parent
+  // conversation, which IS an RLS table, so the relation filter below is
+  // itself enforced by the join under this tenant context.
+  return withTenant(tenantId, (tx) =>
+    tx.message.findMany({
+      where: { status: "PENDING_APPROVAL", conversation: { tenantId } },
+      include: {
+        conversation: { include: { nexarisClient: true, channel: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    })
+  );
 }

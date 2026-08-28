@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { getConversationsList } from "@/lib/agency/conversations";
@@ -38,14 +38,16 @@ export async function getConversationThreadAction(conversationId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "inbox", "view");
   if (!permCheck.ok) return permCheck;
 
-  const conversation = await db.conversation.findFirst({
-    where: { id: conversationId, tenantId: session.tenantId! },
-    include: {
-      channel: true,
-      nexarisClient: true,
-      messages: { orderBy: { createdAt: "asc" } },
-    },
-  });
+  const conversation = await withTenant(session.tenantId!, (tx) =>
+    tx.conversation.findFirst({
+      where: { id: conversationId, tenantId: session.tenantId! },
+      include: {
+        channel: true,
+        nexarisClient: true,
+        messages: { orderBy: { createdAt: "asc" } },
+      },
+    })
+  );
   if (!conversation) return { ok: false as const, error: "Conversation not found." };
 
   return {

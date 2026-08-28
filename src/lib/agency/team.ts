@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { db, withTenant } from "@/lib/db";
 
 export async function getTeamMembers(tenantId: string) {
   return db.user.findMany({
@@ -9,11 +9,13 @@ export async function getTeamMembers(tenantId: string) {
 }
 
 export async function getPendingInvites(tenantId: string) {
-  return db.teamInvite.findMany({
-    where: { tenantId, status: "PENDING" },
-    include: { role: true, invitedBy: true },
-    orderBy: { createdAt: "desc" },
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.teamInvite.findMany({
+      where: { tenantId, status: "PENDING" },
+      include: { role: true, invitedBy: true },
+      orderBy: { createdAt: "desc" },
+    })
+  );
 }
 
 /** Agency roles only (Role.name prefixed "Agency ") -- excludes platform staff roles. */

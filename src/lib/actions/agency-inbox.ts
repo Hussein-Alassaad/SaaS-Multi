@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { generateAiReply, detectLanguage } from "@/lib/ai/respond";
@@ -30,60 +30,70 @@ export async function simulateInboundMessageAction(input: {
   if (!input.body.trim()) return { ok: false as const, error: "Message body is required." };
   const tenantId = session.tenantId!;
 
-  const channel = await db.channel.upsert({
-    where: { tenantId_provider: { tenantId, provider: input.provider } },
-    update: {},
-    create: { tenantId, provider: input.provider, status: "CONNECTED", connectedAt: new Date() },
-  });
-
-  let nexarisClient = input.customerPhone
-    ? await db.nexarisClient.findFirst({ where: { tenantId, phone: input.customerPhone } })
-    : null;
-  if (!nexarisClient) {
-    nexarisClient = await db.nexarisClient.create({
-      data: { tenantId, name: input.customerName, phone: input.customerPhone },
-    });
-  }
-
-  let conversation = await db.conversation.findFirst({
-    where: { tenantId, channelId: channel.id, nexarisClientId: nexarisClient.id, status: { not: "CLOSED" } },
-  });
   const language = detectLanguage(input.body);
-  if (!conversation) {
-    conversation = await db.conversation.create({
-      data: { tenantId, channelId: channel.id, nexarisClientId: nexarisClient.id, language },
+
+  // Everything the AI call needs is read/written in one tenant scope, which
+  // is CLOSED before generateAiReply() runs -- that is a third-party LLM
+  // request, and holding a pooled Postgres connection open across it would
+  // tie up the pool for the length of an inference call.
+  const { channel, nexarisClient, conversation, settings, knowledgeEntries, priorMessages, openSlots } =
+    await withTenant(tenantId, async (tx) => {
+      const channel = await tx.channel.upsert({
+        where: { tenantId_provider: { tenantId, provider: input.provider } },
+        update: {},
+        create: { tenantId, provider: input.provider, status: "CONNECTED", connectedAt: new Date() },
+      });
+
+      let nexarisClient = input.customerPhone
+        ? await tx.nexarisClient.findFirst({ where: { tenantId, phone: input.customerPhone } })
+        : null;
+      if (!nexarisClient) {
+        nexarisClient = await tx.nexarisClient.create({
+          data: { tenantId, name: input.customerName, phone: input.customerPhone },
+        });
+      }
+
+      let conversation = await tx.conversation.findFirst({
+        where: { tenantId, channelId: channel.id, nexarisClientId: nexarisClient.id, status: { not: "CLOSED" } },
+      });
+      if (!conversation) {
+        conversation = await tx.conversation.create({
+          data: { tenantId, channelId: channel.id, nexarisClientId: nexarisClient.id, language },
+        });
+      }
+
+      await tx.message.create({
+        data: { conversationId: conversation.id, sender: "CUSTOMER", body: input.body, language, status: "SENT" },
+      });
+
+      const settings = await tx.aiSettings.upsert({
+        where: { tenantId },
+        update: {},
+        create: { tenantId },
+      });
+      const knowledgeEntries = await tx.knowledgeEntry.findMany({ where: { tenantId }, take: 10 });
+
+      // Full thread so far, oldest first -- lets the AI hold context across
+      // turns (not re-ask what the customer already told it) instead of
+      // replying to each message in isolation.
+      const priorMessages = await tx.message.findMany({
+        where: { conversationId: conversation.id },
+        orderBy: { createdAt: "asc" },
+      });
+
+      // Real open slots the owner has created (Agency > Meetings) -- the AI is
+      // only ever shown genuinely bookable times, never invents one. Capped at
+      // 10 so the prompt doesn't grow unbounded for a tenant with a long open
+      // calendar; soonest-first already makes the earliest options the ones
+      // most likely to matter to a customer asking "when are you free".
+      const openSlots = await tx.meetingSlot.findMany({
+        where: { tenantId, status: "AVAILABLE", startsAt: { gte: new Date() } },
+        orderBy: { startsAt: "asc" },
+        take: 10,
+      });
+
+      return { channel, nexarisClient, conversation, settings, knowledgeEntries, priorMessages, openSlots };
     });
-  }
-
-  await db.message.create({
-    data: { conversationId: conversation.id, sender: "CUSTOMER", body: input.body, language, status: "SENT" },
-  });
-
-  const settings = await db.aiSettings.upsert({
-    where: { tenantId },
-    update: {},
-    create: { tenantId },
-  });
-  const knowledgeEntries = await db.knowledgeEntry.findMany({ where: { tenantId }, take: 10 });
-
-  // Full thread so far, oldest first -- lets the AI hold context across
-  // turns (not re-ask what the customer already told it) instead of
-  // replying to each message in isolation.
-  const priorMessages = await db.message.findMany({
-    where: { conversationId: conversation.id },
-    orderBy: { createdAt: "asc" },
-  });
-
-  // Real open slots the owner has created (Agency > Meetings) -- the AI is
-  // only ever shown genuinely bookable times, never invents one. Capped at
-  // 10 so the prompt doesn't grow unbounded for a tenant with a long open
-  // calendar; soonest-first already makes the earliest options the ones
-  // most likely to matter to a customer asking "when are you free".
-  const openSlots = await db.meetingSlot.findMany({
-    where: { tenantId, status: "AVAILABLE", startsAt: { gte: new Date() } },
-    orderBy: { startsAt: "asc" },
-    take: 10,
-  });
 
   const aiReply = await generateAiReply({
     history: priorMessages.map((m) => ({
@@ -99,27 +109,31 @@ export async function simulateInboundMessageAction(input: {
     availableSlots: openSlots.map((s) => ({ id: s.id, startsAt: s.startsAt.toISOString() })),
   });
 
-  await db.message.create({
-    data: {
-      conversationId: conversation.id,
-      sender: "AI",
-      body: aiReply.body,
-      language: aiReply.language,
-      status: aiReply.requiresApproval ? "PENDING_APPROVAL" : "SENT",
-    },
-  });
+  // Second tenant scope, after the AI call has returned -- persists the
+  // reply and everything derived from it.
+  await withTenant(tenantId, async (tx) => {
+    await tx.message.create({
+      data: {
+        conversationId: conversation.id,
+        sender: "AI",
+        body: aiReply.body,
+        language: aiReply.language,
+        status: aiReply.requiresApproval ? "PENDING_APPROVAL" : "SENT",
+      },
+    });
 
-  // Apply whatever the AI has learned about this lead so far -- overwrites
-  // rather than merges, since each extraction call sees the whole
-  // conversation and produces its best current summary, not just what's
-  // new this turn.
-  await db.nexarisClient.update({
-    where: { id: nexarisClient.id },
-    data: {
-      name: aiReply.extracted.name ?? nexarisClient.name,
-      needs: aiReply.extracted.needs ?? nexarisClient.needs,
-      tag: aiReply.extracted.readyForHandoff && nexarisClient.tag === "REPLIED" ? "INTERESTED" : undefined,
-    },
+    // Apply whatever the AI has learned about this lead so far -- overwrites
+    // rather than merges, since each extraction call sees the whole
+    // conversation and produces its best current summary, not just what's
+    // new this turn.
+    await tx.nexarisClient.update({
+      where: { id: nexarisClient.id },
+      data: {
+        name: aiReply.extracted.name ?? nexarisClient.name,
+        needs: aiReply.extracted.needs ?? nexarisClient.needs,
+        tag: aiReply.extracted.readyForHandoff && nexarisClient.tag === "REPLIED" ? "INTERESTED" : undefined,
+      },
+    });
   });
 
   // The AI only ever PROPOSES a slot in its reply text -- creating the
@@ -135,14 +149,18 @@ export async function simulateInboundMessageAction(input: {
   let meetingProposed = false;
   if (aiReply.extracted.proposedSlotId) {
     try {
-      await db.meetingRequest.create({
-        data: {
-          tenantId,
-          conversationId: conversation.id,
-          nexarisClientId: nexarisClient.id,
-          slotId: aiReply.extracted.proposedSlotId,
-        },
-      });
+      // Its own scope: a unique-constraint failure here must roll back only
+      // this create, not the reply persisted just above.
+      await withTenant(tenantId, (tx) =>
+        tx.meetingRequest.create({
+          data: {
+            tenantId,
+            conversationId: conversation.id,
+            nexarisClientId: nexarisClient.id,
+            slotId: aiReply.extracted.proposedSlotId!,
+          },
+        })
+      );
       meetingProposed = true;
     } catch (err) {
       await logError({
@@ -159,14 +177,16 @@ export async function simulateInboundMessageAction(input: {
     : conversation.stage === "NEW"
       ? "CONTACTED"
       : conversation.stage;
-  await db.conversation.update({
-    where: { id: conversation.id },
-    data: {
-      lastMessageAt: new Date(),
-      stage: nextStage,
-      status: aiReply.requiresApproval ? "PENDING_APPROVAL" : "OPEN",
-    },
-  });
+  await withTenant(tenantId, (tx) =>
+    tx.conversation.update({
+      where: { id: conversation.id },
+      data: {
+        lastMessageAt: new Date(),
+        stage: nextStage,
+        status: aiReply.requiresApproval ? "PENDING_APPROVAL" : "OPEN",
+      },
+    })
+  );
 
   revalidatePath("/agency/inbox");
   revalidatePath("/agency/approvals");
@@ -183,17 +203,21 @@ export async function approveMessageAction(messageId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await db.message.findFirst({
-    where: { id: messageId, conversation: { tenantId: session.tenantId! } },
-    include: { conversation: true },
-  });
-  if (!message) return { ok: false as const, error: "Message not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.message.findFirst({
+      where: { id: messageId, conversation: { tenantId: session.tenantId! } },
+      include: { conversation: true },
+    });
+    if (!message) return false;
 
-  await db.message.update({
-    where: { id: messageId },
-    data: { status: "APPROVED", approvedById: session.id, approvedAt: new Date() },
+    await tx.message.update({
+      where: { id: messageId },
+      data: { status: "APPROVED", approvedById: session.id, approvedAt: new Date() },
+    });
+    await tx.conversation.update({ where: { id: message.conversationId }, data: { status: "OPEN" } });
+    return true;
   });
-  await db.conversation.update({ where: { id: message.conversationId }, data: { status: "OPEN" } });
+  if (!found) return { ok: false as const, error: "Message not found." };
 
   revalidatePath("/agency/approvals");
   revalidatePath("/agency/inbox");
@@ -209,16 +233,20 @@ export async function editAndApproveMessageAction(messageId: string, newBody: st
 
   if (!newBody.trim()) return { ok: false as const, error: "Message body is required." };
 
-  const message = await db.message.findFirst({
-    where: { id: messageId, conversation: { tenantId: session.tenantId! } },
-  });
-  if (!message) return { ok: false as const, error: "Message not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.message.findFirst({
+      where: { id: messageId, conversation: { tenantId: session.tenantId! } },
+    });
+    if (!message) return false;
 
-  await db.message.update({
-    where: { id: messageId },
-    data: { body: newBody, sender: "HUMAN", status: "APPROVED", approvedById: session.id, approvedAt: new Date() },
+    await tx.message.update({
+      where: { id: messageId },
+      data: { body: newBody, sender: "HUMAN", status: "APPROVED", approvedById: session.id, approvedAt: new Date() },
+    });
+    await tx.conversation.update({ where: { id: message.conversationId }, data: { status: "OPEN" } });
+    return true;
   });
-  await db.conversation.update({ where: { id: message.conversationId }, data: { status: "OPEN" } });
+  if (!found) return { ok: false as const, error: "Message not found." };
 
   revalidatePath("/agency/approvals");
   revalidatePath("/agency/inbox");
@@ -232,13 +260,17 @@ export async function rejectMessageAction(messageId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await db.message.findFirst({
-    where: { id: messageId, conversation: { tenantId: session.tenantId! } },
-  });
-  if (!message) return { ok: false as const, error: "Message not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.message.findFirst({
+      where: { id: messageId, conversation: { tenantId: session.tenantId! } },
+    });
+    if (!message) return false;
 
-  await db.message.update({ where: { id: messageId }, data: { status: "REJECTED" } });
-  await db.conversation.update({ where: { id: message.conversationId }, data: { status: "AWAITING_CUSTOMER" } });
+    await tx.message.update({ where: { id: messageId }, data: { status: "REJECTED" } });
+    await tx.conversation.update({ where: { id: message.conversationId }, data: { status: "AWAITING_CUSTOMER" } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Message not found." };
 
   revalidatePath("/agency/approvals");
   revalidatePath("/agency/inbox");
@@ -252,19 +284,23 @@ export async function updateConversationStageAction(conversationId: string, stag
   const permCheck = agencyGuardResult(session.role?.name ?? "", "pipeline", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const conversation = await db.conversation.findFirst({
-    where: { id: conversationId, tenantId: session.tenantId! },
-  });
-  if (!conversation) return { ok: false as const, error: "Conversation not found." };
-
-  await db.conversation.update({ where: { id: conversationId }, data: { stage } });
-
-  if (stage === "WON" || stage === "LOST") {
-    await db.nexarisClient.update({
-      where: { id: conversation.nexarisClientId },
-      data: { tag: stage === "WON" ? "CONVERTED" : "LOST" },
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const conversation = await tx.conversation.findFirst({
+      where: { id: conversationId, tenantId: session.tenantId! },
     });
-  }
+    if (!conversation) return false;
+
+    await tx.conversation.update({ where: { id: conversationId }, data: { stage } });
+
+    if (stage === "WON" || stage === "LOST") {
+      await tx.nexarisClient.update({
+        where: { id: conversation.nexarisClientId },
+        data: { tag: stage === "WON" ? "CONVERTED" : "LOST" },
+      });
+    }
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Conversation not found." };
 
   revalidatePath("/agency/pipeline");
   revalidatePath("/agency");
@@ -278,10 +314,13 @@ export async function updateClientTagAction(clientId: string, tag: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "clients", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const client = await db.nexarisClient.findFirst({ where: { id: clientId, tenantId: session.tenantId! } });
-  if (!client) return { ok: false as const, error: "Client not found." };
-
-  await db.nexarisClient.update({ where: { id: clientId }, data: { tag } });
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const client = await tx.nexarisClient.findFirst({ where: { id: clientId, tenantId: session.tenantId! } });
+    if (!client) return false;
+    await tx.nexarisClient.update({ where: { id: clientId }, data: { tag } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Client not found." };
 
   revalidatePath("/agency/clients");
   return { ok: true as const };
@@ -293,10 +332,13 @@ export async function updateClientNotesAction(clientId: string, notes: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "clients", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const client = await db.nexarisClient.findFirst({ where: { id: clientId, tenantId: session.tenantId! } });
-  if (!client) return { ok: false as const, error: "Client not found." };
-
-  await db.nexarisClient.update({ where: { id: clientId }, data: { notes } });
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const client = await tx.nexarisClient.findFirst({ where: { id: clientId, tenantId: session.tenantId! } });
+    if (!client) return false;
+    await tx.nexarisClient.update({ where: { id: clientId }, data: { notes } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Client not found." };
 
   revalidatePath("/agency/clients");
   return { ok: true as const };

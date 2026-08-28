@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
@@ -18,11 +18,13 @@ export async function updateAiSettingsAction(input: {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "settings", "edit");
   if (!permCheck.ok) return permCheck;
 
-  await db.aiSettings.upsert({
-    where: { tenantId: session.tenantId! },
-    update: input,
-    create: { tenantId: session.tenantId!, ...input },
-  });
+  await withTenant(session.tenantId!, (tx) =>
+    tx.aiSettings.upsert({
+      where: { tenantId: session.tenantId! },
+      update: input,
+      create: { tenantId: session.tenantId!, ...input },
+    })
+  );
 
   revalidatePath("/agency/settings");
   revalidatePath("/agency/ai-control");

@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
@@ -15,9 +15,11 @@ export async function createMeetingSlotAction(startsAt: string, durationMin: num
   if (isNaN(start.getTime())) return { ok: false as const, error: "Invalid date/time." };
   const end = new Date(start.getTime() + durationMin * 60000);
 
-  await db.meetingSlot.create({
-    data: { tenantId: session.tenantId!, startsAt: start, endsAt: end },
-  });
+  await withTenant(session.tenantId!, (tx) =>
+    tx.meetingSlot.create({
+      data: { tenantId: session.tenantId!, startsAt: start, endsAt: end },
+    })
+  );
 
   revalidatePath("/agency/meetings");
   return { ok: true as const };
@@ -29,11 +31,15 @@ export async function deleteMeetingSlotAction(slotId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "meetings", "delete");
   if (!permCheck.ok) return permCheck;
 
-  const slot = await db.meetingSlot.findFirst({ where: { id: slotId, tenantId: session.tenantId! } });
-  if (!slot) return { ok: false as const, error: "Slot not found." };
-  if (slot.status === "BOOKED") return { ok: false as const, error: "Cannot delete a booked slot." };
-
-  await db.meetingSlot.delete({ where: { id: slotId } });
+  const result = await withTenant(session.tenantId!, async (tx) => {
+    const slot = await tx.meetingSlot.findFirst({ where: { id: slotId, tenantId: session.tenantId! } });
+    if (!slot) return "not_found" as const;
+    if (slot.status === "BOOKED") return "booked" as const;
+    await tx.meetingSlot.delete({ where: { id: slotId } });
+    return "deleted" as const;
+  });
+  if (result === "not_found") return { ok: false as const, error: "Slot not found." };
+  if (result === "booked") return { ok: false as const, error: "Cannot delete a booked slot." };
 
   revalidatePath("/agency/meetings");
   return { ok: true as const };
@@ -45,20 +51,24 @@ export async function approveMeetingRequestAction(requestId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const request = await db.meetingRequest.findFirst({
-    where: { id: requestId, tenantId: session.tenantId! },
-    include: { conversation: true },
-  });
-  if (!request) return { ok: false as const, error: "Meeting request not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const request = await tx.meetingRequest.findFirst({
+      where: { id: requestId, tenantId: session.tenantId! },
+      include: { conversation: true },
+    });
+    if (!request) return false;
 
-  await db.$transaction([
-    db.meetingRequest.update({
+    // Was a db.$transaction([...]) array before RLS -- sequential against the
+    // same `tx` now, still one atomic transaction.
+    await tx.meetingRequest.update({
       where: { id: requestId },
       data: { status: "APPROVED", decidedById: session.id, decidedAt: new Date() },
-    }),
-    db.meetingSlot.update({ where: { id: request.slotId }, data: { status: "BOOKED" } }),
-    db.conversation.update({ where: { id: request.conversationId }, data: { stage: "MEETING_BOOKED" } }),
-  ]);
+    });
+    await tx.meetingSlot.update({ where: { id: request.slotId }, data: { status: "BOOKED" } });
+    await tx.conversation.update({ where: { id: request.conversationId }, data: { stage: "MEETING_BOOKED" } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Meeting request not found." };
 
   revalidatePath("/agency/approvals");
   revalidatePath("/agency/meetings");
@@ -73,16 +83,20 @@ export async function rejectMeetingRequestAction(requestId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const request = await db.meetingRequest.findFirst({ where: { id: requestId, tenantId: session.tenantId! } });
-  if (!request) return { ok: false as const, error: "Meeting request not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const request = await tx.meetingRequest.findFirst({ where: { id: requestId, tenantId: session.tenantId! } });
+    if (!request) return false;
 
-  await db.$transaction([
-    db.meetingRequest.update({
+    // Was a db.$transaction([...]) array before RLS -- sequential against the
+    // same `tx` now, still one atomic transaction.
+    await tx.meetingRequest.update({
       where: { id: requestId },
       data: { status: "REJECTED", decidedById: session.id, decidedAt: new Date() },
-    }),
-    db.meetingSlot.update({ where: { id: request.slotId }, data: { status: "AVAILABLE" } }),
-  ]);
+    });
+    await tx.meetingSlot.update({ where: { id: request.slotId }, data: { status: "AVAILABLE" } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Meeting request not found." };
 
   revalidatePath("/agency/approvals");
   revalidatePath("/agency/meetings");

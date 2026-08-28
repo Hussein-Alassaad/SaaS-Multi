@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 
 const PIPELINE_STAGES = [
   "NEW",
@@ -14,27 +14,39 @@ export async function getAgencyDashboardKpis(tenantId: string) {
   const now = new Date();
   const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const [
+  // Sequential inside one tenant scope -- these shared a Promise.all before,
+  // but one TransactionClient cannot run concurrent queries.
+  const {
     newMessagesToday,
     qualifiedLeads,
     pendingApprovals,
     upcomingMeetings,
     totalClients,
     conversationsByStage,
-  ] = await Promise.all([
-    db.message.count({
+  } = await withTenant(tenantId, async (tx) => {
+    const newMessagesToday = await tx.message.count({
       where: { sender: "CUSTOMER", createdAt: { gte: startOfDay }, conversation: { tenantId } },
-    }),
-    db.conversation.count({
+    });
+    const qualifiedLeads = await tx.conversation.count({
       where: { tenantId, stage: { in: ["INTERESTED", "MEETING_PENDING", "MEETING_BOOKED"] } },
-    }),
-    db.message.count({ where: { status: "PENDING_APPROVAL", conversation: { tenantId } } }),
-    db.meetingRequest.count({
+    });
+    const pendingApprovals = await tx.message.count({
+      where: { status: "PENDING_APPROVAL", conversation: { tenantId } },
+    });
+    const upcomingMeetings = await tx.meetingRequest.count({
       where: { tenantId, status: "APPROVED", slot: { startsAt: { gte: now } } },
-    }),
-    db.nexarisClient.count({ where: { tenantId } }),
-    db.conversation.findMany({ where: { tenantId }, select: { stage: true } }),
-  ]);
+    });
+    const totalClients = await tx.nexarisClient.count({ where: { tenantId } });
+    const conversationsByStage = await tx.conversation.findMany({ where: { tenantId }, select: { stage: true } });
+    return {
+      newMessagesToday,
+      qualifiedLeads,
+      pendingApprovals,
+      upcomingMeetings,
+      totalClients,
+      conversationsByStage,
+    };
+  });
 
   const stageBreakdown = Object.fromEntries(
     PIPELINE_STAGES.map((stage) => [stage, conversationsByStage.filter((c) => c.stage === stage).length])
@@ -51,7 +63,9 @@ export async function getAgencyDashboardKpis(tenantId: string) {
 }
 
 export async function getPipelineStageBreakdown(tenantId: string) {
-  const conversations = await db.conversation.findMany({ where: { tenantId }, select: { stage: true } });
+  const conversations = await withTenant(tenantId, (tx) =>
+    tx.conversation.findMany({ where: { tenantId }, select: { stage: true } })
+  );
   return PIPELINE_STAGES.map((stage) => ({
     stage,
     count: conversations.filter((c) => c.stage === stage).length,
@@ -59,10 +73,12 @@ export async function getPipelineStageBreakdown(tenantId: string) {
 }
 
 export async function getConversationVolumeSeries(tenantId: string) {
-  const conversations = await db.conversation.findMany({
-    where: { tenantId },
-    select: { createdAt: true },
-  });
+  const conversations = await withTenant(tenantId, (tx) =>
+    tx.conversation.findMany({
+      where: { tenantId },
+      select: { createdAt: true },
+    })
+  );
   const days: { date: string; conversations: number }[] = [];
   for (let i = 13; i >= 0; i--) {
     const d = new Date();
@@ -76,14 +92,16 @@ export async function getConversationVolumeSeries(tenantId: string) {
 }
 
 export async function getRecentConversations(tenantId: string, limit = 5) {
-  return db.conversation.findMany({
-    where: { tenantId },
-    include: {
-      nexarisClient: true,
-      channel: true,
-      messages: { orderBy: { createdAt: "desc" }, take: 1 },
-    },
-    orderBy: { lastMessageAt: "desc" },
-    take: limit,
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.conversation.findMany({
+      where: { tenantId },
+      include: {
+        nexarisClient: true,
+        channel: true,
+        messages: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
+      orderBy: { lastMessageAt: "desc" },
+      take: limit,
+    })
+  );
 }

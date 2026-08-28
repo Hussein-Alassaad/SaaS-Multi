@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult, agencyRoleDbName, AGENCY_ROLES, type AgencyRole } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
@@ -19,9 +19,11 @@ export async function inviteTeamMemberAction(email: string, role: AgencyRole) {
   const existingUser = await db.user.findUnique({ where: { email: email.trim() } });
   if (existingUser) return { ok: false as const, error: "That email is already a member." };
 
-  const existingInvite = await db.teamInvite.findFirst({
-    where: { tenantId: session.tenantId!, email: email.trim(), status: "PENDING" },
-  });
+  const existingInvite = await withTenant(session.tenantId!, (tx) =>
+    tx.teamInvite.findFirst({
+      where: { tenantId: session.tenantId!, email: email.trim(), status: "PENDING" },
+    })
+  );
   if (existingInvite) return { ok: false as const, error: "An invite is already pending for that email." };
 
   const roleRow = await db.role.findUnique({ where: { name: agencyRoleDbName(role) } });
@@ -29,20 +31,25 @@ export async function inviteTeamMemberAction(email: string, role: AgencyRole) {
 
   const tenant = await db.tenant.findUnique({ where: { id: session.tenantId! } });
 
-  const invite = await db.teamInvite.create({
-    data: { tenantId: session.tenantId!, email: email.trim(), roleId: roleRow.id, invitedById: session.id },
-  });
+  // TeamInvite and AuditLog are both RLS tables; User/Role/Tenant above are
+  // not, so they stay on the plain client.
+  const invite = await withTenant(session.tenantId!, async (tx) => {
+    const invite = await tx.teamInvite.create({
+      data: { tenantId: session.tenantId!, email: email.trim(), roleId: roleRow.id, invitedById: session.id },
+    });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "team.invited",
-      resource: "team",
-      tenantId: session.tenantId,
-      newValue: JSON.stringify({ email: email.trim(), role }),
-      device: "Desktop",
-      browser: "Agency OS",
-    },
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "team.invited",
+        resource: "team",
+        tenantId: session.tenantId,
+        newValue: JSON.stringify({ email: email.trim(), role }),
+        device: "Desktop",
+        browser: "Agency OS",
+      },
+    });
+    return invite;
   });
 
   // TeamInvite.id doubles as the accept-link token: cuids are already
@@ -64,10 +71,13 @@ export async function revokeInviteAction(inviteId: string) {
   const permCheck = agencyGuardResult(session.role?.name ?? "", "team", "delete");
   if (!permCheck.ok) return permCheck;
 
-  const invite = await db.teamInvite.findFirst({ where: { id: inviteId, tenantId: session.tenantId! } });
-  if (!invite) return { ok: false as const, error: "Invite not found." };
-
-  await db.teamInvite.update({ where: { id: inviteId }, data: { status: "REVOKED" } });
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const invite = await tx.teamInvite.findFirst({ where: { id: inviteId, tenantId: session.tenantId! } });
+    if (!invite) return false;
+    await tx.teamInvite.update({ where: { id: inviteId }, data: { status: "REVOKED" } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Invite not found." };
 
   revalidatePath("/agency/team");
 

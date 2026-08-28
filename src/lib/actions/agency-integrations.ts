@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
@@ -19,16 +19,18 @@ export async function toggleChannelConnectionAction(provider: ChannelProvider, c
 
   const tenantId = session.tenantId!;
 
-  await db.channel.upsert({
-    where: { tenantId_provider: { tenantId, provider } },
-    update: { status: connect ? "CONNECTED" : "DISCONNECTED", connectedAt: connect ? new Date() : null },
-    create: {
-      tenantId,
-      provider,
-      status: connect ? "CONNECTED" : "DISCONNECTED",
-      connectedAt: connect ? new Date() : null,
-    },
-  });
+  await withTenant(tenantId, (tx) =>
+    tx.channel.upsert({
+      where: { tenantId_provider: { tenantId, provider } },
+      update: { status: connect ? "CONNECTED" : "DISCONNECTED", connectedAt: connect ? new Date() : null },
+      create: {
+        tenantId,
+        provider,
+        status: connect ? "CONNECTED" : "DISCONNECTED",
+        connectedAt: connect ? new Date() : null,
+      },
+    })
+  );
 
   revalidatePath("/agency/integrations");
   revalidatePath("/agency/ai-control");
@@ -61,17 +63,19 @@ export async function disconnectOAuthChannelAction(provider: OAuthChannelProvide
 
   const tenantId = session.tenantId!;
 
-  await db.channel.updateMany({
-    where: { tenantId, provider },
-    data: {
-      status: "DISCONNECTED",
-      connectedAt: null,
-      oauthEmail: null,
-      oauthAccessToken: null,
-      oauthRefreshToken: null,
-      oauthExpiresAt: null,
-    },
-  });
+  await withTenant(tenantId, (tx) =>
+    tx.channel.updateMany({
+      where: { tenantId, provider },
+      data: {
+        status: "DISCONNECTED",
+        connectedAt: null,
+        oauthEmail: null,
+        oauthAccessToken: null,
+        oauthRefreshToken: null,
+        oauthExpiresAt: null,
+      },
+    })
+  );
 
   revalidatePath("/agency/integrations");
   revalidatePath("/agency/ai-control");

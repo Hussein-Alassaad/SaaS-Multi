@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
 
 /**
@@ -6,13 +6,15 @@ import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
  * tenantId+updatedAt composite index.
  */
 export async function getNexarisClientsList(tenantId: string, cursor?: string, pageSize: number = DEFAULT_PAGE_SIZE) {
-  const rows = await db.nexarisClient.findMany({
-    where: { tenantId },
-    include: { conversations: { select: { id: true, stage: true } } },
-    orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.nexarisClient.findMany({
+      where: { tenantId },
+      include: { conversations: { select: { id: true, stage: true } } },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > pageSize;
   const items = hasMore ? rows.slice(0, pageSize) : rows;
@@ -27,12 +29,14 @@ const CLIENT_HISTORY_PAGE_SIZE = 15;
  * detail page can paginate that list independently.
  */
 export async function getNexarisClientDetail(tenantId: string, clientId: string) {
-  const client = await db.nexarisClient.findFirst({
-    where: { id: clientId, tenantId },
-    include: {
-      meetingRequests: { include: { slot: true }, orderBy: { createdAt: "desc" } },
-    },
-  });
+  const client = await withTenant(tenantId, (tx) =>
+    tx.nexarisClient.findFirst({
+      where: { id: clientId, tenantId },
+      include: {
+        meetingRequests: { include: { slot: true }, orderBy: { createdAt: "desc" } },
+      },
+    })
+  );
   if (!client) return null;
 
   const history = await getClientConversationHistory(tenantId, clientId);
@@ -49,13 +53,15 @@ export async function getClientConversationHistory(
   cursor?: string,
   pageSize: number = CLIENT_HISTORY_PAGE_SIZE
 ) {
-  const rows = await db.conversation.findMany({
-    where: { tenantId, nexarisClientId: clientId },
-    include: { channel: true, messages: { orderBy: { createdAt: "asc" } } },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.conversation.findMany({
+      where: { tenantId, nexarisClientId: clientId },
+      include: { channel: true, messages: { orderBy: { createdAt: "asc" } } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > pageSize;
   const items = hasMore ? rows.slice(0, pageSize) : rows;
