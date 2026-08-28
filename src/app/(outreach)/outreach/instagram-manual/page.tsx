@@ -1,5 +1,5 @@
 import { getTenantSession } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { InstagramManualSendClient } from "./InstagramManualSendClient";
 
 /**
@@ -16,23 +16,27 @@ export default async function OutreachInstagramManualPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const [toContact, contacted, replied] = await Promise.all([
-    db.outreachMessage.findMany({
+  // One tenant scope for all three reads -- sequential rather than the
+  // previous Promise.all, since a single TransactionClient cannot have
+  // concurrent queries in flight.
+  const { toContact, contacted, replied } = await withTenant(tenantId, async (tx) => {
+    const toContact = await tx.outreachMessage.findMany({
       where: { tenantId, channel: "instagram", isReply: false, approvalStatus: "approved", sendStatus: "pending" },
       include: { lead: { select: { id: true, businessName: true, profileUrl: true } } },
       orderBy: { createdAt: "asc" },
-    }),
-    db.outreachLead.findMany({
+    });
+    const contacted = await tx.outreachLead.findMany({
       where: { tenantId, platform: "instagram", status: "contacted" },
       select: { id: true, businessName: true, profileUrl: true, updatedAt: true },
       orderBy: { updatedAt: "desc" },
-    }),
-    db.outreachLead.findMany({
+    });
+    const replied = await tx.outreachLead.findMany({
       where: { tenantId, platform: "instagram", status: { in: ["replied", "interested", "meeting_booked"] } },
       select: { id: true, businessName: true, profileUrl: true, updatedAt: true },
       orderBy: { updatedAt: "desc" },
-    }),
-  ]);
+    });
+    return { toContact, contacted, replied };
+  });
 
   return (
     <InstagramManualSendClient

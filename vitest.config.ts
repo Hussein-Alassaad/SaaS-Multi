@@ -34,6 +34,14 @@ export default defineConfig({
     // test doing several DB calls plus a rate-limit check can legitimately
     // take longer than that.
     testTimeout: 15_000,
+    // Same reasoning as testTimeout above, for beforeEach/afterEach hooks --
+    // which Vitest times separately, and which kept the 10s default. The
+    // DB-backed suites' beforeEach seeds a full fixture set (product, plan,
+    // and every role with its permission rows) one INSERT at a time; against
+    // the remote pooler that measures 9-10s, i.e. right on the old default,
+    // so those hooks failed intermittently with "Hook timed out in 10000ms"
+    // rather than for any behavioral reason.
+    hookTimeout: 30_000,
   },
   resolve: {
     alias: {

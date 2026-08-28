@@ -36,7 +36,7 @@ export async function simulateInboundMessageAction(input: {
   // is CLOSED before generateAiReply() runs -- that is a third-party LLM
   // request, and holding a pooled Postgres connection open across it would
   // tie up the pool for the length of an inference call.
-  const { channel, nexarisClient, conversation, settings, knowledgeEntries, priorMessages, openSlots } =
+  const { nexarisClient, conversation, settings, knowledgeEntries, priorMessages, openSlots } =
     await withTenant(tenantId, async (tx) => {
       const channel = await tx.channel.upsert({
         where: { tenantId_provider: { tenantId, provider: input.provider } },
@@ -92,7 +92,7 @@ export async function simulateInboundMessageAction(input: {
         take: 10,
       });
 
-      return { channel, nexarisClient, conversation, settings, knowledgeEntries, priorMessages, openSlots };
+      return { nexarisClient, conversation, settings, knowledgeEntries, priorMessages, openSlots };
     });
 
   const aiReply = await generateAiReply({

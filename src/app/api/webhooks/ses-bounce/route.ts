@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import MessageValidator from "sns-validator";
-import { db } from "@/lib/db";
+import { withTenant, withPlatformAccess } from "@/lib/db";
 import { logError } from "@/lib/error-log";
 
 /**
@@ -127,15 +127,35 @@ export async function POST(req: NextRequest) {
   // (which is the From address, not useful for finding the sending
   // account when a tenant could theoretically have multiple email accounts
   // sharing one verified domain).
-  const affectedMessages = await db.outreachMessage.findMany({
-    where: {
-      channel: "email",
-      sendStatus: "sent",
-      lead: { contactEmail: { in: recipientEmails } },
-    },
-    select: { tenantId: true, sentViaAccountId: true },
-  });
+  // Platform-scoped by necessity: this is a public, unauthenticated SNS
+  // endpoint with no session, and it cannot know which tenant a bounce
+  // belongs to until it finds the message that produced it -- the lookup
+  // itself is what resolves the tenant. The signature check above is what
+  // gates this; the per-account writes below are scoped per tenant.
+  const affectedMessages = await withPlatformAccess((tx) =>
+    tx.outreachMessage.findMany({
+      where: {
+        channel: "email",
+        sendStatus: "sent",
+        lead: { contactEmail: { in: recipientEmails } },
+      },
+      select: { tenantId: true, sentViaAccountId: true },
+    })
+  );
 
+  // Group the affected accounts by their owning tenant so each increment
+  // runs under that tenant's own RLS context rather than one blanket
+  // platform-wide write.
+  const accountsByTenant = new Map<string, Set<string>>();
+  for (const m of affectedMessages) {
+    if (!m.sentViaAccountId) continue;
+    let set = accountsByTenant.get(m.tenantId);
+    if (!set) {
+      set = new Set<string>();
+      accountsByTenant.set(m.tenantId, set);
+    }
+    set.add(m.sentViaAccountId);
+  }
   const accountIds = [...new Set(affectedMessages.map((m) => m.sentViaAccountId).filter((id): id is string => !!id))];
   if (accountIds.length === 0) {
     // A bounce for an email this app has no record of sending -- SES
@@ -145,10 +165,14 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    await db.outreachAccount.updateMany({
-      where: { id: { in: accountIds } },
-      data: { bounceCount: { increment: 1 } },
-    });
+    for (const [tenantId, ids] of accountsByTenant) {
+      await withTenant(tenantId, (tx) =>
+        tx.outreachAccount.updateMany({
+          where: { id: { in: [...ids] } },
+          data: { bounceCount: { increment: 1 } },
+        })
+      );
+    }
   } catch (err) {
     await logError({
       source: "outreach.ses.bounce_webhook",

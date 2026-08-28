@@ -1,6 +1,6 @@
 "use server";
 
-import { db, withPlatformAccess } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";

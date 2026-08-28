@@ -1,7 +1,7 @@
 import { getChannelsWithDefaults } from "@/lib/agency/channels";
 import { getAiSettings } from "@/lib/agency/settings";
 import { getTenantSession } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { type UiLanguage } from "@/lib/i18n";
 import { AiControlClient } from "./AiControlClient";
 
@@ -13,8 +13,15 @@ export default async function AiControlCenterPage() {
   const [channels, settings, activeConversations, pendingApprovals] = await Promise.all([
     getChannelsWithDefaults(tenantId),
     getAiSettings(tenantId),
-    db.conversation.count({ where: { tenantId, status: { in: ["OPEN", "PENDING_APPROVAL"] } } }),
-    db.message.count({ where: { status: "PENDING_APPROVAL", conversation: { tenantId } } }),
+    // getChannelsWithDefaults/getAiSettings above open their own tenant
+    // scopes, so the Promise.all stays -- only these two raw counts need
+    // wrapping, and they share one scope between them.
+    withTenant(tenantId, (tx) =>
+      tx.conversation.count({ where: { tenantId, status: { in: ["OPEN", "PENDING_APPROVAL"] } } })
+    ),
+    withTenant(tenantId, (tx) =>
+      tx.message.count({ where: { status: "PENDING_APPROVAL", conversation: { tenantId } } })
+    ),
   ]);
 
   return (

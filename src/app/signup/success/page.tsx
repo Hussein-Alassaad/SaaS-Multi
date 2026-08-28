@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getTenantSession } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { db, withTenant } from "@/lib/db";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { PaymentProofForm } from "./PaymentProofForm";
@@ -14,15 +14,20 @@ export default async function SignupSuccessPage() {
   const session = await getTenantSession();
   if (!session) redirect("/agency-login");
 
+  // Tenant is not an RLS table, so it stays on the plain client; Subscription
+  // and Payment are, and share one tenant scope.
   const tenant = await db.tenant.findUnique({ where: { id: session.tenantId! } });
-  const subscription = await db.subscription.findFirst({
-    where: { tenantId: session.tenantId! },
-    include: { plan: true },
-    orderBy: { createdAt: "desc" },
-  });
-  const latestPayment = await db.payment.findFirst({
-    where: { tenantId: session.tenantId!, method: "omt_wish" },
-    orderBy: { processedAt: "desc" },
+  const { subscription, latestPayment } = await withTenant(session.tenantId!, async (tx) => {
+    const subscription = await tx.subscription.findFirst({
+      where: { tenantId: session.tenantId! },
+      include: { plan: true },
+      orderBy: { createdAt: "desc" },
+    });
+    const latestPayment = await tx.payment.findFirst({
+      where: { tenantId: session.tenantId!, method: "omt_wish" },
+      orderBy: { processedAt: "desc" },
+    });
+    return { subscription, latestPayment };
   });
 
   if (!subscription) redirect("/agency");

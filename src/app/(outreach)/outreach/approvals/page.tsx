@@ -1,16 +1,18 @@
 import { getTenantSession } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { ApprovalQueueClient } from "./ApprovalQueueClient";
 
 export default async function OutreachApprovalsPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const messages = await db.outreachMessage.findMany({
-    where: { tenantId, approvalStatus: "awaiting" },
-    include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
-    orderBy: { createdAt: "asc" },
-  });
+  const messages = await withTenant(tenantId, (tx) =>
+    tx.outreachMessage.findMany({
+      where: { tenantId, approvalStatus: "awaiting" },
+      include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
+      orderBy: { createdAt: "asc" },
+    })
+  );
 
   const serialized = messages.map((m) => ({
     id: m.id,

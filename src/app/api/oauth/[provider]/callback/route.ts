@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 import { getSecretKey } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { encryptSecret } from "@/lib/crypto";
 import { exchangeCodeForTokens, type OAuthEmailProvider } from "@/lib/agency/oauth-providers";
 import { logError } from "@/lib/error-log";
@@ -73,8 +73,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ prov
   const expiresAt = new Date(Date.now() + tokens.expiresInSeconds * 1000);
 
   try {
-    await db.channel.upsert({
-      where: { tenantId_provider: { tenantId, provider } },
+    // tenantId here comes from the signed OAuth state token, verified above
+    // (the code refuses to proceed without it), so it is safe to scope to.
+    await withTenant(tenantId, (tx) =>
+      tx.channel.upsert({
+        where: { tenantId_provider: { tenantId, provider } },
       update: {
         status: "CONNECTED",
         displayName: tokens.email,
@@ -98,9 +101,10 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ prov
         oauthEmail: tokens.email,
         oauthAccessToken: encryptSecret(tokens.accessToken),
         oauthRefreshToken: tokens.refreshToken ? encryptSecret(tokens.refreshToken) : null,
-        oauthExpiresAt: expiresAt,
-      },
-    });
+          oauthExpiresAt: expiresAt,
+        },
+      })
+    );
   } catch (err) {
     await logError({
       source: "agency.oauth.save_channel",

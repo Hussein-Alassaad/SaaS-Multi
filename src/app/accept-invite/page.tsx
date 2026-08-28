@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { AcceptInviteForm } from "./AcceptInviteForm";
 
@@ -14,11 +14,17 @@ export default async function AcceptInvitePage({
 }) {
   const { inviteId } = await searchParams;
 
+  // Platform-scoped, same reasoning as acceptInviteAction: this page renders
+  // pre-authentication, and the invite id (an unguessable cuid, which is the
+  // accept-link token itself) is the only thing identifying which tenant the
+  // invite belongs to. Read-only -- it just decides what to render.
   const invite = inviteId
-    ? await db.teamInvite.findUnique({
-        where: { id: inviteId },
-        include: { tenant: true, role: true },
-      })
+    ? await withPlatformAccess((tx) =>
+        tx.teamInvite.findUnique({
+          where: { id: inviteId },
+          include: { tenant: true, role: true },
+        })
+      )
     : null;
 
   const valid = invite?.status === "PENDING";

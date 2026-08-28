@@ -1,5 +1,5 @@
 import { getTenantSession } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { safeJsonParse } from "@/lib/utils";
 import { SettingsClient } from "./SettingsClient";
 
@@ -7,7 +7,9 @@ export default async function OutreachSettingsPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const settings = await db.outreachSettings.findUniqueOrThrow({ where: { tenantId } });
+  const settings = await withTenant(tenantId, (tx) =>
+    tx.outreachSettings.findUniqueOrThrow({ where: { tenantId } })
+  );
 
   const initial = {
     businessName: settings.businessName,

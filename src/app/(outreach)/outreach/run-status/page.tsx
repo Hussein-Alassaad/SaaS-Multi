@@ -1,17 +1,19 @@
 import { getTenantSession } from "@/lib/auth";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { RunStatusClient } from "./RunStatusClient";
 
 export default async function OutreachRunStatusPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const runs = await db.outreachRun.findMany({
-    where: { tenantId },
-    include: { account: { select: { label: true } } },
-    orderBy: { startedAt: "desc" },
-    take: 20,
-  });
+  const runs = await withTenant(tenantId, (tx) =>
+    tx.outreachRun.findMany({
+      where: { tenantId },
+      include: { account: { select: { label: true } } },
+      orderBy: { startedAt: "desc" },
+      take: 20,
+    })
+  );
 
   const serialized = runs.map((r) => ({
     id: r.id,

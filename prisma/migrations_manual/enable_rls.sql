@@ -93,3 +93,25 @@ CREATE POLICY tenant_isolation ON error_logs USING (
   OR "tenantId" = current_setting('app.current_tenant_id', true)
   OR current_setting('app.is_platform_admin', true) = 'true'
 );
+
+-- ── test schema: grants only, deliberately NO RLS ───────────────────────────
+-- The vitest suite runs against a dedicated `test` schema in this same
+-- database (see vitest.config.ts, which rewrites DATABASE_URL's ?schema=),
+-- connecting as the SAME app_user role the app uses. Granting on `public`
+-- alone left app_user with no USAGE on `test` at all, so every DB-backed
+-- test failed with "permission denied for schema test" (SQLSTATE 42501) --
+-- not an RLS denial, a plain missing-grant error.
+--
+-- RLS is deliberately NOT enabled here. The tests' own fixtures
+-- (src/lib/actions/__tests__/test-helpers.ts) seed and truncate these tables
+-- directly through the plain `db` client with no tenant context, which is
+-- correct for a throwaway schema holding no real tenant data -- the
+-- isolation guarantees that matter are the ones enforced on `public` above.
+-- Re-run this block after `prisma db push` recreates the test schema, since
+-- newly created tables do not inherit past grants (the ALTER DEFAULT
+-- PRIVILEGES below is what covers tables created later by the schema owner).
+GRANT USAGE ON SCHEMA test TO app_user;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA test TO app_user;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA test TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA test GRANT ALL ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA test GRANT ALL ON SEQUENCES TO app_user;
