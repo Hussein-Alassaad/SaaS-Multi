@@ -1,7 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
+import { db, withTenant, withPlatformAccess } from "@/lib/db";
 import { createSessionToken, setSessionCookie, getTenantSession, hashPassword } from "@/lib/auth";
 import { agencyRoleDbName } from "@/lib/agency-permissions";
 import { rateLimit, getRequestIp } from "@/lib/rate-limit";
@@ -48,7 +48,11 @@ export async function createTenantAndOwner(input: SignupInput) {
   const verificationToken = randomBytes(32).toString("hex");
   const verificationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-  const result = await db.$transaction(async (tx) => {
+  // Platform-scoped: this runs pre-authentication and CREATES the tenant, so
+  // there is no tenant id to scope to until the create below returns. Same
+  // callback-form transaction as before, just with the RLS context set --
+  // Subscription and AuditLog writes below both require it.
+  const result = await withPlatformAccess(async (tx) => {
     const tenant = await tx.tenant.create({
       data: {
         productId: product.id,
@@ -169,37 +173,41 @@ export async function submitPaymentProofAction(_prevState: SignupState, formData
     return { error: parsed.error.issues[0]?.message ?? "Invalid submission." };
   }
 
-  const subscription = await db.subscription.findFirst({
-    where: { tenantId: session.tenantId! },
-    include: { plan: true },
-    orderBy: { createdAt: "desc" },
-  });
+  const subscription = await withTenant(session.tenantId!, (tx) =>
+    tx.subscription.findFirst({
+      where: { tenantId: session.tenantId! },
+      include: { plan: true },
+      orderBy: { createdAt: "desc" },
+    })
+  );
   if (!subscription) return { error: "No active subscription found for this workspace." };
 
   const amountCents =
     subscription.billingCycle === "yearly" ? subscription.plan.yearlyPrice : subscription.plan.monthlyPrice;
 
-  await db.payment.create({
-    data: {
-      tenantId: session.tenantId!,
-      amountCents,
-      status: "PENDING",
-      method: "omt_wish",
-      proofReference: parsed.data.proofReference,
-      proofNote: parsed.data.proofNote,
-    },
-  });
+  await withTenant(session.tenantId!, async (tx) => {
+    await tx.payment.create({
+      data: {
+        tenantId: session.tenantId!,
+        amountCents,
+        status: "PENDING",
+        method: "omt_wish",
+        proofReference: parsed.data.proofReference,
+        proofNote: parsed.data.proofNote,
+      },
+    });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "payment.proof_submitted",
-      resource: "payment",
-      tenantId: session.tenantId!,
-      newValue: JSON.stringify({ proofReference: parsed.data.proofReference, amountCents }),
-      device: "Desktop",
-      browser: "Signup",
-    },
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "payment.proof_submitted",
+        resource: "payment",
+        tenantId: session.tenantId!,
+        newValue: JSON.stringify({ proofReference: parsed.data.proofReference, amountCents }),
+        device: "Desktop",
+        browser: "Signup",
+      },
+    });
   });
 
   revalidatePath("/signup/success");

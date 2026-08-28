@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
@@ -37,18 +37,20 @@ export async function setTenantSectionEnabledAction(tenantId: string, productSlu
     },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: admin.id,
-      action: enabled ? "feature_flag.enabled" : "feature_flag.disabled",
-      resource: "feature-flags",
-      tenantId,
-      oldValue: JSON.stringify({ enabled: existing?.enabled ?? true }),
-      newValue: JSON.stringify({ enabled, key: sectionKey }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: admin.id,
+        action: enabled ? "feature_flag.enabled" : "feature_flag.disabled",
+        resource: "feature-flags",
+        tenantId,
+        oldValue: JSON.stringify({ enabled: existing?.enabled ?? true }),
+        newValue: JSON.stringify({ enabled, key: sectionKey }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   revalidatePath("/agency");
@@ -69,18 +71,20 @@ export async function setFeatureFlagEnabledAction(flagId: string, enabled: boole
     data: { enabled },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: admin.id,
-      action: enabled ? "feature_flag.enabled" : "feature_flag.disabled",
-      resource: "feature-flags",
-      tenantId: existing.scope === "TENANT" ? existing.scopeId : null,
-      oldValue: JSON.stringify({ enabled: existing.enabled }),
-      newValue: JSON.stringify({ enabled, key: existing.key, scope: existing.scope }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: admin.id,
+        action: enabled ? "feature_flag.enabled" : "feature_flag.disabled",
+        resource: "feature-flags",
+        tenantId: existing.scope === "TENANT" ? existing.scopeId : null,
+        oldValue: JSON.stringify({ enabled: existing.enabled }),
+        newValue: JSON.stringify({ enabled, key: existing.key, scope: existing.scope }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/feature-flags");
   revalidatePath("/admin/tenants");

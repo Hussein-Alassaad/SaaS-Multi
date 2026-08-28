@@ -1,15 +1,19 @@
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 
 export async function getAiOverview() {
-  const [logs, budgets, tenants] = await Promise.all([
-    db.aiUsageLog.findMany({
+  // Admin/platform scope: this page intentionally reports across every
+  // tenant. Sequential rather than Promise.all -- one TransactionClient
+  // cannot run concurrent queries.
+  const { logs, budgets, tenants } = await withPlatformAccess(async (tx) => {
+    const logs = await tx.aiUsageLog.findMany({
       include: { tenant: true, product: true },
       orderBy: { createdAt: "desc" },
       take: 100,
-    }),
-    db.aiBudget.findMany(),
-    db.tenant.findMany({ select: { id: true, companyName: true } }),
-  ]);
+    });
+    const budgets = await tx.aiBudget.findMany();
+    const tenants = await tx.tenant.findMany({ select: { id: true, companyName: true } });
+    return { logs, budgets, tenants };
+  });
 
   const totalCost = logs.reduce((s, l) => s + l.costCents, 0);
   const totalTokens = logs.reduce((s, l) => s + l.tokens, 0);

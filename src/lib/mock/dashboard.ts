@@ -1,7 +1,13 @@
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 
 export async function getDashboardKpis() {
-  const [
+  // Admin dashboard: platform-wide by definition. Sequential inside one
+  // scope rather than the previous Promise.all, since one TransactionClient
+  // cannot have concurrent queries in flight. (SupportTicket, Payment,
+  // AiUsageLog and Subscription are all RLS tables; Tenant/User/Product are
+  // not, but they ride along in the same scope rather than splitting the
+  // batch across two connections.)
+  const {
     totalTenants,
     activeTenants,
     totalUsers,
@@ -11,24 +17,31 @@ export async function getDashboardKpis() {
     aiLogsToday,
     aiLogsAll,
     activeSubs,
-  ] = await Promise.all([
-    db.tenant.count(),
-    db.tenant.count({ where: { status: "ACTIVE" } }),
-    db.user.count(),
-    db.supportTicket.count({ where: { status: { in: ["OPEN", "IN_PROGRESS"] } } }),
-    db.product.count({ where: { status: "ACTIVE" } }),
-    db.payment.findMany({ where: { status: "SUCCEEDED" } }),
-    db.aiUsageLog.findMany({
+  } = await withPlatformAccess(async (tx) => {
+    const totalTenants = await tx.tenant.count();
+    const activeTenants = await tx.tenant.count({ where: { status: "ACTIVE" } });
+    const totalUsers = await tx.user.count();
+    const openTickets = await tx.supportTicket.count({ where: { status: { in: ["OPEN", "IN_PROGRESS"] } } });
+    const activeProducts = await tx.product.count({ where: { status: "ACTIVE" } });
+    const payments = await tx.payment.findMany({ where: { status: "SUCCEEDED" } });
+    const aiLogsToday = await tx.aiUsageLog.findMany({
       where: { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } },
-    }),
-    db.aiUsageLog.findMany(),
+    });
+    const aiLogsAll = await tx.aiUsageLog.findMany();
     // MRR approximation: sum of active subscriptions' plan monthly price.
-    // Pulled into the same Promise.all as everything else above -- this
-    // used to be a separate `await` after the batch, adding one full
-    // extra network round-trip to Supabase per dashboard load for no
-    // reason (it doesn't depend on any of the other queries' results).
-    db.subscription.findMany({ where: { status: "ACTIVE" }, include: { plan: true } }),
-  ]);
+    const activeSubs = await tx.subscription.findMany({ where: { status: "ACTIVE" }, include: { plan: true } });
+    return {
+      totalTenants,
+      activeTenants,
+      totalUsers,
+      openTickets,
+      activeProducts,
+      payments,
+      aiLogsToday,
+      aiLogsAll,
+      activeSubs,
+    };
+  });
 
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -65,7 +78,7 @@ export async function getDashboardKpis() {
 }
 
 export async function getRevenueGrowthSeries() {
-  const payments = await db.payment.findMany({ where: { status: "SUCCEEDED" } });
+  const payments = await withPlatformAccess((tx) => tx.payment.findMany({ where: { status: "SUCCEEDED" } }));
   const days: { date: string; revenue: number }[] = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date();
@@ -109,7 +122,9 @@ type AiUsageLogForSeries = { createdAt: Date; costCents: number; tokens: number;
  * on its own.
  */
 export function getAiUsageLogsForSeries(): Promise<AiUsageLogForSeries[]> {
-  return db.aiUsageLog.findMany({ select: { createdAt: true, costCents: true, tokens: true, success: true } });
+  return withPlatformAccess((tx) =>
+    tx.aiUsageLog.findMany({ select: { createdAt: true, costCents: true, tokens: true, success: true } })
+  );
 }
 
 export async function getAiUsageSeries(preloadedLogs?: AiUsageLogForSeries[]) {
@@ -169,10 +184,12 @@ export async function getActiveUsersSeries() {
 }
 
 export async function getRecentActivity() {
-  const logs = await db.auditLog.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 12,
-    include: { actor: true, tenant: true },
-  });
+  const logs = await withPlatformAccess((tx) =>
+    tx.auditLog.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 12,
+      include: { actor: true, tenant: true },
+    })
+  );
   return logs;
 }

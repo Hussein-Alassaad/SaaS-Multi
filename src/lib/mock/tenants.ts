@@ -1,41 +1,51 @@
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getTenantSectionToggles } from "@/lib/agency/sections";
 
 export async function getTenantsList() {
-  const tenants = await db.tenant.findMany({
-    include: {
-      product: true,
-      owner: true,
-      subscriptions: { include: { plan: true }, orderBy: { createdAt: "desc" }, take: 1 },
-    },
-    orderBy: { createdAt: "desc" },
-  });
+  // The `subscriptions` include is an RLS table -- platform context is what
+  // lets the admin list show each tenant's current plan.
+  const tenants = await withPlatformAccess((tx) =>
+    tx.tenant.findMany({
+      include: {
+        product: true,
+        owner: true,
+        subscriptions: { include: { plan: true }, orderBy: { createdAt: "desc" }, take: 1 },
+      },
+      orderBy: { createdAt: "desc" },
+    })
+  );
   return tenants;
 }
 
 export async function getTenantDetail(tenantId: string) {
-  const tenant = await db.tenant.findUnique({
-    where: { id: tenantId },
-    include: {
-      product: true,
-      owner: true,
-      users: true,
-      subscriptions: { include: { plan: true }, orderBy: { createdAt: "desc" } },
-      invoices: { orderBy: { issuedAt: "desc" } },
-      payments: { orderBy: { processedAt: "desc" }, include: { refunds: true } },
-      aiUsageLogs: { orderBy: { createdAt: "desc" }, take: 50 },
-      supportTickets: { orderBy: { createdAt: "desc" }, include: { assignee: true } },
-      auditLogs: { orderBy: { createdAt: "desc" }, take: 30, include: { actor: true } },
-      impersonationSessions: { orderBy: { startedAt: "desc" }, include: { admin: true } },
-      // Empty array for a non-Outreach tenant (e.g. marketing) -- harmless,
-      // the admin UI only renders this tab when it finds rows here.
-      outreachAccounts: { orderBy: { label: "asc" } },
-      // Null for a non-Outreach tenant -- the admin UI's timezone control
-      // only renders when outreachAccounts is non-empty anyway, so a null
-      // here is never actually shown.
-      outreachSettings: true,
-    },
-  });
+  // Almost every include below is an RLS table (subscriptions, invoices,
+  // payments, aiUsageLogs, supportTickets, auditLogs, impersonationSessions,
+  // outreachAccounts, outreachSettings) -- this is the Admin tenant-detail
+  // page, which is legitimately allowed to read any tenant's data.
+  const tenant = await withPlatformAccess((tx) =>
+    tx.tenant.findUnique({
+      where: { id: tenantId },
+      include: {
+        product: true,
+        owner: true,
+        users: true,
+        subscriptions: { include: { plan: true }, orderBy: { createdAt: "desc" } },
+        invoices: { orderBy: { issuedAt: "desc" } },
+        payments: { orderBy: { processedAt: "desc" }, include: { refunds: true } },
+        aiUsageLogs: { orderBy: { createdAt: "desc" }, take: 50 },
+        supportTickets: { orderBy: { createdAt: "desc" }, include: { assignee: true } },
+        auditLogs: { orderBy: { createdAt: "desc" }, take: 30, include: { actor: true } },
+        impersonationSessions: { orderBy: { startedAt: "desc" }, include: { admin: true } },
+        // Empty array for a non-Outreach tenant (e.g. marketing) -- harmless,
+        // the admin UI only renders this tab when it finds rows here.
+        outreachAccounts: { orderBy: { label: "asc" } },
+        // Null for a non-Outreach tenant -- the admin UI's timezone control
+        // only renders when outreachAccounts is non-empty anyway, so a null
+        // here is never actually shown.
+        outreachSettings: true,
+      },
+    })
+  );
   if (!tenant) return null;
 
   const flags = await db.featureFlag.findMany({

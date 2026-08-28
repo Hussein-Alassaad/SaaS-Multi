@@ -1,10 +1,11 @@
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 
 export async function getMonitoringOverview() {
-  const [aiLogs, tenants] = await Promise.all([
-    db.aiUsageLog.findMany({ orderBy: { createdAt: "desc" }, take: 500 }),
-    db.tenant.count(),
-  ]);
+  const { aiLogs, tenants } = await withPlatformAccess(async (tx) => {
+    const aiLogs = await tx.aiUsageLog.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
+    const tenants = await tx.tenant.count();
+    return { aiLogs, tenants };
+  });
 
   const errorRate = aiLogs.length ? (aiLogs.filter((l) => !l.success).length / aiLogs.length) * 100 : 0;
   const avgLatency = aiLogs.length ? Math.round(aiLogs.reduce((s, l) => s + l.responseTimeMs, 0) / aiLogs.length) : 0;

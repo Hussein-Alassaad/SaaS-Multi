@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { hashPassword } from "@/lib/auth";
 import { rateLimit, getRequestIp } from "@/lib/rate-limit";
 import { sendEmail } from "@/lib/email";
@@ -78,16 +78,20 @@ export async function resetPasswordAction(
     data: { passwordHash, resetToken: null, resetTokenExpiresAt: null },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: user.id,
-      action: "user.password_reset",
-      resource: "user",
-      tenantId: user.tenantId,
-      device: "Desktop",
-      browser: "Password Reset",
-    },
-  });
+  // Platform-scoped: password reset runs pre-authentication, and the user
+  // may be platform staff with no tenant at all.
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: user.id,
+        action: "user.password_reset",
+        resource: "user",
+        tenantId: user.tenantId,
+        device: "Desktop",
+        browser: "Password Reset",
+      },
+    })
+  );
 
   return { success: true };
 }

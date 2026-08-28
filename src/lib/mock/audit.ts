@@ -1,9 +1,11 @@
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 
 export async function getAuditLogs() {
-  return db.auditLog.findMany({
-    include: { actor: true, tenant: true },
-    orderBy: { createdAt: "desc" },
-    take: 200,
-  });
+  return withPlatformAccess((tx) =>
+    tx.auditLog.findMany({
+      include: { actor: true, tenant: true },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    })
+  );
 }

@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getSession, hashPassword } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { agencyRoleDbName } from "@/lib/agency-permissions";
@@ -57,7 +57,10 @@ export async function createTenantAction(input: CreateTenantInput) {
 
   const passwordHash = await hashPassword(data.password);
 
-  const tenant = await db.$transaction(async (tx) => {
+  // Was db.$transaction(async (tx) => ...) -- withPlatformAccess is the same
+  // callback-form transaction with the platform RLS context set, which the
+  // OutreachSettings and AuditLog writes below now require.
+  const tenant = await withPlatformAccess(async (tx) => {
     const tenant = await tx.tenant.create({
       data: {
         productId: product.id,
@@ -128,9 +131,11 @@ export async function resetTenantOwnerPasswordAction(tenantId: string) {
   const newPassword = generatePassword();
   const passwordHash = await hashPassword(newPassword);
 
-  await db.$transaction([
-    db.user.update({ where: { id: tenant.owner.id }, data: { passwordHash } }),
-    db.auditLog.create({
+  // Was a db.$transaction([...]) array -- sequential against one tx now,
+  // still atomic.
+  await withPlatformAccess(async (tx) => {
+    await tx.user.update({ where: { id: tenant.owner!.id }, data: { passwordHash } });
+    await tx.auditLog.create({
       data: {
         actorId: session.id,
         action: "tenant.owner_password_reset",
@@ -139,8 +144,8 @@ export async function resetTenantOwnerPasswordAction(tenantId: string) {
         device: "Desktop",
         browser: "Admin",
       },
-    }),
-  ]);
+    });
+  });
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   return { ok: true as const, email: tenant.owner.email, password: newPassword };
@@ -165,13 +170,15 @@ export async function deactivateTenantAction(tenantId: string) {
   if (!tenant) return { ok: false as const, error: "Tenant not found." };
   if (tenant.status === "CHURNED") return { ok: false as const, error: "This tenant is already deactivated." };
 
-  await db.$transaction([
-    db.tenant.update({ where: { id: tenantId }, data: { status: "CHURNED" } }),
-    db.userSession.updateMany({
+  // Was a db.$transaction([...]) array -- sequential against one tx now,
+  // still atomic.
+  await withPlatformAccess(async (tx) => {
+    await tx.tenant.update({ where: { id: tenantId }, data: { status: "CHURNED" } });
+    await tx.userSession.updateMany({
       where: { user: { tenantId }, revokedAt: null },
       data: { revokedAt: new Date() },
-    }),
-    db.auditLog.create({
+    });
+    await tx.auditLog.create({
       data: {
         actorId: session.id,
         action: "tenant.deactivated",
@@ -182,8 +189,8 @@ export async function deactivateTenantAction(tenantId: string) {
         device: "Desktop",
         browser: "Admin",
       },
-    }),
-  ]);
+    });
+  });
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   revalidatePath("/admin/tenants");
@@ -201,9 +208,11 @@ export async function reactivateTenantAction(tenantId: string) {
   if (!tenant) return { ok: false as const, error: "Tenant not found." };
   if (tenant.status !== "CHURNED") return { ok: false as const, error: "This tenant is not deactivated." };
 
-  await db.$transaction([
-    db.tenant.update({ where: { id: tenantId }, data: { status: "ACTIVE" } }),
-    db.auditLog.create({
+  // Was a db.$transaction([...]) array -- sequential against one tx now,
+  // still atomic.
+  await withPlatformAccess(async (tx) => {
+    await tx.tenant.update({ where: { id: tenantId }, data: { status: "ACTIVE" } });
+    await tx.auditLog.create({
       data: {
         actorId: session.id,
         action: "tenant.reactivated",
@@ -214,8 +223,8 @@ export async function reactivateTenantAction(tenantId: string) {
         device: "Desktop",
         browser: "Admin",
       },
-    }),
-  ]);
+    });
+  });
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   revalidatePath("/admin/tenants");
@@ -250,24 +259,28 @@ export async function setOutreachDailyLimitAction(
     return { ok: false as const, error: "Enter a valid, non-negative number." };
   }
 
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
-  if (!account) return { ok: false as const, error: "Account not found." };
+  const found = await withPlatformAccess(async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+    if (!account) return false;
 
-  const oldValue = account[field];
-  await db.outreachAccount.update({ where: { id: accountId }, data: { [field]: value } });
+    const oldValue = account[field];
+    await tx.outreachAccount.update({ where: { id: accountId }, data: { [field]: value } });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "outreach_account.daily_limit_changed",
-      resource: "outreach_account",
-      tenantId,
-      oldValue: JSON.stringify({ [field]: oldValue }),
-      newValue: JSON.stringify({ [field]: value }),
-      device: "Desktop",
-      browser: "Admin",
-    },
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "outreach_account.daily_limit_changed",
+        resource: "outreach_account",
+        tenantId,
+        oldValue: JSON.stringify({ [field]: oldValue }),
+        newValue: JSON.stringify({ [field]: value }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Account not found." };
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   return { ok: true as const };
@@ -298,25 +311,29 @@ export async function setOutreachSenderAction(
     return { ok: false as const, error: "Enter a valid email address." };
   }
 
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
-  if (!account) return { ok: false as const, error: "Account not found." };
+  const found = await withPlatformAccess(async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+    if (!account) return false;
 
-  const oldValue = { sesFromEmail: account.sesFromEmail, sesFromName: account.sesFromName };
-  const newValue = { sesFromEmail: trimmedEmail || null, sesFromName: fromName.trim() || null };
-  await db.outreachAccount.update({ where: { id: accountId }, data: newValue });
+    const oldValue = { sesFromEmail: account.sesFromEmail, sesFromName: account.sesFromName };
+    const newValue = { sesFromEmail: trimmedEmail || null, sesFromName: fromName.trim() || null };
+    await tx.outreachAccount.update({ where: { id: accountId }, data: newValue });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "outreach_account.sender_changed",
-      resource: "outreach_account",
-      tenantId,
-      oldValue: JSON.stringify(oldValue),
-      newValue: JSON.stringify(newValue),
-      device: "Desktop",
-      browser: "Admin",
-    },
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "outreach_account.sender_changed",
+        resource: "outreach_account",
+        tenantId,
+        oldValue: JSON.stringify(oldValue),
+        newValue: JSON.stringify(newValue),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Account not found." };
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   return { ok: true as const };
@@ -345,24 +362,28 @@ export async function setOutreachTimezoneAction(tenantId: string, timezone: stri
     return { ok: false as const, error: "Not a valid IANA timezone." };
   }
 
-  const settings = await db.outreachSettings.findUnique({ where: { tenantId } });
-  if (!settings) return { ok: false as const, error: "This tenant has no Outreach settings yet." };
+  const found = await withPlatformAccess(async (tx) => {
+    const settings = await tx.outreachSettings.findUnique({ where: { tenantId } });
+    if (!settings) return false;
 
-  const oldValue = settings.timezone;
-  await db.outreachSettings.update({ where: { tenantId }, data: { timezone } });
+    const oldValue = settings.timezone;
+    await tx.outreachSettings.update({ where: { tenantId }, data: { timezone } });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "outreach_settings.timezone_changed",
-      resource: "outreach_settings",
-      tenantId,
-      oldValue: JSON.stringify({ timezone: oldValue }),
-      newValue: JSON.stringify({ timezone }),
-      device: "Desktop",
-      browser: "Admin",
-    },
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "outreach_settings.timezone_changed",
+        resource: "outreach_settings",
+        tenantId,
+        oldValue: JSON.stringify({ timezone: oldValue }),
+        newValue: JSON.stringify({ timezone }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "This tenant has no Outreach settings yet." };
 
   revalidatePath(`/admin/tenants/${tenantId}`);
   return { ok: true as const };

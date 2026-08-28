@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
@@ -56,16 +56,18 @@ export async function createPlanAction(input: PlanInput) {
       },
     });
 
-    await db.auditLog.create({
-      data: {
-        actorId: session.id,
-        action: "plan.created",
-        resource: "plan",
-        newValue: JSON.stringify(input),
-        device: "Desktop",
-        browser: "Admin Console",
-      },
-    });
+    await withPlatformAccess((tx) =>
+      tx.auditLog.create({
+        data: {
+          actorId: session.id,
+          action: "plan.created",
+          resource: "plan",
+          newValue: JSON.stringify(input),
+          device: "Desktop",
+          browser: "Admin Console",
+        },
+      })
+    );
 
     revalidatePath("/admin/subscriptions");
     return { ok: true as const, planId: plan.id };
@@ -107,22 +109,24 @@ export async function updatePlanAction(planId: string, input: PlanInput) {
       },
     });
 
-    await db.auditLog.create({
-      data: {
-        actorId: session.id,
-        action: "plan.updated",
-        resource: "plan",
-        oldValue: JSON.stringify({
-          name: existingPlan.name,
-          slug: existingPlan.slug,
-          monthlyPrice: existingPlan.monthlyPrice,
-          yearlyPrice: existingPlan.yearlyPrice,
-        }),
-        newValue: JSON.stringify(input),
-        device: "Desktop",
-        browser: "Admin Console",
-      },
-    });
+    await withPlatformAccess((tx) =>
+      tx.auditLog.create({
+        data: {
+          actorId: session.id,
+          action: "plan.updated",
+          resource: "plan",
+          oldValue: JSON.stringify({
+            name: existingPlan.name,
+            slug: existingPlan.slug,
+            monthlyPrice: existingPlan.monthlyPrice,
+            yearlyPrice: existingPlan.yearlyPrice,
+          }),
+          newValue: JSON.stringify(input),
+          device: "Desktop",
+          browser: "Admin Console",
+        },
+      })
+    );
 
     revalidatePath("/admin/subscriptions");
     return { ok: true as const };

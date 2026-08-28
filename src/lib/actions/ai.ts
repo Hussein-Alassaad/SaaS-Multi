@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
@@ -36,23 +36,25 @@ export async function updateGlobalAiSettingsAction(input: UpdateGlobalAiSettings
     },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: admin.id,
-      action: "ai.settings.updated",
-      resource: "ai",
-      oldValue: JSON.stringify({
-        defaultModel: existing.defaultModel,
-        dailyBudgetCents: existing.dailyBudgetCents,
-        monthlyBudgetCents: existing.monthlyBudgetCents,
-        rateLimitPerMin: existing.rateLimitPerMin,
-        cachingEnabled: existing.cachingEnabled,
-      }),
-      newValue: JSON.stringify(input),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: admin.id,
+        action: "ai.settings.updated",
+        resource: "ai",
+        oldValue: JSON.stringify({
+          defaultModel: existing.defaultModel,
+          dailyBudgetCents: existing.dailyBudgetCents,
+          monthlyBudgetCents: existing.monthlyBudgetCents,
+          rateLimitPerMin: existing.rateLimitPerMin,
+          cachingEnabled: existing.cachingEnabled,
+        }),
+        newValue: JSON.stringify(input),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/ai");
   return { ok: true as const };
@@ -71,17 +73,19 @@ export async function setAiKillSwitchAction(enabled: boolean) {
     data: { killSwitchEnabled: enabled },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: admin.id,
-      action: enabled ? "ai.kill_switch.activated" : "ai.kill_switch.restored",
-      resource: "ai",
-      oldValue: JSON.stringify({ killSwitchEnabled: existing.killSwitchEnabled }),
-      newValue: JSON.stringify({ killSwitchEnabled: enabled }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: admin.id,
+        action: enabled ? "ai.kill_switch.activated" : "ai.kill_switch.restored",
+        resource: "ai",
+        oldValue: JSON.stringify({ killSwitchEnabled: existing.killSwitchEnabled }),
+        newValue: JSON.stringify({ killSwitchEnabled: enabled }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/ai");
   return { ok: true as const };
@@ -100,17 +104,19 @@ export async function setProductAiKillSwitchAction(productId: string, enabled: b
     data: { killSwitchEnabled: enabled },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: admin.id,
-      action: enabled ? "ai.kill_switch.activated" : "ai.kill_switch.restored",
-      resource: "ai",
-      oldValue: JSON.stringify({ killSwitchEnabled: existing.killSwitchEnabled }),
-      newValue: JSON.stringify({ killSwitchEnabled: enabled, productId }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: admin.id,
+        action: enabled ? "ai.kill_switch.activated" : "ai.kill_switch.restored",
+        resource: "ai",
+        oldValue: JSON.stringify({ killSwitchEnabled: existing.killSwitchEnabled }),
+        newValue: JSON.stringify({ killSwitchEnabled: enabled, productId }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath(`/admin/products`);
   revalidatePath(`/admin/ai`);

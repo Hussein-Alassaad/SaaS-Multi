@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { saveUploadedFile } from "@/lib/storage";
@@ -75,16 +75,18 @@ export async function createNotificationAction(input: CreateNotificationInput) {
     },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "notification.created",
-      resource: "notification",
-      newValue: JSON.stringify({ title, audience: input.audience, audienceRef: input.audienceRef ?? null }),
-      device: "Desktop",
-      browser: "Admin",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "notification.created",
+        resource: "notification",
+        newValue: JSON.stringify({ title, audience: input.audience, audienceRef: input.audienceRef ?? null }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    })
+  );
 
   revalidatePath("/admin/notifications");
   revalidatePath("/agency");

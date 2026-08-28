@@ -1,7 +1,7 @@
 "use server";
 
 import { randomBytes, createHash } from "crypto";
-import { db } from "@/lib/db";
+import { db, withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
@@ -31,16 +31,18 @@ export async function updateSecurityPolicyAction(input: { mfaRequired: boolean; 
     create: { id: "singleton", mfaRequired: input.mfaRequired, ssoEnforced: input.ssoEnforced },
   });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "security_policy.updated",
-      resource: "security_policy",
-      newValue: JSON.stringify(input),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "security_policy.updated",
+        resource: "security_policy",
+        newValue: JSON.stringify(input),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/security");
   return { ok: true as const };
@@ -94,16 +96,18 @@ export async function revokeSessionAction(sessionId: string) {
 
   await db.userSession.update({ where: { id: sessionId }, data: { revokedAt: new Date() } });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "session.revoked",
-      resource: "user_session",
-      newValue: JSON.stringify({ sessionId }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "session.revoked",
+        resource: "user_session",
+        newValue: JSON.stringify({ sessionId }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/security");
   return { ok: true as const };
@@ -159,16 +163,18 @@ export async function createApiKeyAction(label: string) {
     return { ok: false as const, error: "Failed to create API key. Please try again." };
   }
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "api_key.created",
-      resource: "api_key",
-      newValue: JSON.stringify({ label }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "api_key.created",
+        resource: "api_key",
+        newValue: JSON.stringify({ label }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/security");
   // The only time the real key is ever returned -- callers must show this
@@ -183,16 +189,18 @@ export async function revokeApiKeyAction(keyId: string) {
 
   await db.apiKey.update({ where: { id: keyId }, data: { revokedAt: new Date() } });
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.id,
-      action: "api_key.revoked",
-      resource: "api_key",
-      newValue: JSON.stringify({ keyId }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
-  });
+  await withPlatformAccess((tx) =>
+    tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "api_key.revoked",
+        resource: "api_key",
+        newValue: JSON.stringify({ keyId }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    })
+  );
 
   revalidatePath("/admin/security");
   return { ok: true as const };

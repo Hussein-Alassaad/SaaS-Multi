@@ -1,10 +1,12 @@
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 
 export async function getFeatureRequests() {
-  return db.tenantFeatureRequest.findMany({
-    include: { tenant: true, filedBy: true },
-    orderBy: { createdAt: "desc" },
-  });
+  return withPlatformAccess((tx) =>
+    tx.tenantFeatureRequest.findMany({
+      include: { tenant: true, filedBy: true },
+      orderBy: { createdAt: "desc" },
+    })
+  );
 }
 
 export const FEATURE_REQUEST_STATUSES = [

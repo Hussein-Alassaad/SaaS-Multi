@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 import { getSession } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 import { revalidatePath } from "next/cache";
@@ -14,26 +14,30 @@ export async function updateFeatureRequestStatusAction(
   if (!admin) return { ok: false as const, error: "Not authenticated." };
   guard(admin.role?.name ?? "", "feature-requests", "edit");
 
-  const existing = await db.tenantFeatureRequest.findUnique({ where: { id: requestId } });
-  if (!existing) return { ok: false as const, error: "Request not found." };
+  const found = await withPlatformAccess(async (tx) => {
+    const existing = await tx.tenantFeatureRequest.findUnique({ where: { id: requestId } });
+    if (!existing) return false;
 
-  await db.tenantFeatureRequest.update({
-    where: { id: requestId },
-    data: { status },
-  });
+    await tx.tenantFeatureRequest.update({
+      where: { id: requestId },
+      data: { status },
+    });
 
-  await db.auditLog.create({
-    data: {
-      actorId: admin.id,
-      action: "feature_request.status_changed",
-      resource: "feature-requests",
-      tenantId: existing.tenantId,
-      oldValue: JSON.stringify({ status: existing.status }),
-      newValue: JSON.stringify({ status }),
-      device: "Desktop",
-      browser: "Admin Console",
-    },
+    await tx.auditLog.create({
+      data: {
+        actorId: admin.id,
+        action: "feature_request.status_changed",
+        resource: "feature-requests",
+        tenantId: existing.tenantId,
+        oldValue: JSON.stringify({ status: existing.status }),
+        newValue: JSON.stringify({ status }),
+        device: "Desktop",
+        browser: "Admin Console",
+      },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Request not found." };
 
   revalidatePath("/admin/feature-requests");
   return { ok: true as const };
