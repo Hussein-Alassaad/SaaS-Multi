@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 
@@ -29,29 +29,31 @@ export async function saveOutreachSettingsAction(input: {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "settings", "edit");
   if (!permCheck.ok) return permCheck;
 
-  await db.outreachSettings.update({
-    where: { tenantId: session.tenantId! },
-    data: {
-      businessName: input.businessName,
-      businessDescription: input.businessDescription,
-      targetNiche: input.targetNiche,
-      targetIndustry: input.targetIndustry,
-      targetLocation: input.targetLocation,
-      targetBusinessType: input.targetBusinessType,
-      targetCompanySizeMin: input.targetCompanySizeMin,
-      targetCompanySizeMax: input.targetCompanySizeMax,
-      targetNeeds: JSON.stringify(input.targetNeeds),
-      outreachLanguages: JSON.stringify(input.outreachLanguages),
-      messageStyle: input.messageStyle,
-      styleDurationDays: input.styleDurationDays,
-      defaultRecontactGapDays: input.defaultRecontactGapDays,
-      maxContactsPerLead: input.maxContactsPerLead,
-      approvalRequired: input.approvalRequired,
-      approvalReminderHours: input.approvalReminderHours,
-      whatsappRecipient1: input.whatsappRecipient1 || null,
-      whatsappRecipient2: input.whatsappRecipient2 || null,
-    },
-  });
+  await withTenant(session.tenantId!, (tx) =>
+    tx.outreachSettings.update({
+      where: { tenantId: session.tenantId! },
+      data: {
+        businessName: input.businessName,
+        businessDescription: input.businessDescription,
+        targetNiche: input.targetNiche,
+        targetIndustry: input.targetIndustry,
+        targetLocation: input.targetLocation,
+        targetBusinessType: input.targetBusinessType,
+        targetCompanySizeMin: input.targetCompanySizeMin,
+        targetCompanySizeMax: input.targetCompanySizeMax,
+        targetNeeds: JSON.stringify(input.targetNeeds),
+        outreachLanguages: JSON.stringify(input.outreachLanguages),
+        messageStyle: input.messageStyle,
+        styleDurationDays: input.styleDurationDays,
+        defaultRecontactGapDays: input.defaultRecontactGapDays,
+        maxContactsPerLead: input.maxContactsPerLead,
+        approvalRequired: input.approvalRequired,
+        approvalReminderHours: input.approvalReminderHours,
+        whatsappRecipient1: input.whatsappRecipient1 || null,
+        whatsappRecipient2: input.whatsappRecipient2 || null,
+      },
+    })
+  );
 
   return { ok: true as const };
 }

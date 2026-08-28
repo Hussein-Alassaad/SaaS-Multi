@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { encryptSecret } from "@/lib/outreach/crypto";
@@ -43,7 +43,9 @@ export async function saveAccountDraftAction(accountId: string, draft: AccountDr
   const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } })
+  );
   if (!account) return { ok: false as const, error: "Account not found." };
 
   const data: Record<string, unknown> = {};
@@ -88,7 +90,9 @@ export async function saveAccountDraftAction(accountId: string, draft: AccountDr
     data.loginError = null;
   }
 
-  await db.outreachAccount.updateMany({ where: { id: accountId, tenantId: session.tenantId! }, data });
+  await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.updateMany({ where: { id: accountId, tenantId: session.tenantId! }, data })
+  );
 
   return { ok: true as const };
 }
@@ -118,9 +122,11 @@ export async function createOutreachAccountAction(input: CreateAccountInput) {
     return { ok: false as const, error: "Invalid platform." };
   }
 
-  const account = await db.outreachAccount.create({
-    data: { tenantId: session.tenantId!, label, platform: input.platform },
-  });
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.create({
+      data: { tenantId: session.tenantId!, label, platform: input.platform },
+    })
+  );
 
   return { ok: true as const, accountId: account.id };
 }
@@ -131,10 +137,13 @@ export async function deleteOutreachAccountAction(accountId: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "delete");
   if (!permCheck.ok) return permCheck;
 
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
-  if (!account) return { ok: false as const, error: "Account not found." };
-
-  await db.outreachAccount.deleteMany({ where: { id: accountId, tenantId: session.tenantId! } });
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
+    if (!account) return false;
+    await tx.outreachAccount.deleteMany({ where: { id: accountId, tenantId: session.tenantId! } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Account not found." };
 
   return { ok: true as const };
 }
@@ -145,13 +154,16 @@ export async function toggleRedistributeAction(accountId: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
-  if (!account) return { ok: false as const, error: "Account not found." };
-
-  await db.outreachAccount.updateMany({
-    where: { id: accountId, tenantId: session.tenantId! },
-    data: { redistributeFlag: !account.redistributeFlag },
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
+    if (!account) return false;
+    await tx.outreachAccount.updateMany({
+      where: { id: accountId, tenantId: session.tenantId! },
+      data: { redistributeFlag: !account.redistributeFlag },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Account not found." };
 
   return { ok: true as const };
 }
@@ -162,13 +174,16 @@ export async function resumeAccountAction(accountId: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
-  if (!account) return { ok: false as const, error: "Account not found." };
-
-  await db.outreachAccount.updateMany({
-    where: { id: accountId, tenantId: session.tenantId! },
-    data: { status: "active", warningType: null, warningReason: null, redistributeFlag: false },
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId: session.tenantId! } });
+    if (!account) return false;
+    await tx.outreachAccount.updateMany({
+      where: { id: accountId, tenantId: session.tenantId! },
+      data: { status: "active", warningType: null, warningReason: null, redistributeFlag: false },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Account not found." };
 
   return { ok: true as const };
 }

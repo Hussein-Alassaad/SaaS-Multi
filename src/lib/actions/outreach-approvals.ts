@@ -1,6 +1,7 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withTenant, withPlatformAccess } from "@/lib/db";
+import type { Prisma } from "@prisma/client";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { sendOutreachEmail } from "@/lib/outreach/resend-email";
@@ -34,11 +35,13 @@ export async function getApprovalQueueAction() {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "view");
   if (!permCheck.ok) return permCheck;
 
-  const messages = await db.outreachMessage.findMany({
-    where: { tenantId: session.tenantId!, approvalStatus: "awaiting" },
-    include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
-    orderBy: { createdAt: "asc" },
-  });
+  const messages = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachMessage.findMany({
+      where: { tenantId: session.tenantId!, approvalStatus: "awaiting" },
+      include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
+      orderBy: { createdAt: "asc" },
+    })
+  );
 
   return { ok: true as const, messages: messages.map(serializeApprovalMessage) };
 }
@@ -50,18 +53,20 @@ export async function getApprovalQueueAction() {
  * and that runs in the Python agent; the two stay in sync by being built
  * against the same rule, not by importing across languages).
  */
-async function maybeAdvanceLead(tenantId: string, leadId: string, changedBy: string) {
-  const messages = await db.outreachMessage.findMany({
+async function maybeAdvanceLead(tx: Prisma.TransactionClient, tenantId: string, leadId: string, changedBy: string) {
+  const messages = await tx.outreachMessage.findMany({
     where: { tenantId, leadId },
     select: { approvalStatus: true },
   });
   if (messages.length > 0 && messages.every((m) => m.approvalStatus === "approved")) {
-    await db.$transaction([
-      db.outreachLead.update({ where: { id: leadId }, data: { status: "approved" } }),
-      db.outreachPipelineHistory.create({
-        data: { tenantId, leadId, fromStage: "awaiting_approval", toStage: "approved", changedBy },
-      }),
-    ]);
+    // Was a db.$transaction([...]) array before RLS -- Prisma can't nest a
+    // transaction inside the withTenant() transaction this now runs in, so
+    // the two writes are issued sequentially against the SAME `tx`. Still
+    // atomic: they share the caller's single enclosing transaction.
+    await tx.outreachLead.update({ where: { id: leadId }, data: { status: "approved" } });
+    await tx.outreachPipelineHistory.create({
+      data: { tenantId, leadId, fromStage: "awaiting_approval", toStage: "approved", changedBy },
+    });
   }
 }
 
@@ -101,81 +106,75 @@ const BOUNCE_RATE_MIN_SAMPLE = 20; // don't act on bounce rate until there's eno
 async function sendIfEmailChannel(tenantId: string, message: { id: string; leadId: string; channel: string; body: string; editedBody: string | null }) {
   if (message.channel !== "email") return;
 
-  const lead = await db.outreachLead.findFirst({
-    where: { id: message.leadId, tenantId },
-    select: { businessName: true, contactEmail: true, accountId: true, doNotContact: true },
-  });
-  if (!lead?.contactEmail) {
-    await logError({
-      source: "outreach.ses.send",
-      error: new Error("Lead has no contact email on file"),
-      tenantId,
-      context: { leadId: message.leadId, messageId: message.id },
+  // Everything up to (but NOT including) the real SES network call runs
+  // inside one withTenant transaction: the lead/account lookups, the
+  // bounce/pause guards, and the locked cap-check-and-claim. The SES call
+  // itself is deliberately OUTSIDE it -- holding a Postgres transaction
+  // (and the FOR UPDATE row lock below) open across a third-party HTTP
+  // request would pin a pooled connection and block every concurrent
+  // approval for the same account on network latency. The claim is
+  // committed before the send and corrected afterward if the send fails,
+  // which is the same ordering this had pre-RLS.
+  const prepared = await withTenant(tenantId, async (tx) => {
+    const lead = await tx.outreachLead.findFirst({
+      where: { id: message.leadId, tenantId },
+      select: { businessName: true, contactEmail: true, accountId: true, doNotContact: true },
     });
-    return;
-  }
-  if (lead.doNotContact) {
-    // Hard stop, checked at the one real send call site -- a lead marked
-    // Do Not Contact must never be emailed again, regardless of how this
-    // message reached "approved" (human click or the auto-approve path in
-    // scheduler.py). Mark the message failed rather than leaving it stuck
-    // "approved"/"pending" forever, so it's visibly resolved, not silently
-    // dropped.
-    await db.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
-    return;
-  }
+    if (!lead?.contactEmail) {
+      return { kind: "error" as const, message: "Lead has no contact email on file", context: {} };
+    }
+    if (lead.doNotContact) {
+      // Hard stop, checked at the one real send call site -- a lead marked
+      // Do Not Contact must never be emailed again, regardless of how this
+      // message reached "approved" (human click or the auto-approve path in
+      // scheduler.py). Mark the message failed rather than leaving it stuck
+      // "approved"/"pending" forever, so it's visibly resolved, not silently
+      // dropped.
+      await tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
+      return { kind: "stop" as const };
+    }
 
-  const account = lead.accountId
-    ? await db.outreachAccount.findUnique({ where: { id: lead.accountId } })
-    : await db.outreachAccount.findFirst({ where: { tenantId, platform: "email", status: "active" } });
-  if (!account?.sesFromEmail) {
-    await logError({
-      source: "outreach.ses.send",
-      error: new Error("No email-sending account configured for this tenant"),
-      tenantId,
-      context: { leadId: message.leadId, messageId: message.id },
-    });
-    return;
-  }
+    const account = lead.accountId
+      ? await tx.outreachAccount.findUnique({ where: { id: lead.accountId } })
+      : await tx.outreachAccount.findFirst({ where: { tenantId, platform: "email", status: "active" } });
+    if (!account?.sesFromEmail) {
+      return { kind: "error" as const, message: "No email-sending account configured for this tenant", context: {} };
+    }
 
-  if (account.status === "paused" || account.status === "warned") {
-    // Bounce-safety pause (or a manual pause) blocks new sends outright --
-    // same "paused accounts never self-resume" rule the Python agent's
-    // account_pool.py already enforces for LinkedIn/Instagram (core rule R9
-    // in the original spec: redistribution/resuming is always a human call).
-    await db.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
-    await logError({
-      source: "outreach.ses.send",
-      error: new Error(`Email account is ${account.status} -- send blocked until manually resumed`),
-      tenantId,
-      context: { leadId: message.leadId, messageId: message.id, accountId: account.id },
-    });
-    return;
-  }
+    if (account.status === "paused" || account.status === "warned") {
+      // Bounce-safety pause (or a manual pause) blocks new sends outright --
+      // same "paused accounts never self-resume" rule the Python agent's
+      // account_pool.py already enforces for LinkedIn/Instagram (core rule R9
+      // in the original spec: redistribution/resuming is always a human call).
+      await tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
+      return {
+        kind: "error" as const,
+        message: `Email account is ${account.status} -- send blocked until manually resumed`,
+        context: { accountId: account.id },
+      };
+    }
 
-  // Cap check + claim happen inside one transaction that takes a row lock on
-  // the account (SELECT ... FOR UPDATE) BEFORE counting today's sends, and
-  // the claim itself (marking THIS message "sent" so it counts toward the
-  // cap) happens INSIDE that same locked transaction, before the real SES
-  // call -- without this, concurrent calls (e.g. Approve All firing every
-  // message in parallel via Promise.all, or an approval landing at the same
-  // moment dispatchPacingQueueAction's cron runs) each read the same
-  // "sentToday" count before any of them has written anything back, so all
-  // of them can see room under the cap and all send -- blowing the daily
-  // limit several times over, exactly the spam-flagging risk this cap
-  // exists to prevent. The lock forces concurrent calls for the SAME
-  // account to serialize (each waits for the prior one's transaction to
-  // commit before it can read), so every count is accurate at the moment
-  // it's checked AND claimed. Different accounts never block each other --
-  // the lock is per-account-row. If the SES call below fails, the message
-  // is corrected to "failed" afterward (see the catch below) -- worst case
-  // on an unlikely process crash between claim and correction is one
-  // message parked as "sent" with no real send behind it, versus this
-  // race's actual failure mode of silently over-sending live cold emails.
-  const dayStart = new Date();
-  dayStart.setUTCHours(0, 0, 0, 0);
-  const provisionalSentAt = new Date();
-  const claimed = await db.$transaction(async (tx) => {
+    // Cap check + claim happen inside one transaction that takes a row lock on
+    // the account (SELECT ... FOR UPDATE) BEFORE counting today's sends, and
+    // the claim itself (marking THIS message "sent" so it counts toward the
+    // cap) happens INSIDE that same locked transaction, before the real SES
+    // call -- without this, concurrent calls (e.g. Approve All firing every
+    // message in parallel via Promise.all, or an approval landing at the same
+    // moment dispatchPacingQueueAction's cron runs) each read the same
+    // "sentToday" count before any of them has written anything back, so all
+    // of them can see room under the cap and all send -- blowing the daily
+    // limit several times over, exactly the spam-flagging risk this cap
+    // exists to prevent. The lock forces concurrent calls for the SAME
+    // account to serialize (each waits for the prior one's transaction to
+    // commit before it can read), so every count is accurate at the moment
+    // it's checked AND claimed. Different accounts never block each other --
+    // the lock is per-account-row. If the SES call below fails, the message
+    // is corrected to "failed" afterward -- worst case on an unlikely
+    // process crash between claim and correction is one message parked as
+    // "sent" with no real send behind it, versus this race's actual failure
+    // mode of silently over-sending live cold emails.
+    const dayStart = new Date();
+    dayStart.setUTCHours(0, 0, 0, 0);
     await tx.$queryRaw`SELECT id FROM "outreach_accounts" WHERE id = ${account.id} FOR UPDATE`;
     const sentToday = await tx.outreachMessage.count({
       where: { sentViaAccountId: account.id, sendStatus: "sent", sentAt: { gte: dayStart } },
@@ -185,28 +184,47 @@ async function sendIfEmailChannel(tenantId: string, message: { id: string; leadI
       // dashboard/tenant can tell "this needs a fix" apart from "this is
       // fine, just waiting its turn" at a glance.
       await tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "queued_for_pacing" } });
-      return false;
+      return { kind: "stop" as const };
     }
     await tx.outreachMessage.update({
       where: { id: message.id },
-      data: { sendStatus: "sent", sentAt: provisionalSentAt, sentViaAccountId: account.id },
+      data: { sendStatus: "sent", sentAt: new Date(), sentViaAccountId: account.id },
     });
-    return true;
+    return {
+      kind: "send" as const,
+      fromEmail: account.sesFromEmail,
+      fromName: account.sesFromName,
+      to: lead.contactEmail,
+      businessName: lead.businessName,
+      accountId: account.id,
+    };
   });
-  if (!claimed) return;
+
+  if (prepared.kind === "stop") return;
+  if (prepared.kind === "error") {
+    await logError({
+      source: "outreach.ses.send",
+      error: new Error(prepared.message),
+      tenantId,
+      context: { leadId: message.leadId, messageId: message.id, ...prepared.context },
+    });
+    return;
+  }
 
   const result = await sendOutreachEmail({
-    fromEmail: account.sesFromEmail,
-    fromName: account.sesFromName,
-    to: lead.contactEmail,
-    subject: lead.businessName ? `Quick note for ${lead.businessName}` : "Quick note",
+    fromEmail: prepared.fromEmail,
+    fromName: prepared.fromName,
+    to: prepared.to,
+    subject: prepared.businessName ? `Quick note for ${prepared.businessName}` : "Quick note",
     html: (message.editedBody || message.body).replace(/\n/g, "<br />"),
   });
 
   if (!result.ok) {
     // Correct the provisional claim -- this send never actually happened,
     // so it must not count toward the cap or show as delivered.
-    await db.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
+    await withTenant(tenantId, (tx) =>
+      tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } })
+    );
   }
 
   if (result.ok && !result.skipped) {
@@ -215,8 +233,10 @@ async function sendIfEmailChannel(tenantId: string, message: { id: string; leadI
     // by counting outreach_messages rows each time, so a real SES send
     // always has a matching counter bump with no separate query needed to
     // reconstruct it.
-    await db.outreachAccount.update({ where: { id: account.id }, data: { sentCount: { increment: 1 } } });
-    await maybePauseForBounceRate(tenantId, account.id);
+    await withTenant(tenantId, async (tx) => {
+      await tx.outreachAccount.update({ where: { id: prepared.accountId }, data: { sentCount: { increment: 1 } } });
+      await maybePauseForBounceRate(tx, tenantId, prepared.accountId);
+    });
   }
 }
 
@@ -228,14 +248,14 @@ async function sendIfEmailChannel(tenantId: string, message: { id: string; leadI
  * than computed here from scratch each time, since a bounce can arrive
  * (via SES's async notification) well after the send that triggered it.
  */
-async function maybePauseForBounceRate(tenantId: string, accountId: string): Promise<void> {
-  const account = await db.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+async function maybePauseForBounceRate(tx: Prisma.TransactionClient, tenantId: string, accountId: string): Promise<void> {
+  const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
   if (!account || account.sentCount < BOUNCE_RATE_MIN_SAMPLE) return;
 
   const bounceRate = account.bounceCount / account.sentCount;
   if (bounceRate <= BOUNCE_RATE_PAUSE_THRESHOLD) return;
 
-  await db.outreachAccount.update({
+  await tx.outreachAccount.update({
     where: { id: accountId },
     data: {
       status: "warned",
@@ -266,16 +286,24 @@ async function maybePauseForBounceRate(tenantId: string, accountId: string): Pro
  * src/app/api/cron/dispatch-pacing/route.ts), not from the UI.
  */
 export async function dispatchPacingQueueAction(): Promise<{ ok: true; processed: number }> {
-  const queued = await db.outreachMessage.findMany({
-    where: {
-      channel: "email",
-      OR: [
-        { sendStatus: "queued_for_pacing" },
-        { sendStatus: "pending", approvalStatus: "approved" },
-      ],
-    },
-    select: { id: true, leadId: true, channel: true, body: true, editedBody: true, tenantId: true },
-  });
+  // Deliberately platform-scoped: this is the cron entry point, it runs with
+  // no tenant session at all and its whole job is to find pending work across
+  // EVERY tenant. Each message it finds is then dispatched through
+  // sendIfEmailChannel(), which re-enters withTenant() scoped to that
+  // message's own tenantId -- so the per-tenant writes below are still
+  // tenant-scoped, only this discovery read spans tenants.
+  const queued = await withPlatformAccess((tx) =>
+    tx.outreachMessage.findMany({
+      where: {
+        channel: "email",
+        OR: [
+          { sendStatus: "queued_for_pacing" },
+          { sendStatus: "pending", approvalStatus: "approved" },
+        ],
+      },
+      select: { id: true, leadId: true, channel: true, body: true, editedBody: true, tenantId: true },
+    })
+  );
 
   for (const message of queued) {
     await sendIfEmailChannel(message.tenantId, message);
@@ -290,14 +318,20 @@ export async function approveMessageAction(messageId: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await db.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
+  const message = await withTenant(session.tenantId!, async (tx) => {
+    const found = await tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
+    if (!found) return null;
+    await tx.outreachMessage.update({
+      where: { id: messageId },
+      data: { approvalStatus: "approved", approvedById: session.id, approvedAt: new Date() },
+    });
+    await maybeAdvanceLead(tx, session.tenantId!, found.leadId, session.name ?? session.id);
+    return found;
+  });
   if (!message) return { ok: false as const, error: "Message not found." };
 
-  await db.outreachMessage.update({
-    where: { id: messageId },
-    data: { approvalStatus: "approved", approvedById: session.id, approvedAt: new Date() },
-  });
-  await maybeAdvanceLead(session.tenantId!, message.leadId, session.name ?? session.id);
+  // Outside the transaction above on purpose -- it makes a real SES network
+  // call and opens its own withTenant scope (see sendIfEmailChannel).
   await sendIfEmailChannel(session.tenantId!, message);
 
   return { ok: true as const };
@@ -309,13 +343,16 @@ export async function holdMessageAction(messageId: string, reason?: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await db.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
-  if (!message) return { ok: false as const, error: "Message not found." };
-
-  await db.outreachMessage.update({
-    where: { id: messageId },
-    data: { approvalStatus: "held", holdReason: reason || null },
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
+    if (!message) return false;
+    await tx.outreachMessage.update({
+      where: { id: messageId },
+      data: { approvalStatus: "held", holdReason: reason || null },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Message not found." };
 
   return { ok: true as const };
 }
@@ -326,13 +363,16 @@ export async function saveMessageEditAction(messageId: string, editedBody: strin
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await db.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
-  if (!message) return { ok: false as const, error: "Message not found." };
-
-  await db.outreachMessage.update({
-    where: { id: messageId },
-    data: { editedBody, approvalStatus: "edited" },
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
+    if (!message) return false;
+    await tx.outreachMessage.update({
+      where: { id: messageId },
+      data: { editedBody, approvalStatus: "edited" },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Message not found." };
 
   return { ok: true as const };
 }
@@ -343,19 +383,30 @@ export async function approveAllMessagesAction(messageIds: string[]) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const messages = await db.outreachMessage.findMany({
-    where: { id: { in: messageIds }, tenantId: session.tenantId!, approvalStatus: { not: "held" } },
-    select: { id: true, leadId: true, channel: true, body: true, editedBody: true },
+  const messages = await withTenant(session.tenantId!, async (tx) => {
+    const found = await tx.outreachMessage.findMany({
+      where: { id: { in: messageIds }, tenantId: session.tenantId!, approvalStatus: { not: "held" } },
+      select: { id: true, leadId: true, channel: true, body: true, editedBody: true },
+    });
+    if (found.length === 0) return found;
+
+    await tx.outreachMessage.updateMany({
+      where: { id: { in: found.map((m) => m.id) } },
+      data: { approvalStatus: "approved", approvedById: session.id, approvedAt: new Date() },
+    });
+
+    // Sequential rather than the previous Promise.all: these all run against
+    // one shared transaction client now, and a Prisma TransactionClient can't
+    // have several queries in flight on it concurrently.
+    const leadIds = [...new Set(found.map((m) => m.leadId))];
+    for (const leadId of leadIds) {
+      await maybeAdvanceLead(tx, session.tenantId!, leadId, session.name ?? session.id);
+    }
+    return found;
   });
   if (messages.length === 0) return { ok: true as const, approvedCount: 0 };
 
-  await db.outreachMessage.updateMany({
-    where: { id: { in: messages.map((m) => m.id) } },
-    data: { approvalStatus: "approved", approvedById: session.id, approvedAt: new Date() },
-  });
-
-  const leadIds = [...new Set(messages.map((m) => m.leadId))];
-  await Promise.all(leadIds.map((leadId) => maybeAdvanceLead(session.tenantId!, leadId, session.name ?? session.id)));
+  // Outside the transaction -- real SES sends, each opening its own scope.
   await Promise.all(messages.map((m) => sendIfEmailChannel(session.tenantId!, m)));
 
   return { ok: true as const, approvedCount: messages.length };

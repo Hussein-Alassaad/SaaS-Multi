@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 
 /**
  * Single unfiltered fetch of every field the Analytics page's client-side
@@ -10,14 +10,16 @@ import { db } from "@/lib/db";
  * to the original (see Analytics.jsx).
  */
 export async function getAnalyticsRawLeads(tenantId: string) {
-  return db.outreachLead.findMany({
-    where: { tenantId },
-    select: {
-      platform: true,
-      temperature: true,
-      status: true,
-      contactCount: true,
-      createdAt: true,
-    },
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachLead.findMany({
+      where: { tenantId },
+      select: {
+        platform: true,
+        temperature: true,
+        status: true,
+        contactCount: true,
+        createdAt: true,
+      },
+    })
+  );
 }

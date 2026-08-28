@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
 import type { Prisma } from "@prisma/client";
 
@@ -40,13 +40,15 @@ export async function getClientsList(
     where.businessName = { contains: search.trim(), mode: "insensitive" };
   }
 
-  const rows = await db.outreachLead.findMany({
-    where,
-    select: clientsListSelect,
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.outreachLead.findMany({
+      where,
+      select: clientsListSelect,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > pageSize;
   const items = hasMore ? rows.slice(0, pageSize) : rows;
@@ -55,11 +57,13 @@ export async function getClientsList(
 
 /** Head-only counts, independent of pagination -- mirrors Clients.jsx's `loadCounts`. */
 export async function getClientsCounts(tenantId: string) {
-  const [total, numbersFound] = await Promise.all([
-    db.outreachLead.count({ where: { tenantId } }),
-    db.outreachLead.count({ where: { tenantId, whatsappFound: true, whatsappNumber: { not: null } } }),
-  ]);
-  return { total, numbersFound };
+  return withTenant(tenantId, async (tx) => {
+    const total = await tx.outreachLead.count({ where: { tenantId } });
+    const numbersFound = await tx.outreachLead.count({
+      where: { tenantId, whatsappFound: true, whatsappNumber: { not: null } },
+    });
+    return { total, numbersFound };
+  });
 }
 
 /**
@@ -89,13 +93,15 @@ export async function getClientHistoryList(
     where.businessName = { contains: search.trim(), mode: "insensitive" };
   }
 
-  const rows = await db.outreachClientHistory.findMany({
-    where,
-    select: clientHistoryListSelect,
-    orderBy: [{ analyzedAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.outreachClientHistory.findMany({
+      where,
+      select: clientHistoryListSelect,
+      orderBy: [{ analyzedAt: "desc" }, { id: "desc" }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > pageSize;
   const items = hasMore ? rows.slice(0, pageSize) : rows;
@@ -115,11 +121,13 @@ export async function getClientHistoryExportRows(tenantId: string, search?: stri
     where.businessName = { contains: search.trim(), mode: "insensitive" };
   }
 
-  return db.outreachClientHistory.findMany({
-    where,
-    orderBy: { analyzedAt: "desc" },
-    take: CSV_EXPORT_LIMIT,
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachClientHistory.findMany({
+      where,
+      orderBy: { analyzedAt: "desc" },
+      take: CSV_EXPORT_LIMIT,
+    })
+  );
 }
 
 /**
@@ -128,20 +136,22 @@ export async function getClientHistoryExportRows(tenantId: string, search?: stri
  * expand rather than joined into the main list query.
  */
 export async function getLeadReplies(tenantId: string, leadId: string) {
-  const replies = await db.outreachReply.findMany({
-    where: { tenantId, leadId },
-    orderBy: { repliedAt: "asc" },
-  });
-
-  const accountIds = [...new Set(replies.map((r) => r.accountId).filter((id): id is string => Boolean(id)))];
-  const accountLabels: Record<string, string> = {};
-  if (accountIds.length) {
-    const accounts = await db.outreachAccount.findMany({
-      where: { id: { in: accountIds }, tenantId },
-      select: { id: true, label: true },
+  return withTenant(tenantId, async (tx) => {
+    const replies = await tx.outreachReply.findMany({
+      where: { tenantId, leadId },
+      orderBy: { repliedAt: "asc" },
     });
-    for (const a of accounts) accountLabels[a.id] = a.label;
-  }
 
-  return { replies, accountLabels };
+    const accountIds = [...new Set(replies.map((r) => r.accountId).filter((id): id is string => Boolean(id)))];
+    const accountLabels: Record<string, string> = {};
+    if (accountIds.length) {
+      const accounts = await tx.outreachAccount.findMany({
+        where: { id: { in: accountIds }, tenantId },
+        select: { id: true, label: true },
+      });
+      for (const a of accounts) accountLabels[a.id] = a.label;
+    }
+
+    return { replies, accountLabels };
+  });
 }

@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 
 /**
  * Account Health (spec §7.8) -- list of every outreach account for a
@@ -6,10 +6,12 @@ import { db } from "@/lib/db";
  * `.order('label')` query exactly.
  */
 export async function getAccountsList(tenantId: string) {
-  return db.outreachAccount.findMany({
-    where: { tenantId },
-    orderBy: { label: "asc" },
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachAccount.findMany({
+      where: { tenantId },
+      orderBy: { label: "asc" },
+    })
+  );
 }
 
 /**
@@ -19,7 +21,9 @@ export async function getAccountsList(tenantId: string) {
  * Outreach page load via the layout, not just on Account Health itself.
  */
 export async function getUnhealthyAccountCount(tenantId: string): Promise<number> {
-  return db.outreachAccount.count({ where: { tenantId, status: { in: ["warned", "paused"] } } });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachAccount.count({ where: { tenantId, status: { in: ["warned", "paused"] } } })
+  );
 }
 
 export interface AccountReachStats {
@@ -42,16 +46,19 @@ export async function getAccountReachStats(tenantId: string): Promise<Map<string
   const weekStart = new Date(todayStart);
   weekStart.setDate(weekStart.getDate() - 6);
 
-  const [sentRows, replyRows] = await Promise.all([
-    db.outreachMessage.findMany({
+  // Sequential inside one tenant scope rather than Promise.all -- a single
+  // Prisma TransactionClient can't run concurrent queries.
+  const { sentRows, replyRows } = await withTenant(tenantId, async (tx) => {
+    const sentRows = await tx.outreachMessage.findMany({
       where: { tenantId, sendStatus: "sent", sentAt: { gte: weekStart }, sentViaAccountId: { not: null } },
       select: { sentViaAccountId: true, sentAt: true },
-    }),
-    db.outreachReply.findMany({
+    });
+    const replyRows = await tx.outreachReply.findMany({
       where: { tenantId, repliedAt: { gte: weekStart }, accountId: { not: null } },
       select: { accountId: true, repliedAt: true },
-    }),
-  ]);
+    });
+    return { sentRows, replyRows };
+  });
 
   const stats = new Map<string, AccountReachStats>();
   const get = (accountId: string) => {

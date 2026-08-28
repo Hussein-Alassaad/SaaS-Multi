@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult, type OutreachResource } from "@/lib/outreach-permissions";
 
@@ -10,13 +10,15 @@ export async function getInstagramManualQueueAction() {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "instagram-manual", "view");
   if (!permCheck.ok) return permCheck;
 
-  const messages = await db.outreachMessage.findMany({
-    where: { tenantId: session.tenantId!, channel: "instagram", sendStatus: "manual_send_pending" },
-    include: {
-      lead: { select: { id: true, businessName: true, profileUrl: true, contactCount: true, firstContactedAt: true, status: true } },
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  const messages = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachMessage.findMany({
+      where: { tenantId: session.tenantId!, channel: "instagram", sendStatus: "manual_send_pending" },
+      include: {
+        lead: { select: { id: true, businessName: true, profileUrl: true, contactCount: true, firstContactedAt: true, status: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    })
+  );
 
   return {
     ok: true as const,
@@ -53,36 +55,41 @@ export async function markInstagramSentAction(messageId: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "instagram-manual", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await db.outreachMessage.findFirst({
-    where: { id: messageId, tenantId: session.tenantId! },
-    include: { lead: true },
-  });
-  if (!message) return { ok: false as const, error: "Message not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.outreachMessage.findFirst({
+      where: { id: messageId, tenantId: session.tenantId! },
+      include: { lead: true },
+    });
+    if (!message) return false;
 
-  const now = new Date();
+    const now = new Date();
 
-  if (message.isReply) {
-    await db.outreachMessage.update({ where: { id: messageId }, data: { sendStatus: "sent", sentAt: now } });
-    return { ok: true as const };
-  }
+    if (message.isReply) {
+      await tx.outreachMessage.update({ where: { id: messageId }, data: { sendStatus: "sent", sentAt: now } });
+      return true;
+    }
 
-  const fromStage = message.lead.status;
+    const fromStage = message.lead.status;
 
-  await db.$transaction([
-    db.outreachMessage.update({ where: { id: messageId }, data: { sendStatus: "sent", sentAt: now } }),
-    db.outreachLead.update({
+    // Was a db.$transaction([...]) array before RLS -- Prisma can't nest a
+    // transaction inside the withTenant() one, so these four writes are now
+    // issued sequentially against the same `tx`. Still one atomic unit.
+    await tx.outreachMessage.update({ where: { id: messageId }, data: { sendStatus: "sent", sentAt: now } });
+    await tx.outreachLead.update({
       where: { id: message.leadId },
       data: {
         contactCount: { increment: 1 },
         firstContactedAt: message.lead.firstContactedAt ?? now,
         status: "contacted",
       },
-    }),
-    db.outreachPipelineHistory.create({
+    });
+    await tx.outreachPipelineHistory.create({
       data: { tenantId: session.tenantId!, leadId: message.leadId, fromStage, toStage: "contacted", changedBy: "agent" },
-    }),
-    db.outreachClientHistory.updateMany({ where: { leadId: message.leadId }, data: { contacted: true } }),
-  ]);
+    });
+    await tx.outreachClientHistory.updateMany({ where: { leadId: message.leadId }, data: { contacted: true } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Message not found." };
 
   return { ok: true as const };
 }
@@ -94,21 +101,24 @@ export async function getChannelActivityAction(channel: "linkedin" | "email") {
   const permCheck = outreachGuardResult(session.role?.name ?? "", resource, "view");
   if (!permCheck.ok) return permCheck;
 
-  const [messages, replies, accounts] = await Promise.all([
-    db.outreachMessage.findMany({
+  // Sequential rather than Promise.all -- these share one TransactionClient
+  // now, which can't have multiple queries in flight on it at once.
+  const { messages, replies, accounts } = await withTenant(session.tenantId!, async (tx) => {
+    const messages = await tx.outreachMessage.findMany({
       where: { tenantId: session.tenantId!, channel },
       include: { lead: { select: { id: true, businessName: true, profileUrl: true, status: true } } },
       orderBy: { createdAt: "desc" },
       take: 50,
-    }),
-    db.outreachReply.findMany({
+    });
+    const replies = await tx.outreachReply.findMany({
       where: { tenantId: session.tenantId!, channel },
       include: { lead: { select: { id: true, businessName: true } } },
       orderBy: { repliedAt: "desc" },
       take: 20,
-    }),
-    db.outreachAccount.findMany({ where: { tenantId: session.tenantId!, platform: channel } }),
-  ]);
+    });
+    const accounts = await tx.outreachAccount.findMany({ where: { tenantId: session.tenantId!, platform: channel } });
+    return { messages, replies, accounts };
+  });
 
   return {
     ok: true as const,

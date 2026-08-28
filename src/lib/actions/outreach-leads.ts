@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { getLiveFeed, getPipelineColumn, type PipelineStage } from "@/lib/outreach/leads";
@@ -50,12 +50,14 @@ export async function moveLeadStageAction(leadId: string, toStage: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "pipeline", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const lead = await db.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
-  if (!lead) return { ok: false as const, error: "Lead not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const lead = await tx.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
+    if (!lead) return false;
 
-  await db.$transaction([
-    db.outreachLead.update({ where: { id: leadId }, data: { status: toStage } }),
-    db.outreachPipelineHistory.create({
+    // Was a db.$transaction([...]) array before RLS -- sequential against the
+    // same `tx` now, still one atomic transaction.
+    await tx.outreachLead.update({ where: { id: leadId }, data: { status: toStage } });
+    await tx.outreachPipelineHistory.create({
       data: {
         tenantId: session.tenantId!,
         leadId,
@@ -63,8 +65,10 @@ export async function moveLeadStageAction(leadId: string, toStage: string) {
         toStage,
         changedBy: session.id,
       },
-    }),
-  ]);
+    });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Lead not found." };
 
   return { ok: true as const };
 }

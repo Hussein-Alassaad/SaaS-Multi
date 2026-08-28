@@ -1,7 +1,7 @@
 "use server";
 
 import { SignJWT } from "jose";
-import { db } from "@/lib/db";
+import { withPlatformAccess } from "@/lib/db";
 import { getSession, getSecretKey } from "@/lib/auth";
 import { guard } from "@/lib/permissions";
 
@@ -59,16 +59,18 @@ export async function agentControlAction(action: AgentControlActionName) {
   // own periodic refresh) isn't a meaningful admin action to log, same
   // convention as every other read-only fetch in this codebase.
   if (action !== "status") {
-    await db.auditLog.create({
-      data: {
-        actorId: session.id,
-        action: `outreach_agent.${action}`,
-        resource: "outreach_agent",
-        newValue: JSON.stringify({ status: body?.status }),
-        device: "Desktop",
-        browser: "Admin",
-      },
-    });
+    await withPlatformAccess((tx) =>
+      tx.auditLog.create({
+        data: {
+          actorId: session.id,
+          action: `outreach_agent.${action}`,
+          resource: "outreach_agent",
+          newValue: JSON.stringify({ status: body?.status }),
+          device: "Desktop",
+          browser: "Admin",
+        },
+      })
+    );
   }
 
   return { ok: true as const, status: body?.status as string };

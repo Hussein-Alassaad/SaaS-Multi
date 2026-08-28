@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { db, withTenant } from "@/lib/db";
 import { sendEmail } from "@/lib/email";
 import { weeklyDigestEmail, type WeeklyDigestPlatformRow } from "@/lib/email-templates";
 
@@ -31,16 +31,20 @@ export async function sendWeeklyDigestsAction() {
       continue;
     }
 
-    const [messages, replies] = await Promise.all([
-      db.outreachMessage.findMany({
+    // One withTenant scope per tenant, inside the loop -- this cron has no
+    // session of its own, so each tenant's slice is read under that tenant's
+    // own RLS context rather than one blanket platform-wide read.
+    const { messages, replies } = await withTenant(tenant.id, async (tx) => {
+      const messages = await tx.outreachMessage.findMany({
         where: { tenantId: tenant.id, sendStatus: "sent", sentAt: { gte: weekStart } },
         select: { channel: true },
-      }),
-      db.outreachReply.findMany({
+      });
+      const replies = await tx.outreachReply.findMany({
         where: { tenantId: tenant.id, repliedAt: { gte: weekStart } },
         select: { channel: true },
-      }),
-    ]);
+      });
+      return { messages, replies };
+    });
 
     if (messages.length === 0) {
       skipped++;

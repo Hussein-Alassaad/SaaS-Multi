@@ -1,7 +1,7 @@
 "use server";
 
 import { SignJWT } from "jose";
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession, getSecretKey } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 
@@ -29,9 +29,11 @@ export async function startConnectAccountAction(accountId: string) {
     return { ok: false as const, error: "Live login isn't configured on this deployment yet." };
   }
 
-  const account = await db.outreachAccount.findFirst({
-    where: { id: accountId, tenantId: session.tenantId! },
-  });
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.findFirst({
+      where: { id: accountId, tenantId: session.tenantId! },
+    })
+  );
   if (!account) return { ok: false as const, error: "Account not found." };
   if (account.platform !== "linkedin" && account.platform !== "instagram") {
     return { ok: false as const, error: "Connect account only applies to LinkedIn or Instagram accounts." };
@@ -50,10 +52,12 @@ export async function startConnectAccountAction(accountId: string) {
     return { ok: false as const, error: "A connection attempt is already in progress for this account." };
   }
 
-  await db.outreachAccount.updateMany({
-    where: { id: accountId, tenantId: session.tenantId! },
-    data: { loginStatus: "connecting", loginConnectingAt: new Date(), loginError: null },
-  });
+  await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.updateMany({
+      where: { id: accountId, tenantId: session.tenantId! },
+      data: { loginStatus: "connecting", loginConnectingAt: new Date(), loginError: null },
+    })
+  );
 
   const token = await new SignJWT({
     accountId,
@@ -87,20 +91,24 @@ export async function cancelConnectAccountAction(accountId: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const account = await db.outreachAccount.findFirst({
-    where: { id: accountId, tenantId: session.tenantId! },
-  });
-  if (!account) return { ok: false as const, error: "Account not found." };
-  if (account.loginStatus !== "connecting") return { ok: true as const };
+  const result = await withTenant(session.tenantId!, async (tx) => {
+    const account = await tx.outreachAccount.findFirst({
+      where: { id: accountId, tenantId: session.tenantId! },
+    });
+    if (!account) return "not_found" as const;
+    if (account.loginStatus !== "connecting") return "not_connecting" as const;
 
-  await db.outreachAccount.updateMany({
-    where: { id: accountId, tenantId: session.tenantId! },
-    data: {
-      loginStatus: "failed",
-      loginConnectingAt: null,
-      loginError: "Connection was cancelled or the browser tab closed before finishing.",
-    },
+    await tx.outreachAccount.updateMany({
+      where: { id: accountId, tenantId: session.tenantId! },
+      data: {
+        loginStatus: "failed",
+        loginConnectingAt: null,
+        loginError: "Connection was cancelled or the browser tab closed before finishing.",
+      },
+    });
+    return "reset" as const;
   });
+  if (result === "not_found") return { ok: false as const, error: "Account not found." };
 
   return { ok: true as const };
 }

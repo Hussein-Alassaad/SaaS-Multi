@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { revalidatePath } from "next/cache";
@@ -15,14 +15,16 @@ export async function submitOutreachFeatureRequestAction(input: { title: string;
     return { ok: false as const, error: "Title and description are required." };
   }
 
-  await db.tenantFeatureRequest.create({
-    data: {
-      tenantId: session.tenantId!,
-      title: input.title.trim(),
-      description: input.description.trim(),
-      filedById: session.id,
-    },
-  });
+  await withTenant(session.tenantId!, (tx) =>
+    tx.tenantFeatureRequest.create({
+      data: {
+        tenantId: session.tenantId!,
+        title: input.title.trim(),
+        description: input.description.trim(),
+        filedById: session.id,
+      },
+    })
+  );
 
   revalidatePath("/outreach/feature-requests");
   return { ok: true as const };

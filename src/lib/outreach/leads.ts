@@ -1,4 +1,4 @@
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
 
 /**
@@ -29,13 +29,15 @@ export async function getLiveFeed(tenantId: string, cursor?: string, pageSize: n
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
 
-  const rows = await db.outreachLead.findMany({
-    where: { tenantId, createdAt: { gte: todayStart } },
-    include: leadCardInclude,
-    orderBy: [{ score: "desc" }, { createdAt: "desc" }, { id: "desc" }],
-    take: pageSize + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-  });
+  const rows = await withTenant(tenantId, (tx) =>
+    tx.outreachLead.findMany({
+      where: { tenantId, createdAt: { gte: todayStart } },
+      include: leadCardInclude,
+      orderBy: [{ score: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      take: pageSize + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    })
+  );
 
   const hasMore = rows.length > pageSize;
   const items = hasMore ? rows.slice(0, pageSize) : rows;
@@ -43,17 +45,19 @@ export async function getLiveFeed(tenantId: string, cursor?: string, pageSize: n
 }
 
 export async function getLeadDetail(tenantId: string, leadId: string) {
-  return db.outreachLead.findFirst({
-    where: { id: leadId, tenantId },
-    include: {
-      account: true,
-      messages: { orderBy: { createdAt: "asc" } },
-      pipelineHistory: { orderBy: { changedAt: "asc" } },
-      followUps: { orderBy: { createdAt: "desc" } },
-      clientHistory: { orderBy: { analyzedAt: "desc" } },
-      replies: { orderBy: { repliedAt: "desc" } },
-    },
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachLead.findFirst({
+      where: { id: leadId, tenantId },
+      include: {
+        account: true,
+        messages: { orderBy: { createdAt: "asc" } },
+        pipelineHistory: { orderBy: { changedAt: "asc" } },
+        followUps: { orderBy: { createdAt: "desc" } },
+        clientHistory: { orderBy: { analyzedAt: "desc" } },
+        replies: { orderBy: { repliedAt: "desc" } },
+      },
+    })
+  );
 }
 
 export async function getPipelineColumn(
@@ -61,18 +65,25 @@ export async function getPipelineColumn(
   stage: PipelineStage,
   limit: number = PIPELINE_COLUMN_PAGE_SIZE
 ) {
-  return db.outreachLead.findMany({
-    where: { tenantId, status: stage },
-    select: { id: true, businessName: true, platform: true, score: true, temperature: true, status: true },
-    orderBy: { updatedAt: "desc" },
-    take: limit,
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachLead.findMany({
+      where: { tenantId, status: stage },
+      select: { id: true, businessName: true, platform: true, score: true, temperature: true, status: true },
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+    })
+  );
 }
 
 export async function getPipelineStageCounts(tenantId: string) {
-  const counts = await Promise.all(
-    PIPELINE_STAGES.map((stage) => db.outreachLead.count({ where: { tenantId, status: stage } }))
-  );
+  // One scope for all six counts rather than six separate transactions.
+  const counts = await withTenant(tenantId, async (tx) => {
+    const out: number[] = [];
+    for (const stage of PIPELINE_STAGES) {
+      out.push(await tx.outreachLead.count({ where: { tenantId, status: stage } }));
+    }
+    return out;
+  });
   return Object.fromEntries(PIPELINE_STAGES.map((stage, i) => [stage, counts[i]])) as Record<PipelineStage, number>;
 }
 
@@ -89,9 +100,11 @@ export async function getPipelineBoard(tenantId: string) {
 }
 
 export async function getPendingApprovals(tenantId: string) {
-  return db.outreachMessage.findMany({
-    where: { tenantId, approvalStatus: "awaiting" },
-    include: { lead: { include: { account: true } } },
-    orderBy: { createdAt: "asc" },
-  });
+  return withTenant(tenantId, (tx) =>
+    tx.outreachMessage.findMany({
+      where: { tenantId, approvalStatus: "awaiting" },
+      include: { lead: { include: { account: true } } },
+      orderBy: { createdAt: "asc" },
+    })
+  );
 }

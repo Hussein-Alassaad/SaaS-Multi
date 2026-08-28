@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 
@@ -10,10 +10,13 @@ export async function saveLeadNotesAction(leadId: string, notes: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "leads", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const lead = await db.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
-  if (!lead) return { ok: false as const, error: "Lead not found." };
-
-  await db.outreachLead.update({ where: { id: leadId }, data: { notes } });
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const lead = await tx.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
+    if (!lead) return false;
+    await tx.outreachLead.update({ where: { id: leadId }, data: { notes } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Lead not found." };
   return { ok: true as const };
 }
 
@@ -30,16 +33,19 @@ export async function setDoNotContactAction(leadId: string, doNotContact: boolea
   const permCheck = outreachGuardResult(session.role?.name ?? "", "leads", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const lead = await db.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
-  if (!lead) return { ok: false as const, error: "Lead not found." };
-
-  await db.outreachLead.update({
-    where: { id: leadId },
-    data: {
-      doNotContact,
-      doNotContactReason: doNotContact ? (reason?.trim() || null) : null,
-    },
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const lead = await tx.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
+    if (!lead) return false;
+    await tx.outreachLead.update({
+      where: { id: leadId },
+      data: {
+        doNotContact,
+        doNotContactReason: doNotContact ? (reason?.trim() || null) : null,
+      },
+    });
+    return true;
   });
+  if (!found) return { ok: false as const, error: "Lead not found." };
 
   return { ok: true as const };
 }
@@ -50,24 +56,32 @@ export async function scheduleFollowUpAction(leadId: string, enabled: boolean, s
   const permCheck = outreachGuardResult(session.role?.name ?? "", "leads", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const lead = await db.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
-  if (!lead) return { ok: false as const, error: "Lead not found." };
+  const result = await withTenant(session.tenantId!, async (tx) => {
+    const lead = await tx.outreachLead.findFirst({ where: { id: leadId, tenantId: session.tenantId! } });
+    if (!lead) return { kind: "not_found" as const };
 
-  const settings = await db.outreachSettings.findUnique({ where: { tenantId: session.tenantId! } });
-  const maxContacts = settings?.maxContactsPerLead ?? 2;
-  if (lead.contactCount >= maxContacts) {
-    return { ok: false as const, error: `Already at max contacts (${maxContacts})` };
-  }
+    const settings = await tx.outreachSettings.findUnique({ where: { tenantId: session.tenantId! } });
+    const maxContacts = settings?.maxContactsPerLead ?? 2;
+    if (lead.contactCount >= maxContacts) {
+      return { kind: "at_max" as const, maxContacts };
+    }
 
-  await db.outreachFollowUp.create({
-    data: {
-      tenantId: session.tenantId!,
-      leadId,
-      enabled,
-      scheduledFor: new Date(scheduledFor),
-      status: "scheduled",
-    },
+    await tx.outreachFollowUp.create({
+      data: {
+        tenantId: session.tenantId!,
+        leadId,
+        enabled,
+        scheduledFor: new Date(scheduledFor),
+        status: "scheduled",
+      },
+    });
+    return { kind: "ok" as const };
   });
+
+  if (result.kind === "not_found") return { ok: false as const, error: "Lead not found." };
+  if (result.kind === "at_max") {
+    return { ok: false as const, error: `Already at max contacts (${result.maxContacts})` };
+  }
 
   return { ok: true as const };
 }
