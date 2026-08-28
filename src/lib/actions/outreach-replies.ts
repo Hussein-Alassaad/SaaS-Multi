@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { revalidatePath } from "next/cache";
@@ -59,35 +59,37 @@ export async function getReplyThreadsAction() {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "replies", "view");
   if (!permCheck.ok) return permCheck;
 
-  const leads = await db.outreachLead.findMany({
-    where: {
-      tenantId: session.tenantId!,
-      status: { in: ["contacted", "replied", "interested", "meeting_booked"] },
-    },
-    select: {
-      id: true,
-      businessName: true,
-      platform: true,
-      status: true,
-      temperature: true,
-      profileUrl: true,
-      contactEmail: true,
-      updatedAt: true,
-      messages: {
-        where: { sendStatus: { in: ["sent", "pending", "failed"] } },
-        select: {
-          id: true, body: true, editedBody: true, isReply: true, sendStatus: true, sentAt: true, createdAt: true,
-          attachmentUrl: true, attachmentKind: true, attachmentName: true,
+  const leads = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachLead.findMany({
+      where: {
+        tenantId: session.tenantId!,
+        status: { in: ["contacted", "replied", "interested", "meeting_booked"] },
+      },
+      select: {
+        id: true,
+        businessName: true,
+        platform: true,
+        status: true,
+        temperature: true,
+        profileUrl: true,
+        contactEmail: true,
+        updatedAt: true,
+        messages: {
+          where: { sendStatus: { in: ["sent", "pending", "failed"] } },
+          select: {
+            id: true, body: true, editedBody: true, isReply: true, sendStatus: true, sentAt: true, createdAt: true,
+            attachmentUrl: true, attachmentKind: true, attachmentName: true,
+          },
+          orderBy: { createdAt: "asc" },
         },
-        orderBy: { createdAt: "asc" },
+        replies: {
+          select: { id: true, body: true, repliedAt: true },
+          orderBy: { repliedAt: "asc" },
+        },
       },
-      replies: {
-        select: { id: true, body: true, repliedAt: true },
-        orderBy: { repliedAt: "asc" },
-      },
-    },
-    orderBy: { updatedAt: "desc" },
-  });
+      orderBy: { updatedAt: "desc" },
+    })
+  );
 
   const threads: ReplyThreadLead[] = leads.map((lead) => {
     const outbound: ThreadMessage[] = lead.messages.map((m) => ({
@@ -164,10 +166,12 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
   const trimmed = body.trim();
   if (!trimmed && !attachment) return { ok: false as const, error: "Reply can't be empty." };
 
-  const lead = await db.outreachLead.findFirst({
-    where: { id: leadId, tenantId: session.tenantId! },
-    select: { id: true, platform: true, doNotContact: true, accountId: true },
-  });
+  const lead = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachLead.findFirst({
+      where: { id: leadId, tenantId: session.tenantId! },
+      select: { id: true, platform: true, doNotContact: true, accountId: true },
+    })
+  );
   if (!lead) return { ok: false as const, error: "Lead not found." };
   if (lead.doNotContact) return { ok: false as const, error: "This lead is marked Do Not Contact." };
 
@@ -181,23 +185,29 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
     }
   }
 
-  const message = await db.outreachMessage.create({
-    data: {
-      tenantId: session.tenantId!,
-      leadId,
-      channel: lead.platform,
-      body: trimmed,
-      isReply: true,
-      attachmentUrl: attachmentData?.url ?? null,
-      attachmentKind: attachmentData?.kind ?? null,
-      attachmentName: attachmentData?.name ?? null,
-      approvalStatus: "approved",
-      approvedById: session.id,
-      approvedAt: new Date(),
-      sendStatus: "pending",
-      sentViaAccountId: lead.accountId,
-    },
-  });
+  // Deliberately a second withTenant block, not one wrapping the whole action:
+  // saveReplyAttachment() above is a network upload to Vercel Blob, and holding
+  // a Postgres transaction open across it would pin a pooled connection for the
+  // duration of the upload.
+  const message = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachMessage.create({
+      data: {
+        tenantId: session.tenantId!,
+        leadId,
+        channel: lead.platform,
+        body: trimmed,
+        isReply: true,
+        attachmentUrl: attachmentData?.url ?? null,
+        attachmentKind: attachmentData?.kind ?? null,
+        attachmentName: attachmentData?.name ?? null,
+        approvalStatus: "approved",
+        approvedById: session.id,
+        approvedAt: new Date(),
+        sendStatus: "pending",
+        sentViaAccountId: lead.accountId,
+      },
+    })
+  );
 
   revalidatePath("/outreach/replies");
   return { ok: true as const, messageId: message.id };

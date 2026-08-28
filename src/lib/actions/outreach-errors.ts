@@ -1,6 +1,6 @@
 "use server";
 
-import { db } from "@/lib/db";
+import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { safeJsonParse } from "@/lib/utils";
@@ -19,35 +19,39 @@ export async function getOutreachErrorsAction() {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "errors", "view");
   if (!permCheck.ok) return permCheck;
 
-  const rows = await db.errorLog.findMany({
-    where: { tenantId: session.tenantId!, source: { startsWith: "outreach." } },
-    orderBy: { createdAt: "desc" },
-    take: 200,
-  });
+  const { rows, parsedContexts, leads, accounts } = await withTenant(session.tenantId!, async (tx) => {
+    const rows = await tx.errorLog.findMany({
+      where: { tenantId: session.tenantId!, source: { startsWith: "outreach." } },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
 
-  const leadIds = new Set<string>();
-  const accountIds = new Set<string>();
-  const parsedContexts = rows.map((r) => {
-    const ctx = safeJsonParse<Record<string, unknown>>(r.context, {});
-    if (typeof ctx.leadId === "string") leadIds.add(ctx.leadId);
-    if (typeof ctx.accountId === "string") accountIds.add(ctx.accountId);
-    return ctx;
-  });
+    const leadIds = new Set<string>();
+    const accountIds = new Set<string>();
+    const parsedContexts = rows.map((r) => {
+      const ctx = safeJsonParse<Record<string, unknown>>(r.context, {});
+      if (typeof ctx.leadId === "string") leadIds.add(ctx.leadId);
+      if (typeof ctx.accountId === "string") accountIds.add(ctx.accountId);
+      return ctx;
+    });
 
-  const [leads, accounts] = await Promise.all([
-    leadIds.size
-      ? db.outreachLead.findMany({
-          where: { id: { in: [...leadIds] }, tenantId: session.tenantId! },
-          select: { id: true, businessName: true },
-        })
-      : Promise.resolve([]),
-    accountIds.size
-      ? db.outreachAccount.findMany({
-          where: { id: { in: [...accountIds] }, tenantId: session.tenantId! },
-          select: { id: true, label: true },
-        })
-      : Promise.resolve([]),
-  ]);
+    const [leads, accounts] = await Promise.all([
+      leadIds.size
+        ? tx.outreachLead.findMany({
+            where: { id: { in: [...leadIds] }, tenantId: session.tenantId! },
+            select: { id: true, businessName: true },
+          })
+        : Promise.resolve([]),
+      accountIds.size
+        ? tx.outreachAccount.findMany({
+            where: { id: { in: [...accountIds] }, tenantId: session.tenantId! },
+            select: { id: true, label: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    return { rows, parsedContexts, leads, accounts };
+  });
   const leadNames = Object.fromEntries(leads.map((l) => [l.id, l.businessName]));
   const accountLabels = Object.fromEntries(accounts.map((a) => [a.id, a.label]));
 
@@ -82,9 +86,13 @@ export async function markOutreachErrorResolvedAction(id: string) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "errors", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const row = await db.errorLog.findFirst({ where: { id, tenantId: session.tenantId! } });
-  if (!row) return { ok: false as const, error: "Error not found." };
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const row = await tx.errorLog.findFirst({ where: { id, tenantId: session.tenantId! } });
+    if (!row) return false;
+    await tx.errorLog.update({ where: { id }, data: { resolved: true } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Error not found." };
 
-  await db.errorLog.update({ where: { id }, data: { resolved: true } });
   return { ok: true as const };
 }
