@@ -4,6 +4,16 @@ import { withTenant, withPlatformAccess } from "@/lib/db";
 import { logError } from "@/lib/error-log";
 
 /**
+ * DEPRECATED 2026-08-29 -- SES was replaced by Resend for Outreach email
+ * sending earlier this session (see src/lib/outreach/resend-email.ts's own
+ * docstring for why). This route is AWS-SNS-shaped and receives nothing
+ * real anymore; src/app/api/webhooks/resend/route.ts is the live
+ * replacement (Svix-signed, Resend's own event shape) and now owns
+ * bounceCount updates too. Left in place, unregistered anywhere in AWS,
+ * rather than deleted -- no SNS subscription points at it, so it is dead
+ * code, not a live attack surface; safe to remove outright in a later
+ * cleanup pass once confirmed nothing references it.
+ *
  * Receives Amazon SES bounce/complaint notifications via SNS, so
  * OutreachAccount.bounceCount stays accurate for the bounce-rate safety
  * check in src/lib/actions/outreach-approvals.ts's maybePauseForBounceRate().

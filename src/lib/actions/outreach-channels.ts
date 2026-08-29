@@ -130,6 +130,8 @@ export async function getChannelActivityAction(channel: "linkedin" | "email") {
       sentAt: m.sentAt?.toISOString() ?? null,
       createdAt: m.createdAt.toISOString(),
       lead: { id: m.lead.id, businessName: m.lead.businessName },
+      deliveryStatus: m.deliveryStatus,
+      deliveryStatusAt: m.deliveryStatusAt?.toISOString() ?? null,
     })),
     replies: replies.map((r) => ({
       id: r.id,

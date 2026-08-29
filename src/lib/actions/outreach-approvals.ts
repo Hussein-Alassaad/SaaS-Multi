@@ -227,6 +227,20 @@ async function sendIfEmailChannel(tenantId: string, message: { id: string; leadI
     );
   }
 
+  if (result.ok && !result.skipped && result.messageId) {
+    // Stash Resend's own message id so the delivery webhook
+    // (src/app/api/webhooks/resend/route.ts) can match a later
+    // sent/delivered/bounced/complained event back to this row.
+    // deliveryStatus starts "sent" (accepted by Resend, no outcome
+    // reported yet) -- the webhook advances it from there.
+    await withTenant(tenantId, (tx) =>
+      tx.outreachMessage.update({
+        where: { id: message.id },
+        data: { resendMessageId: result.messageId, deliveryStatus: "sent", deliveryStatusAt: new Date() },
+      })
+    );
+  }
+
   if (result.ok && !result.skipped) {
     // sentCount is the bounce-rate denominator (maybePauseForBounceRate) --
     // incremented here, at the one real send call site, rather than derived

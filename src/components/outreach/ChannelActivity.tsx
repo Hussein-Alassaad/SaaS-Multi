@@ -15,6 +15,11 @@ export interface ChannelMessage {
   sentAt: string | null;
   createdAt: string;
   lead: { id: string; businessName: string | null };
+  // Email channel only (Resend webhook -- src/app/api/webhooks/resend/route.ts).
+  // Null for LinkedIn/Instagram, and for any email sent before delivery
+  // tracking was wired up or before Resend has reported an outcome.
+  deliveryStatus?: string | null;
+  deliveryStatusAt?: string | null;
 }
 
 export interface ChannelReply {
@@ -46,6 +51,17 @@ const SEND_STATUS_STYLE: Record<string, string> = {
   // outreach-approvals.ts) -- distinct from "failed" so it doesn't read as
   // broken: it's waiting its turn on purpose, protecting deliverability.
   queued_for_pacing: "bg-[var(--status-warm)]/10 text-[var(--status-warm)]",
+};
+
+// Real Resend delivery outcome, distinct from SEND_STATUS_STYLE above
+// (which only means "our API call to Resend succeeded") -- email channel
+// only, see ChannelMessage.deliveryStatus's own comment.
+const DELIVERY_STATUS_LABEL: Record<string, { label: string; style: string }> = {
+  sent: { label: "Awaiting delivery", style: "bg-[var(--surface-2)] text-[var(--text-4)]" },
+  delivered: { label: "Delivered", style: "bg-[#4fd293]/10 text-[#3fb87e]" },
+  delivery_delayed: { label: "Delayed", style: "bg-[var(--status-warm)]/10 text-[var(--status-warm)]" },
+  bounced: { label: "Bounced", style: "bg-[var(--status-hot)]/10 text-[var(--status-hot)]" },
+  complained: { label: "Marked as spam", style: "bg-[var(--status-hot)]/10 text-[var(--status-hot)]" },
 };
 
 /**
@@ -140,18 +156,31 @@ export function ChannelActivity({
                 >
                   {m.lead.businessName || "Unnamed business"}
                 </Link>
-                <span
-                  className={cn(
-                    "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
-                    SEND_STATUS_STYLE[m.sendStatus] ?? "bg-[var(--surface-2)] text-[var(--text-4)]"
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {m.deliveryStatus && DELIVERY_STATUS_LABEL[m.deliveryStatus] && (
+                    <span
+                      className={cn(
+                        "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                        DELIVERY_STATUS_LABEL[m.deliveryStatus].style
+                      )}
+                    >
+                      {DELIVERY_STATUS_LABEL[m.deliveryStatus].label}
+                    </span>
                   )}
-                >
-                  {m.sendStatus}
-                </span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[11px] font-medium capitalize",
+                      SEND_STATUS_STYLE[m.sendStatus] ?? "bg-[var(--surface-2)] text-[var(--text-4)]"
+                    )}
+                  >
+                    {m.sendStatus}
+                  </span>
+                </div>
               </div>
               <p className="mt-1.5 line-clamp-2 text-xs text-[var(--text-4)]">{m.editedBody || m.body}</p>
               <p className="mt-1.5 text-[11px] text-[var(--text-5)]">
                 {m.sentAt ? `Sent ${new Date(m.sentAt).toLocaleString()}` : `Created ${new Date(m.createdAt).toLocaleString()}`}
+                {m.deliveryStatusAt && ` · Updated ${new Date(m.deliveryStatusAt).toLocaleString()}`}
               </p>
             </motion.div>
           ))}

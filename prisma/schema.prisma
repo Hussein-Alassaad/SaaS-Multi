@@ -1054,6 +1054,20 @@ model OutreachMessage {
   sendStatus       String    @default("pending") @map("send_status")
   sentAt           DateTime? @map("sent_at")
   sentViaAccountId String?   @map("sent_via_account_id")
+  // Real delivery lifecycle for email channel only (Resend) -- distinct
+  // from sendStatus above, which only ever means "did OUR API call to
+  // Resend succeed", not "did the email actually reach an inbox".
+  // resendMessageId is what src/app/api/webhooks/resend/route.ts matches
+  // an incoming webhook event back to this row; deliveryStatus is the
+  // latest event Resend has reported: "sent" (accepted by Resend, no
+  // outcome yet) -> "delivered" (accepted by the recipient's mail server)
+  // -> "bounced" | "complained" (recipient marked it spam) | "delivery_delayed".
+  // Both null for LinkedIn/Instagram messages and for any email message
+  // sent before this column existed -- callers must treat null as
+  // "unknown", not "failed".
+  resendMessageId  String?   @map("resend_message_id")
+  deliveryStatus   String?   @map("delivery_status")
+  deliveryStatusAt DateTime? @map("delivery_status_at")
   createdAt        DateTime  @default(now()) @map("created_at")
 
   tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1066,6 +1080,7 @@ model OutreachMessage {
   @@index([tenantId, approvalStatus])
   @@index([tenantId, approvalStatus, sendStatus])
   @@index([tenantId, isReply, sendStatus])
+  @@index([resendMessageId])
   @@map("outreach_messages")
 }
 

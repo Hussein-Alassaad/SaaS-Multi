@@ -15,7 +15,7 @@ export default async function OutreachEmailPage() {
       channel="email"
       title="Email"
       accentTitle="Outreach"
-      subtitle="Email sends automatically via Amazon SES once approved -- nothing to action here, just what's happened."
+      subtitle="Email sends automatically once approved -- nothing to action here, just what's happened."
       messages={messages}
       replies={replies}
       accounts={accounts}
