@@ -2,23 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import RFB from "@novnc/novnc";
 import { Modal } from "@/components/ui/Modal";
 import { useToast } from "@/components/ui/Toast";
-import { startConnectAccountAction, cancelConnectAccountAction } from "@/lib/actions/outreach-live-login";
-
-// Must match the viewport live_login/session.py launches the browser at --
-// frame pixels and click coordinates are both in this exact space, so the
-// canvas is rendered 1:1 with no scaling math needed.
-const VIEWPORT_WIDTH = 1366;
-const VIEWPORT_HEIGHT = 768;
+import {
+  startConnectAccountAction,
+  cancelConnectAccountAction,
+  getConnectAccountStatusAction,
+} from "@/lib/actions/outreach-live-login";
 
 type SessionState = "starting" | "streaming" | "success" | "error";
 
-interface ServerMessage {
-  type: "frame" | "success" | "error";
-  data?: string;
-  message?: string;
-}
+const STATUS_POLL_MS = 2000;
 
 export function ConnectAccountModal({
   open,
@@ -33,25 +28,30 @@ export function ConnectAccountModal({
 }) {
   const [state, setState] = useState<SessionState>("starting");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const screenRef = useRef<HTMLDivElement | null>(null);
+  const rfbRef = useRef<InstanceType<typeof RFB> | null>(null);
   const router = useRouter();
   const { showToast } = useToast();
 
-  const closeSocket = useCallback(() => {
-    wsRef.current?.close();
-    wsRef.current = null;
+  const closeRfb = useCallback(() => {
+    rfbRef.current?.disconnect();
+    rfbRef.current = null;
   }, []);
 
   const cleanupAndClose = useCallback(
     (nextState: SessionState, message?: string) => {
-      closeSocket();
+      closeRfb();
       setState(nextState);
       if (message) setErrorMessage(message);
     },
-    [closeSocket]
+    [closeRfb]
   );
 
+  // Opens the VNC connection: mints the token, points noVNC's RFB client at
+  // the droplet's websocket (which now proxies raw VNC bytes -- see
+  // live_login/server.py -- rather than the old hand-rolled JSON frame/
+  // input protocol). RFB owns the whole socket; this component never
+  // parses its traffic directly.
   useEffect(() => {
     if (!open) return;
 
@@ -66,89 +66,82 @@ export function ConnectAccountModal({
         cleanupAndClose("error", result.error);
         return;
       }
+      const screen = screenRef.current;
+      if (!screen) return;
 
-      const ws = new WebSocket(`${result.wsUrl}?token=${encodeURIComponent(result.token)}`);
-      wsRef.current = ws;
+      const wsUrl = `${result.wsUrl}?token=${encodeURIComponent(result.token)}`;
+      const rfb = new RFB(screen, wsUrl);
+      rfb.viewOnly = false;
+      rfb.scaleViewport = true;
+      rfb.clipViewport = true;
+      rfb.background = "#000000";
+      rfbRef.current = rfb;
 
-      ws.onopen = () => {
+      rfb.addEventListener("connect", () => {
         if (!cancelled) setState("streaming");
-      };
+      });
 
-      ws.onmessage = (event) => {
-        let msg: ServerMessage;
-        try {
-          msg = JSON.parse(event.data);
-        } catch {
-          return;
-        }
-        if (msg.type === "frame" && msg.data) {
-          drawFrame(canvasRef.current, msg.data);
-        } else if (msg.type === "success") {
-          cleanupAndClose("success");
-          router.refresh();
-          showToast({ title: "Connected", description: `${accountLabel} is now connected.`, variant: "success" });
-        } else if (msg.type === "error") {
-          cleanupAndClose("error", msg.message ?? "The connection attempt failed.");
-        }
-      };
-
-      ws.onerror = () => {
-        if (!cancelled) cleanupAndClose("error", "Lost connection to the login server.");
-      };
-
-      ws.onclose = (event) => {
+      rfb.addEventListener("disconnect", (e) => {
         if (cancelled) return;
-        // A clean close after success/error already set state above -- only
-        // treat an unexpected close (still "streaming") as a failure.
+        const clean = (e as CustomEvent<{ clean: boolean }>).detail?.clean;
+        // A clean disconnect after success/error already set state above via
+        // cleanupAndClose (which itself calls disconnect()) -- only an
+        // UNCLEAN disconnect while still "streaming" is a real failure here.
         setState((prev) => {
-          if (prev === "streaming") {
+          if (prev === "streaming" && !clean) {
             void cancelConnectAccountAction(accountId);
-            setErrorMessage(event.reason || "Connection closed unexpectedly.");
+            setErrorMessage("Lost connection to the login server.");
             return "error";
           }
           return prev;
         });
-      };
+      });
+
+      rfb.addEventListener("securityfailure", () => {
+        if (!cancelled) cleanupAndClose("error", "Could not establish a secure connection.");
+      });
     })();
 
     return () => {
       cancelled = true;
-      closeSocket();
+      closeRfb();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-runs only when the modal opens/accountId changes, not on every render
   }, [open, accountId]);
 
-  // Focus the canvas as soon as the stream is actually up, so keyboard
-  // input works right away rather than requiring the user to notice they
-  // need to click into it first (the onMouseDown handler below also
-  // focuses on every click, as a second line of defense).
+  // Polls the account's real loginStatus while streaming -- replaces the
+  // old websocket "success"/"error" push messages, which had nowhere left
+  // to go once the socket became pure VNC protocol (see this file's other
+  // comments, and live_login/server.py's own docstring, for why).
   useEffect(() => {
-    if (state === "streaming") canvasRef.current?.focus();
-  }, [state]);
+    if (state !== "streaming") return;
+    let cancelled = false;
 
-  const sendInput = useCallback((message: object) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(message));
-    }
-  }, []);
+    const poll = async () => {
+      const result = await getConnectAccountStatusAction(accountId);
+      if (cancelled || !result.ok) return;
 
-  const toCanvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = VIEWPORT_WIDTH / rect.width;
-    const scaleY = VIEWPORT_HEIGHT / rect.height;
-    return {
-      x: Math.round((e.clientX - rect.left) * scaleX),
-      y: Math.round((e.clientY - rect.top) * scaleY),
+      if (result.status === "connected") {
+        cleanupAndClose("success");
+        router.refresh();
+        showToast({ title: "Connected", description: `${accountLabel} is now connected.`, variant: "success" });
+      } else if (result.status === "failed") {
+        cleanupAndClose("error", result.error ?? "The connection attempt failed.");
+      }
     };
-  }, []);
+
+    const interval = setInterval(poll, STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [state, accountId, accountLabel, cleanupAndClose, router, showToast]);
 
   return (
     <Modal
       open={open}
       onOpenChange={(next) => {
-        if (!next) closeSocket();
+        if (!next) closeRfb();
         onOpenChange(next);
       }}
       title={`Connect ${accountLabel}`}
@@ -185,52 +178,16 @@ export function ConnectAccountModal({
         <div className="flex h-96 items-center justify-center text-sm text-[#4fd293]">Connected successfully.</div>
       )}
 
+      <div
+        ref={screenRef}
+        className="aspect-[1366/768] w-full overflow-hidden rounded-xl border border-[var(--border-hairline-strong)] bg-black"
+        style={{ display: state === "streaming" ? "block" : "none" }}
+      />
       {state === "streaming" && (
-        <div className="space-y-2">
-          <canvas
-            ref={canvasRef}
-            width={VIEWPORT_WIDTH}
-            height={VIEWPORT_HEIGHT}
-            className="aspect-[1366/768] w-full cursor-pointer rounded-xl border border-[var(--border-hairline-strong)] bg-black"
-            tabIndex={0}
-            onMouseMove={(e) => sendInput({ type: "mousemove", ...toCanvasCoords(e) })}
-            onMouseDown={(e) => {
-              // Without this, a click can land and dispatch mousedown/up to
-              // the remote page just fine while never actually moving
-              // KEYBOARD focus onto this canvas element -- every keystroke
-              // afterward then silently goes nowhere (no onKeyDown ever
-              // fires) even though clicks keep working. Explicit focus()
-              // makes "click in, then type" reliable regardless of how
-              // focus landed (or didn't) before this click.
-              e.currentTarget.focus();
-              sendInput({ type: "mousedown", ...toCanvasCoords(e), button: "left" });
-            }}
-            onMouseUp={(e) => sendInput({ type: "mouseup", ...toCanvasCoords(e), button: "left" })}
-            onKeyDown={(e) => {
-              e.preventDefault();
-              sendInput({ type: "keydown", key: e.key, code: e.code });
-            }}
-            onKeyUp={(e) => {
-              e.preventDefault();
-              sendInput({ type: "keyup", key: e.key, code: e.code });
-            }}
-          />
-          <p className="text-[11px] text-[var(--text-5)]">
-            Click into the window above, then type normally. This can take a minute to load the real login page.
-          </p>
-        </div>
+        <p className="mt-2 text-[11px] text-[var(--text-5)]">
+          Click into the window above, then type normally. This can take a minute to load the real login page.
+        </p>
       )}
     </Modal>
   );
-}
-
-function drawFrame(canvas: HTMLCanvasElement | null, base64Jpeg: string) {
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const img = new Image();
-  img.onload = () => {
-    ctx.drawImage(img, 0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
-  };
-  img.src = `data:image/jpeg;base64,${base64Jpeg}`;
 }

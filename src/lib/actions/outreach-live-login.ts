@@ -5,6 +5,8 @@ import { withTenant } from "@/lib/db";
 import { getTenantSession, getSecretKey } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 
+export type ConnectAccountStatus = "not_connected" | "pending_first_login" | "connecting" | "connected" | "failed";
+
 /**
  * Mints a short-lived (120s), single-purpose token scoped to exactly one
  * account, then hands the client the droplet's websocket URL to open
@@ -111,4 +113,33 @@ export async function cancelConnectAccountAction(accountId: string) {
   if (result === "not_found") return { ok: false as const, error: "Account not found." };
 
   return { ok: true as const };
+}
+
+/**
+ * Polled from ConnectAccountModal.tsx (every couple seconds) while the VNC
+ * session is open, to detect when the droplet's own background watcher
+ * (live_login/server.py's _watch_login_and_persist) has written a terminal
+ * loginStatus. Replaces the old websocket "success"/"error" messages --
+ * the VNC socket now carries pure RFB protocol for noVNC's RFB client, so
+ * there's no channel left to push that event over; polling the row this
+ * app already treats as the source of truth is simpler than inventing a
+ * second side-channel just for this one signal.
+ */
+export async function getConnectAccountStatusAction(accountId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.findFirst({
+      where: { id: accountId, tenantId: session.tenantId! },
+      select: { loginStatus: true, loginError: true },
+    })
+  );
+  if (!account) return { ok: false as const, error: "Account not found." };
+
+  return {
+    ok: true as const,
+    status: account.loginStatus as ConnectAccountStatus,
+    error: account.loginError,
+  };
 }
