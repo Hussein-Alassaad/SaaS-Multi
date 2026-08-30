@@ -30,6 +30,7 @@ export async function getUnhealthyAccountCount(tenantId: string): Promise<number
 export interface AccountReachStats {
   sentToday: number;
   sentThisWeek: number;
+  sentThisMonth: number;
   repliedThisWeek: number;
 }
 
@@ -70,13 +71,16 @@ export async function getAccountHealthPageData(tenantId: string) {
 
 /** Sequential -- a single Prisma TransactionClient can't run concurrent queries. */
 async function readReachStatRows(tx: Prisma.TransactionClient, tenantId: string) {
-  const { weekStart } = reachStatWindow();
+  // monthStart is always <= weekStart, so querying from monthStart alone
+  // covers both windows -- one query, filtered further in shapeReachStats
+  // below, rather than two separate range queries.
+  const { monthStart } = reachStatWindow();
   const sentRows = await tx.outreachMessage.findMany({
-    where: { tenantId, sendStatus: "sent", sentAt: { gte: weekStart }, sentViaAccountId: { not: null } },
+    where: { tenantId, sendStatus: "sent", sentAt: { gte: monthStart }, sentViaAccountId: { not: null } },
     select: { sentViaAccountId: true, sentAt: true },
   });
   const replyRows = await tx.outreachReply.findMany({
-    where: { tenantId, repliedAt: { gte: weekStart }, accountId: { not: null } },
+    where: { tenantId, repliedAt: { gte: monthStart }, accountId: { not: null } },
     select: { accountId: true, repliedAt: true },
   });
   return { sentRows, replyRows };
@@ -87,19 +91,20 @@ function reachStatWindow() {
   todayStart.setHours(0, 0, 0, 0);
   const weekStart = new Date(todayStart);
   weekStart.setDate(weekStart.getDate() - 6);
-  return { todayStart, weekStart };
+  const monthStart = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
+  return { todayStart, weekStart, monthStart };
 }
 
 function shapeReachStats({
   sentRows,
   replyRows,
 }: Awaited<ReturnType<typeof readReachStatRows>>): Map<string, AccountReachStats> {
-  const { todayStart } = reachStatWindow();
+  const { todayStart, weekStart } = reachStatWindow();
   const stats = new Map<string, AccountReachStats>();
   const get = (accountId: string) => {
     let s = stats.get(accountId);
     if (!s) {
-      s = { sentToday: 0, sentThisWeek: 0, repliedThisWeek: 0 };
+      s = { sentToday: 0, sentThisWeek: 0, sentThisMonth: 0, repliedThisWeek: 0 };
       stats.set(accountId, s);
     }
     return s;
@@ -108,11 +113,12 @@ function shapeReachStats({
   for (const row of sentRows) {
     if (!row.sentViaAccountId || !row.sentAt) continue;
     const s = get(row.sentViaAccountId);
-    s.sentThisWeek += 1;
+    s.sentThisMonth += 1;
+    if (row.sentAt >= weekStart) s.sentThisWeek += 1;
     if (row.sentAt >= todayStart) s.sentToday += 1;
   }
   for (const row of replyRows) {
-    if (!row.accountId) continue;
+    if (!row.accountId || !row.repliedAt || row.repliedAt < weekStart) continue;
     get(row.accountId).repliedThisWeek += 1;
   }
 

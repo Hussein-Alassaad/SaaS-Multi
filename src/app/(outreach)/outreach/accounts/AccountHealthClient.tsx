@@ -23,8 +23,12 @@ export interface AccountHealthRow {
   igDailyLimit: number;
   linkedinDailyLimit: number;
   emailDailyLimit: number;
+  igMonthlyLimit: number;
+  linkedinMonthlyLimit: number;
+  emailMonthlyLimit: number;
   sentToday: number;
   sentThisWeek: number;
+  sentThisMonth: number;
   repliedThisWeek: number;
   proxyHost: string | null;
   proxyPort: string | null;
@@ -460,6 +464,15 @@ export function AccountHealthClient({
                       </div>
                     </label>
                     <label className="block">
+                      <span className={labelClass}>This month</span>
+                      <div
+                        className={`${inputClass} flex cursor-not-allowed items-center opacity-70`}
+                        title="Monthly cap set by your account manager -- not tenant-editable"
+                      >
+                        {account.sentThisMonth} / {account.emailMonthlyLimit}
+                      </div>
+                    </label>
+                    <label className="block">
                       <span className={labelClass}>From email</span>
                       <div
                         className={`${inputClass} flex cursor-not-allowed items-center opacity-70`}
@@ -524,6 +537,16 @@ export function AccountHealthClient({
                         title="Set by your account manager -- not tenant-editable"
                       >
                         {account.platform === "instagram" ? account.igDailyLimit : account.linkedinDailyLimit}
+                      </div>
+                    </label>
+                    <label className="block">
+                      <span className={labelClass}>This month</span>
+                      <div
+                        className={`${inputClass} flex cursor-not-allowed items-center opacity-70`}
+                        title="Monthly cap set by your account manager -- not tenant-editable"
+                      >
+                        {account.sentThisMonth} /{" "}
+                        {account.platform === "instagram" ? account.igMonthlyLimit : account.linkedinMonthlyLimit}
                       </div>
                     </label>
                     <label className="block">

@@ -26,6 +26,8 @@ import {
   deactivateTenantAction,
   reactivateTenantAction,
   setOutreachDailyLimitAction,
+  setOutreachMonthlyLimitAction,
+  toggleOutreachAccountStatusAction,
   setOutreachSenderAction,
   setOutreachTimezoneAction,
 } from "@/lib/actions/admin-tenants";
@@ -127,6 +129,9 @@ interface OutreachAccountRow {
   igDailyLimit: number;
   linkedinDailyLimit: number;
   emailDailyLimit: number;
+  igMonthlyLimit: number;
+  linkedinMonthlyLimit: number;
+  emailMonthlyLimit: number;
   sesFromEmail: string | null;
   sesFromName: string | null;
   status: string;
@@ -650,32 +655,102 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** One small labeled numeric input + Save button -- shared by the daily and monthly limit fields below. */
+function LimitField({
+  label,
+  value,
+  onChange,
+  onSave,
+  dirty,
+  pending,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSave: () => void;
+  dirty: boolean;
+  pending: boolean;
+}) {
+  return (
+    <div>
+      <span className="block text-[10px] text-[var(--text-4)]">{label}</span>
+      <div className="mt-0.5 flex items-center gap-1.5">
+        <input
+          type="number"
+          min={0}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-16 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2 py-1 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+        />
+        <Button size="sm" variant="outline" disabled={pending || !dirty} onClick={onSave}>
+          {pending ? "..." : "Save"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
- * One editable daily-limit row per Outreach account -- only the field
- * relevant to that account's platform is shown/editable (an Instagram
- * account has no email limit, an email account has no LinkedIn limit).
- * Saves via setOutreachDailyLimitAction (Admin-only, see that action's own
- * docstring for why this moved out of the tenant-editable Account Health
- * page).
+ * One row per Outreach account: editable daily + monthly caps (only the
+ * pair relevant to that account's platform -- an Instagram account has no
+ * email limit, an email account has no LinkedIn limit), plus a manual
+ * Stop/Resume sending control. Daily/monthly save via
+ * setOutreachDailyLimitAction/setOutreachMonthlyLimitAction; Stop/Resume via
+ * toggleOutreachAccountStatusAction -- all Admin-only, same posture as the
+ * rest of this tab (tenant sees these read-only on Account Health).
  */
 function OutreachAccountLimitRow({ account, tenantId }: { account: OutreachAccountRow; tenantId: string }) {
-  const field =
+  const dailyField =
     account.platform === "email" ? "emailDailyLimit"
     : account.platform === "instagram" ? "igDailyLimit"
     : "linkedinDailyLimit";
-  const [value, setValue] = useState(String(account[field]));
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
+  const monthlyField =
+    account.platform === "email" ? "emailMonthlyLimit"
+    : account.platform === "instagram" ? "igMonthlyLimit"
+    : "linkedinMonthlyLimit";
 
-  const save = () => {
-    const num = Number(value);
+  const [dailyValue, setDailyValue] = useState(String(account[dailyField]));
+  const [monthlyValue, setMonthlyValue] = useState(String(account[monthlyField]));
+  const [error, setError] = useState<string | null>(null);
+  const [savingDaily, startDailyTransition] = useTransition();
+  const [savingMonthly, startMonthlyTransition] = useTransition();
+  const [togglingStatus, startStatusTransition] = useTransition();
+
+  const isPaused = account.status === "paused";
+
+  const saveDaily = () => {
+    const num = Number(dailyValue);
     if (!Number.isFinite(num) || num < 0) {
       setError("Enter a valid, non-negative number.");
       return;
     }
     setError(null);
-    startTransition(async () => {
-      const result = await setOutreachDailyLimitAction(account.id, tenantId, field, num);
+    startDailyTransition(async () => {
+      const result = await setOutreachDailyLimitAction(account.id, tenantId, dailyField, num);
+      if (!result.ok) setError(result.error);
+    });
+  };
+
+  const saveMonthly = () => {
+    const num = Number(monthlyValue);
+    if (!Number.isFinite(num) || num < 0) {
+      setError("Enter a valid, non-negative number.");
+      return;
+    }
+    setError(null);
+    startMonthlyTransition(async () => {
+      const result = await setOutreachMonthlyLimitAction(account.id, tenantId, monthlyField, num);
+      if (!result.ok) setError(result.error);
+    });
+  };
+
+  const toggleStatus = () => {
+    if (!isPaused && !window.confirm(`Stop sending on ${account.label}? The agent will skip this account entirely until you resume it.`)) {
+      return;
+    }
+    setError(null);
+    startStatusTransition(async () => {
+      const result = await toggleOutreachAccountStatusAction(account.id, tenantId, !isPaused);
       if (!result.ok) setError(result.error);
     });
   };
@@ -689,16 +764,30 @@ function OutreachAccountLimitRow({ account, tenantId }: { account: OutreachAccou
         </p>
         {error && <p className="text-xs text-[var(--status-hot)]">{error}</p>}
       </div>
-      <div className="flex items-center gap-2">
-        <input
-          type="number"
-          min={0}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="w-20 rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-2.5 py-1.5 text-sm text-[var(--text-1)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+      <div className="flex items-center gap-3">
+        <LimitField
+          label="Per day"
+          value={dailyValue}
+          onChange={setDailyValue}
+          onSave={saveDaily}
+          dirty={dailyValue !== String(account[dailyField])}
+          pending={savingDaily}
         />
-        <Button size="sm" variant="outline" disabled={pending || value === String(account[field])} onClick={save}>
-          {pending ? "Saving..." : "Save"}
+        <LimitField
+          label="Per month"
+          value={monthlyValue}
+          onChange={setMonthlyValue}
+          onSave={saveMonthly}
+          dirty={monthlyValue !== String(account[monthlyField])}
+          pending={savingMonthly}
+        />
+        <Button
+          size="sm"
+          variant={isPaused ? "outline" : "destructive"}
+          disabled={togglingStatus}
+          onClick={toggleStatus}
+        >
+          {togglingStatus ? "..." : isPaused ? "Resume sending" : "Stop sending"}
         </Button>
       </div>
     </div>

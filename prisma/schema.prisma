@@ -850,14 +850,14 @@ model AiSettings {
 // ---------------------------------------------------------------------------
 
 model OutreachAccount {
-  id                 String    @id @default(cuid())
-  tenantId           String    @map("tenant_id")
-  label              String
-  platform           String    @default("linkedin") // "instagram" | "linkedin" | "email" -- which channel this account sends through
-  platformHandles    String    @default("{}") @map("platform_handles") // JSON-encoded {linkedin, instagram}
-  runTime            String    @default("09:00") @map("run_time") // "HH:MM", interpreted in the tenant's configured timezone
-  igDailyLimit       Int       @default(20) @map("ig_daily_limit")
-  linkedinDailyLimit Int       @default(30) @map("linkedin_daily_limit")
+  id                   String    @id @default(cuid())
+  tenantId             String    @map("tenant_id")
+  label                String
+  platform             String    @default("linkedin") // "instagram" | "linkedin" | "email" -- which channel this account sends through
+  platformHandles      String    @default("{}") @map("platform_handles") // JSON-encoded {linkedin, instagram}
+  runTime              String    @default("09:00") @map("run_time") // "HH:MM", interpreted in the tenant's configured timezone
+  igDailyLimit         Int       @default(20) @map("ig_daily_limit")
+  linkedinDailyLimit   Int       @default(30) @map("linkedin_daily_limit")
   // Default lowered 2026-08-21: 300/day was this column's original value,
   // but every real client onboarded so far targets ~300 EMAILS PER MONTH
   // (roughly 10/day) -- 300/day was never actually a client's real target,
@@ -868,14 +868,25 @@ model OutreachAccount {
   // separate ramp-up mechanic the way LinkedIn/Instagram's warmupCurrentLimit
   // does -- a client's actual monthly target is naturally a safe daily pace
   // already, so no additional warm-up ramp was built for this field.
-  emailDailyLimit    Int       @default(10) @map("email_daily_limit")
-  sentCount          Int       @default(0) @map("sent_count") // real SES sends via this account, all-time -- denominator for bounceRate below
-  bounceCount        Int       @default(0) @map("bounce_count") // incremented only by a real SES bounce notification (see src/app/api/webhooks/ses-bounce/route.ts), never guessed
-  proxyHost          String?   @map("proxy_host")
-  proxyPort          String?   @map("proxy_port")
-  proxyUsername      String?   @map("proxy_username")
-  proxyPasswordEnc   String?   @map("proxy_password_enc") // encrypted at rest (AES-256-GCM, see src/lib/outreach/crypto.ts) -- multiple real tenants' credentials now share this table, unlike the original single-tenant version
-  verifiedProxyIp    String?   @map("verified_proxy_ip") // the real outbound IP this account's proxy resolved to on its first successful verified run -- checked on every later run (agent/core/session.py's verify_proxy_ip()) so an account never runs through a DIFFERENT IP than it always has (the exact "HARD RULE" this model's proxyHost/proxyPort/proxyUsername fields document, now actually enforced at runtime, not just assumed)
+  emailDailyLimit      Int       @default(10) @map("email_daily_limit")
+  // Monthly caps -- display/tracking only (Admin sets, tenant sees
+  // read-only, same posture as the daily fields above). Deliberately NOT
+  // enforced by the Python agent: the daily limits above already gate real
+  // send/discovery volume day to day, and wiring an automatic monthly
+  // cutoff is real behavior change to live automation that wasn't asked
+  // for yet -- what WAS asked for is a manual per-channel "stop sending"
+  // control (see `status` field below, already checked by the scheduler
+  // in 3 places) that Admin can flip any time, independent of any count.
+  igMonthlyLimit       Int       @default(600) @map("ig_monthly_limit")
+  linkedinMonthlyLimit Int       @default(900) @map("linkedin_monthly_limit")
+  emailMonthlyLimit    Int       @default(300) @map("email_monthly_limit")
+  sentCount            Int       @default(0) @map("sent_count") // real SES sends via this account, all-time -- denominator for bounceRate below
+  bounceCount          Int       @default(0) @map("bounce_count") // incremented only by a real SES bounce notification (see src/app/api/webhooks/ses-bounce/route.ts), never guessed
+  proxyHost            String?   @map("proxy_host")
+  proxyPort            String?   @map("proxy_port")
+  proxyUsername        String?   @map("proxy_username")
+  proxyPasswordEnc     String?   @map("proxy_password_enc") // encrypted at rest (AES-256-GCM, see src/lib/outreach/crypto.ts) -- multiple real tenants' credentials now share this table, unlike the original single-tenant version
+  verifiedProxyIp      String?   @map("verified_proxy_ip") // the real outbound IP this account's proxy resolved to on its first successful verified run -- checked on every later run (agent/core/session.py's verify_proxy_ip()) so an account never runs through a DIFFERENT IP than it always has (the exact "HARD RULE" this model's proxyHost/proxyPort/proxyUsername fields document, now actually enforced at runtime, not just assumed)
   // Platform login credentials -- the TENANT enters their own account's real
   // email/password directly in the Account Health dashboard (self-service,
   // no admin/agency-owner in the loop -- see src/lib/outreach/crypto.ts for
@@ -889,11 +900,11 @@ model OutreachAccount {
   // tradeoff (a fresh automated login is LinkedIn/Instagram's single
   // highest-risk moment for a security challenge the agent can't solve
   // blind, vs. reusing an already-established session).
-  loginEmail         String?   @map("login_email")
-  loginPasswordEnc   String?   @map("login_password_enc")
-  loginStatus        String    @default("not_connected") @map("login_status") // not_connected | pending_first_login | connecting | connected | failed
-  loginError         String?   @map("login_error") // human-readable reason from the last failed login attempt, cleared on the next success
-  loginConnectedAt   DateTime? @map("login_connected_at")
+  loginEmail           String?   @map("login_email")
+  loginPasswordEnc     String?   @map("login_password_enc")
+  loginStatus          String    @default("not_connected") @map("login_status") // not_connected | pending_first_login | connecting | connected | failed
+  loginError           String?   @map("login_error") // human-readable reason from the last failed login attempt, cleared on the next success
+  loginConnectedAt     DateTime? @map("login_connected_at")
   // Set the moment a live "Connect account" websocket session starts (see
   // outreach/agent/live_login/), alongside loginStatus="connecting". Lets the
   // UI detect and recover from a stuck "Connecting..." state if the droplet
@@ -901,16 +912,16 @@ model OutreachAccount {
   // AccountHealthClient treats "connecting" older than ~15 minutes as
   // effectively failed and offers a retry, rather than showing a
   // permanently-stuck badge with no way out.
-  loginConnectingAt  DateTime? @map("login_connecting_at")
-  sesFromEmail       String?   @map("ses_from_email") // verified SES sender identity -- only used when platform = "email"
-  sesFromName        String?   @map("ses_from_name")
-  warmupCurrentLimit Int       @default(5) @map("warmup_current_limit")
-  status             String    @default("active")
-  warningType        String?   @map("warning_type")
-  warningReason      String?   @map("warning_reason")
-  redistributeFlag   Boolean   @default(false) @map("redistribute_flag")
-  lastActiveAt       DateTime? @map("last_active_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
+  loginConnectingAt    DateTime? @map("login_connecting_at")
+  sesFromEmail         String?   @map("ses_from_email") // verified SES sender identity -- only used when platform = "email"
+  sesFromName          String?   @map("ses_from_name")
+  warmupCurrentLimit   Int       @default(5) @map("warmup_current_limit")
+  status               String    @default("active")
+  warningType          String?   @map("warning_type")
+  warningReason        String?   @map("warning_reason")
+  redistributeFlag     Boolean   @default(false) @map("redistribute_flag")
+  lastActiveAt         DateTime? @map("last_active_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
 
   tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   leads        OutreachLead[]

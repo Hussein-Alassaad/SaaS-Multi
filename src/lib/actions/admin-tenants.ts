@@ -287,6 +287,105 @@ export async function setOutreachDailyLimitAction(
 }
 
 /**
+ * Same shape and posture as setOutreachDailyLimitAction above, for the
+ * monthly caps. Display/tracking only -- see the schema comment on
+ * OutreachAccount.igMonthlyLimit for why this is deliberately NOT enforced
+ * by the Python agent (the daily limits above already gate real send
+ * volume; a manual per-channel stop is what toggleOutreachAccountStatusAction
+ * below provides instead of an automatic monthly cutoff).
+ */
+export async function setOutreachMonthlyLimitAction(
+  accountId: string,
+  tenantId: string,
+  field: "igMonthlyLimit" | "linkedinMonthlyLimit" | "emailMonthlyLimit",
+  value: number
+) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "edit");
+
+  if (!Number.isFinite(value) || value < 0) {
+    return { ok: false as const, error: "Enter a valid, non-negative number." };
+  }
+
+  const found = await withPlatformAccess(async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+    if (!account) return false;
+
+    const oldValue = account[field];
+    await tx.outreachAccount.update({ where: { id: accountId }, data: { [field]: value } });
+
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: "outreach_account.monthly_limit_changed",
+        resource: "outreach_account",
+        tenantId,
+        oldValue: JSON.stringify({ [field]: oldValue }),
+        newValue: JSON.stringify({ [field]: value }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Account not found." };
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  return { ok: true as const };
+}
+
+/**
+ * One "Stop sending" / "Resume sending" control per Outreach account
+ * (i.e. per channel -- a tenant with both an Instagram and an Email
+ * account gets one of each). Flips OutreachAccount.status between
+ * "active" and "paused" -- NOT a new mechanism: the Python scheduler
+ * already skips any account whose status isn't "active" in three places
+ * (scheduler.py's two send/discovery gates, core/account_pool.py's pool
+ * selection), the same status value core/health.py's automatic warning
+ * system already uses for the same purpose. This just gives Admin a
+ * direct, manual way to set it, independent of an automatic warning ever
+ * firing.
+ */
+export async function toggleOutreachAccountStatusAction(accountId: string, tenantId: string, pause: boolean) {
+  const session = await getSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  guard(session.role?.name ?? "", "tenants", "edit");
+
+  const found = await withPlatformAccess(async (tx) => {
+    const account = await tx.outreachAccount.findFirst({ where: { id: accountId, tenantId } });
+    if (!account) return false;
+
+    const oldStatus = account.status;
+    const newStatus = pause ? "paused" : "active";
+    await tx.outreachAccount.update({
+      where: { id: accountId },
+      data: pause
+        ? { status: newStatus, warningType: "manual_stop", warningReason: "Stopped by Admin." }
+        : { status: newStatus, warningType: null, warningReason: null },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        actorId: session.id,
+        action: pause ? "outreach_account.stopped" : "outreach_account.resumed",
+        resource: "outreach_account",
+        tenantId,
+        oldValue: JSON.stringify({ status: oldStatus }),
+        newValue: JSON.stringify({ status: newStatus }),
+        device: "Desktop",
+        browser: "Admin",
+      },
+    });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Account not found." };
+
+  revalidatePath(`/admin/tenants/${tenantId}`);
+  return { ok: true as const };
+}
+
+/**
  * Sets the From address/name an Outreach email account sends cold email
  * as (account.sesFromEmail/sesFromName, sent via Resend --
  * src/lib/outreach/resend-email.ts). Admin-only, same posture as
