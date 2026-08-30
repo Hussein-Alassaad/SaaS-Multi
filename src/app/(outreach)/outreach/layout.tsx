@@ -10,7 +10,6 @@ import { getTenantSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getEnabledSectionHrefs } from "@/lib/agency/sections";
 import { getTenantNotifications } from "@/lib/notifications";
-import { getUnhealthyAccountCount } from "@/lib/outreach/accounts";
 
 export default async function OutreachLayout({ children }: { children: React.ReactNode }) {
   const session = await getTenantSession();
@@ -24,12 +23,13 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   // sequential round-trip here is latency every navigation pays. tenant
   // must be resolved first (its product.id feeds getTenantNotifications
   // below, and the cross-product guard needs it before rendering anything
-  // real) -- but that's the ONLY genuine dependency: enabledSections,
-  // unhealthyAccountCount, and notifications don't depend on each other,
-  // so they run together instead of notifications waiting its own turn
-  // after them (was 1 lookup -> Promise.all of 3 -> a 4th sequential
-  // round-trip; now 1 lookup -> Promise.all of 3, one fewer full
-  // round-trip per page).
+  // real) -- but that's the ONLY genuine dependency: enabledSections and
+  // notifications don't depend on each other, so they run together instead
+  // of notifications waiting its own turn after them. unhealthyAccountCount
+  // used to be a third thing awaited here too -- it opens its OWN withTenant
+  // transaction (4 more round trips) for what's just a nav-badge dot, so
+  // it's now fetched client-side after mount instead (see
+  // useUnhealthyAccountCount) and no longer blocks any navigation.
   const tenant = await db.tenant.findUnique({
     where: { id: session.tenantId! },
     select: { product: { select: { id: true, slug: true } } },
@@ -41,9 +41,8 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   // outreach data behind it.
   if (tenant?.product.slug !== "outreach") redirect("/outreach-login");
 
-  const [enabledSections, unhealthyAccountCount, announcements] = await Promise.all([
+  const [enabledSections, announcements] = await Promise.all([
     getEnabledSectionHrefs(session.tenantId!, "outreach"),
-    getUnhealthyAccountCount(session.tenantId!),
     getTenantNotifications(session.tenantId!, tenant.product.id),
   ]);
 
@@ -54,11 +53,7 @@ export default async function OutreachLayout({ children }: { children: React.Rea
           it needs to render INSIDE this scoped wrapper to actually pick
           up the blue/black theme instead of :root's default purple/cyan. */}
       <div className="ambient-glows" aria-hidden="true" />
-      <OutreachSidebar
-        currentUser={currentUser}
-        enabledSections={enabledSections}
-        unhealthyAccountCount={unhealthyAccountCount}
-      />
+      <OutreachSidebar currentUser={currentUser} enabledSections={enabledSections} />
       <AmbientWordmark word="OUTREACH" />
       <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
         <OutreachMobileTopBar currentUser={currentUser} />
@@ -74,7 +69,7 @@ export default async function OutreachLayout({ children }: { children: React.Rea
           />
           <PageTransition>{children}</PageTransition>
         </main>
-        <OutreachMobileBottomBar enabledSections={enabledSections} unhealthyAccountCount={unhealthyAccountCount} />
+        <OutreachMobileBottomBar enabledSections={enabledSections} />
       </div>
       <OutreachRealtimeToasts tenantId={session.tenantId!} />
     </div>

@@ -4,6 +4,23 @@ import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { encryptSecret } from "@/lib/outreach/crypto";
+import { getUnhealthyAccountCount } from "@/lib/outreach/accounts";
+
+/**
+ * Deliberately pulled OUT of OutreachLayout's server-render path (see
+ * layout.tsx) -- getUnhealthyAccountCount() opens its own withTenant()
+ * transaction (BEGIN + SET LOCAL + query + COMMIT, 4 round trips to
+ * Supabase), which was previously awaited before ANY Outreach page could
+ * start rendering, on every single navigation. It's a nav-badge dot, not
+ * page content -- fetching it client-side after the shell has already
+ * painted (see OutreachSidebar/OutreachMobileBottomBar) removes that
+ * transaction from the critical path entirely.
+ */
+export async function getUnhealthyAccountCountAction(): Promise<number> {
+  const session = await getTenantSession();
+  if (!session?.tenantId) return 0;
+  return getUnhealthyAccountCount(session.tenantId);
+}
 
 /**
  * Draft shape submitted by AccountHealthClient's per-account edit form.

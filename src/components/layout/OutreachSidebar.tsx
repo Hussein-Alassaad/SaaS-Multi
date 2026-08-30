@@ -10,6 +10,7 @@ import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
+import { useUnhealthyAccountCount } from "@/lib/outreach/useUnhealthyAccountCount";
 
 interface CurrentUser {
   name: string;
@@ -19,15 +20,14 @@ interface CurrentUser {
 export function OutreachSidebar({
   currentUser,
   enabledSections,
-  unhealthyAccountCount = 0,
 }: {
   currentUser: CurrentUser | null;
   enabledSections: string[];
-  unhealthyAccountCount?: number;
 }) {
   const enabledSet = new Set(enabledSections);
   const visibleNavItems = OUTREACH_NAV_ITEMS.filter((item) => enabledSet.has(item.href));
   const pathname = usePathname();
+  const unhealthyAccountCount = useUnhealthyAccountCount();
   const [expanded, setExpanded] = useState(false);
   const { theme, setTheme } = useTheme();
   const mounted = useHasMounted();
@@ -68,7 +68,7 @@ export function OutreachSidebar({
                     background:
                       "linear-gradient(90deg, color-mix(in oklab, var(--accent-from) 20%, transparent), color-mix(in oklab, var(--accent-to) 10%, transparent))",
                   }}
-                  transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                  transition={{ duration: 0.15, ease: "easeOut" }}
                 />
               )}
               <span className="relative z-10 shrink-0">

@@ -7,16 +7,12 @@ import { useState } from "react";
 import { Drawer } from "@/components/ui/Drawer";
 import { OUTREACH_NAV_ITEMS } from "./outreach-nav-config";
 import { cn } from "@/lib/utils";
+import { useUnhealthyAccountCount } from "@/lib/outreach/useUnhealthyAccountCount";
 
-export function OutreachMobileBottomBar({
-  enabledSections,
-  unhealthyAccountCount = 0,
-}: {
-  enabledSections: string[];
-  unhealthyAccountCount?: number;
-}) {
+export function OutreachMobileBottomBar({ enabledSections }: { enabledSections: string[] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const unhealthyAccountCount = useUnhealthyAccountCount();
   const enabledSet = new Set(enabledSections);
   const visibleNavItems = OUTREACH_NAV_ITEMS.filter((item) => enabledSet.has(item.href));
 
