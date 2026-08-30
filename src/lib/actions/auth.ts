@@ -9,7 +9,20 @@ export interface LoginState {
   error?: string;
 }
 
-export async function loginAction(_prevState: LoginState, formData: FormData): Promise<LoginState> {
+/**
+ * Single entry point for every login page (Admin, Agency, Outreach) --
+ * looks up the account by email ALONE (no scope filter), regardless of
+ * which page the form was submitted from, then redirects to wherever that
+ * account actually belongs. email is globally @unique on User, so this is
+ * unambiguous. Fixes a real client-facing confusion: previously each login
+ * page only matched its own scope, so a client with accounts on two
+ * different products (e.g. MJivity has both an Outreach and an Agency
+ * account, different emails) had to remember which specific URL matched
+ * which account -- one wrong link looked identical to a wrong password.
+ * Now any of the three login pages accepts any valid account and routes
+ * correctly, so one link can be given to everyone.
+ */
+export async function loginAnyAction(_prevState: LoginState, formData: FormData): Promise<LoginState> {
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
   const password = String(formData.get("password") ?? "");
 
@@ -18,8 +31,8 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
   }
 
   const user = await db.user.findFirst({
-    where: { email, scope: "PLATFORM" },
-    include: { role: true },
+    where: { email },
+    include: { role: true, tenant: { include: { product: true } } },
   });
 
   if (!user || !user.passwordHash) {
@@ -30,45 +43,7 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
     return { error: "This account is not active. Contact an administrator." };
   }
 
-  const valid = await verifyPassword(password, user.passwordHash);
-  if (!valid) {
-    return { error: "Invalid email or password." };
-  }
-
-  const token = await createSessionToken({
-    id: user.id,
-    role: user.role?.name ?? "",
-    scope: user.scope,
-  });
-  await setSessionCookie(token);
-
-  await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
-
-  redirect("/admin");
-}
-
-export async function loginTenantAction(_prevState: LoginState, formData: FormData): Promise<LoginState> {
-  const email = String(formData.get("email") ?? "").trim().toLowerCase();
-  const password = String(formData.get("password") ?? "");
-
-  if (!email || !password) {
-    return { error: "Email and password are required." };
-  }
-
-  const user = await db.user.findFirst({
-    where: { email, scope: "TENANT" },
-    include: { role: true, tenant: { include: { product: true } } },
-  });
-
-  if (!user || !user.passwordHash) {
-    return { error: "Invalid email or password." };
-  }
-
-  if (user.status !== "ACTIVE") {
-    return { error: "This account is not active. Contact your agency admin." };
-  }
-
-  if (!user.tenant || user.tenant.status === "SUSPENDED" || user.tenant.status === "CHURNED") {
+  if (user.scope === "TENANT" && (!user.tenant || user.tenant.status === "SUSPENDED" || user.tenant.status === "CHURNED")) {
     return { error: "This workspace is not currently accessible. Contact support." };
   }
 
@@ -86,7 +61,10 @@ export async function loginTenantAction(_prevState: LoginState, formData: FormDa
 
   await db.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
 
-  redirect(PRODUCT_DASHBOARD_PATH[user.tenant.product.slug] ?? "/agency");
+  if (user.scope === "PLATFORM") {
+    redirect("/admin");
+  }
+  redirect(PRODUCT_DASHBOARD_PATH[user.tenant!.product.slug] ?? "/agency");
 }
 
 export async function logoutAction() {

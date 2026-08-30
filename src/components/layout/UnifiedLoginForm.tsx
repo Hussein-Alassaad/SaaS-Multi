@@ -1,14 +1,21 @@
 "use client";
 
 import { useActionState } from "react";
-import { loginTenantAction, type LoginState } from "@/lib/actions/auth";
+import { loginAnyAction, type LoginState } from "@/lib/actions/auth";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 
 const initialState: LoginState = {};
 
-export function LoginForm() {
-  const [state, formAction, pending] = useActionState(loginTenantAction, initialState);
+/**
+ * Shared by /login, /agency-login, and /outreach-login -- one form, one
+ * action (loginAnyAction), works for any account regardless of which page
+ * it's submitted from. See loginAnyAction's own comment for why: emails
+ * are globally unique, so there's no ambiguity in looking up by email
+ * alone and redirecting wherever that account actually belongs.
+ */
+export function UnifiedLoginForm() {
+  const [state, formAction, pending] = useActionState(loginAnyAction, initialState);
 
   return (
     <form action={formAction} className="space-y-4">
@@ -16,14 +23,7 @@ export function LoginForm() {
         <label htmlFor="email" className="text-xs font-medium text-[var(--text-3)]">
           Email
         </label>
-        <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="email"
-          placeholder="you@youragency.example.com"
-          required
-        />
+        <Input id="email" name="email" type="email" autoComplete="email" placeholder="you@example.com" required />
       </div>
 
       <div className="space-y-1.5">

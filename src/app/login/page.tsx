@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
-import { LoginForm } from "./LoginForm";
+import { UnifiedLoginForm } from "@/components/layout/UnifiedLoginForm";
 
 export const metadata: Metadata = {
   title: "Sign in — Nexaris",
@@ -15,16 +15,16 @@ export default function LoginPage() {
             N
           </div>
           <h1 className="mt-3 text-lg font-semibold text-gradient">Nexaris</h1>
-          <p className="mt-1 text-xs text-[var(--text-4)]">Sign in to the platform control center</p>
+          <p className="mt-1 text-xs text-[var(--text-4)]">Sign in to your workspace</p>
         </div>
 
         <Card padding="lg" hover={false}>
           <CardHeader className="mb-5 block">
             <CardTitle>Welcome back</CardTitle>
-            <CardDescription>Platform staff login only.</CardDescription>
+            <CardDescription>Sign in with your Nexaris account.</CardDescription>
           </CardHeader>
 
-          <LoginForm />
+          <UnifiedLoginForm />
         </Card>
       </div>
     </div>
