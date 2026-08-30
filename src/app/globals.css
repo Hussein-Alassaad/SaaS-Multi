@@ -84,6 +84,23 @@
   --shimmer-mid: oklch(0.97 0 0);
 }
 
+/* ==========================================================================
+   Outreach product theme override — blue/black, scoped to the Outreach
+   route group only (see src/app/(outreach)/outreach/layout.tsx's wrapping
+   div). Admin and Agency keep the default purple/cyan accent -- only the
+   two accent tokens change here, every other token (surfaces, text,
+   borders, status colors) is inherited unchanged from :root/.light above,
+   so this stays a real override, not a parallel theme to keep in sync.
+   Works in both dark (default) and light (.light) mode since it redeclares
+   the SAME two tokens either way -- no separate dark/light variants needed
+   here, unlike :root/.light's own split, because blue-to-near-black reads
+   correctly against both this app's dark surfaces and its light ones.
+   ========================================================================== */
+.outreach-theme {
+  --accent-from: oklch(0.55 0.19 255); /* strong blue */
+  --accent-to: oklch(0.22 0.04 260); /* near-black navy */
+}
+
 @theme inline {
   --color-bg-page: var(--bg-page);
   --color-accent-from: var(--accent-from);

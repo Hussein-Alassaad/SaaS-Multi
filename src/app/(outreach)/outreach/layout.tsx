@@ -48,7 +48,7 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   ]);
 
   return (
-    <div className="relative min-h-screen">
+    <div className="relative min-h-screen outreach-theme">
       <OutreachSidebar
         currentUser={currentUser}
         enabledSections={enabledSections}
