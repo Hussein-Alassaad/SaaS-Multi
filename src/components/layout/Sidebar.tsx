@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
 import { NexarisLogo } from "./NexarisLogo";
+import { SidebarExpandedLabel } from "./SidebarExpandedLabel";
 
 interface CurrentUser {
   name: string;
@@ -37,11 +38,9 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
     >
       <div className="flex h-16 items-center px-4">
         <NexarisLogo />
-        {expanded && (
-          <span className="ml-3 text-sm font-semibold text-gradient whitespace-nowrap">
-            Nexaris
-          </span>
-        )}
+        <SidebarExpandedLabel expanded={expanded} className="ml-3 text-sm font-semibold text-gradient whitespace-nowrap">
+          Nexaris
+        </SidebarExpandedLabel>
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-2">
@@ -62,7 +61,7 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
                     background:
                       "linear-gradient(90deg, color-mix(in oklab, var(--accent-from) 20%, transparent), color-mix(in oklab, var(--accent-to) 10%, transparent))",
                   }}
-                  transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                  transition={{ duration: 0.15, ease: "easeOut" }}
                 />
               )}
               <Icon
@@ -71,16 +70,15 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
                   active ? "text-[var(--text-1)]" : "text-[var(--text-4)]"
                 )}
               />
-              {expanded && (
-                <span
-                  className={cn(
-                    "relative z-10 ml-3 whitespace-nowrap",
-                    active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
-                  )}
-                >
-                  {item.label}
-                </span>
-              )}
+              <SidebarExpandedLabel
+                expanded={expanded}
+                className={cn(
+                  "relative z-10 ml-3 whitespace-nowrap",
+                  active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
+                )}
+              >
+                {item.label}
+              </SidebarExpandedLabel>
             </Link>
           );
         })}
@@ -91,12 +89,10 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs font-semibold text-[var(--text-2)]">
             {initial}
           </div>
-          {expanded && (
-            <div className="ml-3 min-w-0">
-              <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
-              <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
-            </div>
-          )}
+          <SidebarExpandedLabel expanded={expanded} as="div" className="ml-3 min-w-0">
+            <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
+            <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
+          </SidebarExpandedLabel>
         </div>
       )}
 
@@ -110,7 +106,9 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
           ) : (
             <Moon className="h-4.5 w-4.5 shrink-0" />
           )}
-          {expanded && <span className="ml-3 whitespace-nowrap">Toggle theme</span>}
+          <SidebarExpandedLabel expanded={expanded} className="ml-3 whitespace-nowrap">
+            Toggle theme
+          </SidebarExpandedLabel>
         </button>
         <form action={logoutAction}>
           <button
@@ -118,7 +116,9 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
             className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]"
           >
             <LogOut className="h-4.5 w-4.5 shrink-0" />
-            {expanded && <span className="ml-3 whitespace-nowrap">Sign out</span>}
+            <SidebarExpandedLabel expanded={expanded} className="ml-3 whitespace-nowrap">
+              Sign out
+            </SidebarExpandedLabel>
           </button>
         </form>
       </div>

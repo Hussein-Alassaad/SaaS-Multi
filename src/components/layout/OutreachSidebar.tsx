@@ -13,6 +13,7 @@ import { logoutAction } from "@/lib/actions/auth";
 import { useUnhealthyAccountCount } from "@/lib/outreach/useUnhealthyAccountCount";
 import { useReportNavPending } from "@/lib/navigation-pending";
 import { NexarisLogo } from "./NexarisLogo";
+import { SidebarExpandedLabel } from "./SidebarExpandedLabel";
 
 /** Must render as a descendant of <Link> -- see navigation-pending.tsx. */
 function NavPendingReporter() {
@@ -54,7 +55,9 @@ export function OutreachSidebar({
     >
       <div className="flex h-16 items-center px-4">
         <NexarisLogo />
-        {expanded && <span className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">Nexaris</span>}
+        <SidebarExpandedLabel expanded={expanded} className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">
+          Nexaris
+        </SidebarExpandedLabel>
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-2">
@@ -90,19 +93,18 @@ export function OutreachSidebar({
                   <span className="absolute -end-0.5 -top-0.5 h-2 w-2 rounded-full bg-[var(--status-hot)]" />
                 )}
               </span>
-              {expanded && (
-                <span
-                  className={cn(
-                    "relative z-10 ms-3 flex min-w-0 items-center gap-1.5 whitespace-nowrap",
-                    active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
-                  )}
-                >
-                  {item.label}
-                  {item.href === "/outreach/accounts" && unhealthyAccountCount > 0 && (
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-hot)]" />
-                  )}
-                </span>
-              )}
+              <SidebarExpandedLabel
+                expanded={expanded}
+                className={cn(
+                  "relative z-10 ms-3 flex min-w-0 items-center gap-1.5 whitespace-nowrap",
+                  active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
+                )}
+              >
+                {item.label}
+                {item.href === "/outreach/accounts" && unhealthyAccountCount > 0 && (
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--status-hot)]" />
+                )}
+              </SidebarExpandedLabel>
             </Link>
           );
         })}
@@ -113,12 +115,10 @@ export function OutreachSidebar({
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs font-semibold text-[var(--text-2)]">
             {initial}
           </div>
-          {expanded && (
-            <div className="ms-3 min-w-0">
-              <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
-              <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
-            </div>
-          )}
+          <SidebarExpandedLabel expanded={expanded} as="div" className="ms-3 min-w-0">
+            <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
+            <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
+          </SidebarExpandedLabel>
         </div>
       )}
 
@@ -132,7 +132,9 @@ export function OutreachSidebar({
           ) : (
             <Moon className="h-4.5 w-4.5 shrink-0" />
           )}
-          {expanded && <span className="ms-3 whitespace-nowrap">Toggle theme</span>}
+          <SidebarExpandedLabel expanded={expanded} className="ms-3 whitespace-nowrap">
+            Toggle theme
+          </SidebarExpandedLabel>
         </button>
         <form action={logoutAction}>
           <button
@@ -140,7 +142,9 @@ export function OutreachSidebar({
             className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]"
           >
             <LogOut className="h-4.5 w-4.5 shrink-0" />
-            {expanded && <span className="ms-3 whitespace-nowrap">Sign out</span>}
+            <SidebarExpandedLabel expanded={expanded} className="ms-3 whitespace-nowrap">
+              Sign out
+            </SidebarExpandedLabel>
           </button>
         </form>
       </div>

@@ -13,6 +13,7 @@ import { logoutAction } from "@/lib/actions/auth";
 import { setUiLanguageAction } from "@/lib/actions/agency-ui-language";
 import { getDictionary, isRtl, type UiLanguage } from "@/lib/i18n";
 import { NexarisLogo } from "./NexarisLogo";
+import { SidebarExpandedLabel } from "./SidebarExpandedLabel";
 
 interface CurrentUser {
   name: string;
@@ -83,11 +84,9 @@ export function AgencySidebar({
     >
       <div className="flex h-16 items-center px-4">
         <NexarisLogo />
-        {expanded && (
-          <span className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">
-            Nexaris
-          </span>
-        )}
+        <SidebarExpandedLabel expanded={expanded} className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">
+          Nexaris
+        </SidebarExpandedLabel>
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-2">
@@ -108,7 +107,7 @@ export function AgencySidebar({
                     background:
                       "linear-gradient(90deg, color-mix(in oklab, var(--accent-from) 20%, transparent), color-mix(in oklab, var(--accent-to) 10%, transparent))",
                   }}
-                  transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                  transition={{ duration: 0.15, ease: "easeOut" }}
                 />
               )}
               <Icon
@@ -117,16 +116,15 @@ export function AgencySidebar({
                   active ? "text-[var(--text-1)]" : "text-[var(--text-4)]"
                 )}
               />
-              {expanded && (
-                <span
-                  className={cn(
-                    "relative z-10 ms-3 whitespace-nowrap",
-                    active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
-                  )}
-                >
-                  {navLabel(item.href, item.label)}
-                </span>
-              )}
+              <SidebarExpandedLabel
+                expanded={expanded}
+                className={cn(
+                  "relative z-10 ms-3 whitespace-nowrap",
+                  active ? "text-[var(--text-1)] font-medium" : "text-[var(--text-3)]"
+                )}
+              >
+                {navLabel(item.href, item.label)}
+              </SidebarExpandedLabel>
             </Link>
           );
         })}
@@ -137,12 +135,10 @@ export function AgencySidebar({
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs font-semibold text-[var(--text-2)]">
             {initial}
           </div>
-          {expanded && (
-            <div className="ms-3 min-w-0">
-              <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
-              <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
-            </div>
-          )}
+          <SidebarExpandedLabel expanded={expanded} as="div" className="ms-3 min-w-0">
+            <p className="truncate text-xs font-medium text-[var(--text-1)]">{currentUser.name}</p>
+            <p className="truncate text-[11px] text-[var(--text-4)]">{currentUser.role}</p>
+          </SidebarExpandedLabel>
         </div>
       )}
 
@@ -152,7 +148,9 @@ export function AgencySidebar({
           className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]"
         >
           <Languages className="h-4.5 w-4.5 shrink-0" />
-          {expanded && <span className="ms-3 whitespace-nowrap">{t.common.toggleLanguage}</span>}
+          <SidebarExpandedLabel expanded={expanded} className="ms-3 whitespace-nowrap">
+            {t.common.toggleLanguage}
+          </SidebarExpandedLabel>
         </button>
         <button
           onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -163,7 +161,9 @@ export function AgencySidebar({
           ) : (
             <Moon className="h-4.5 w-4.5 shrink-0" />
           )}
-          {expanded && <span className="ms-3 whitespace-nowrap">{t.common.toggleTheme}</span>}
+          <SidebarExpandedLabel expanded={expanded} className="ms-3 whitespace-nowrap">
+            {t.common.toggleTheme}
+          </SidebarExpandedLabel>
         </button>
         <form action={logoutAction}>
           <button
@@ -171,7 +171,9 @@ export function AgencySidebar({
             className="flex h-10 w-full items-center rounded-lg px-2.5 text-[var(--text-3)] hover:bg-[var(--surface-2)]"
           >
             <LogOut className="h-4.5 w-4.5 shrink-0" />
-            {expanded && <span className="ms-3 whitespace-nowrap">{t.common.signOut}</span>}
+            <SidebarExpandedLabel expanded={expanded} className="ms-3 whitespace-nowrap">
+              {t.common.signOut}
+            </SidebarExpandedLabel>
           </button>
         </form>
       </div>
