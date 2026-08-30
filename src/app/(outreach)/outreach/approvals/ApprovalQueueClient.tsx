@@ -40,13 +40,9 @@ function EmptyState() {
       transition={{ delay: 0.1 }}
       className="mt-12 flex flex-col items-center px-4 text-center"
     >
-      {/* Same perpetual-float removal as the Live Feed empty state: this is
-          the default view until something needs approval, so repeat: Infinity
-          meant an animation that never settled. Single settle-in instead. */}
       <motion.div
-        initial={{ y: -6, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.45, ease: "easeOut" }}
+        animate={{ y: [0, -8, 0] }}
+        transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
         className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-gradient/15 ring-1 ring-[var(--accent-from)]/20"
       >
         <CheckCircle2 className="h-7 w-7 text-[var(--accent-from)]" strokeWidth={1.5} />

@@ -1,9 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { usePathname } from "next/navigation";
 import { getSupabaseRealtimeClient } from "./supabase-realtime";
-import { PAGE_TRANSITION_MS } from "@/components/layout/PageTransition";
 
 /**
  * Subscribes to Postgres change events on one table, scoped server-side to
@@ -65,34 +63,13 @@ export function useOutreachRealtime(opts: {
 }) {
   const { table, tenantId, event, reload, debounceMs = 400, enabled = true } = opts;
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pathname = usePathname();
-
-  // A router.refresh() that lands while the page-transition animation is
-  // still running re-renders the whole tree mid-animation, which drops
-  // frames right when the user is watching the new page fade in. The
-  // debounce alone doesn't prevent this: it's measured from the DB event,
-  // which can arrive at any point relative to a navigation. Instead, track
-  // when the route last changed and hold a pending reload until the
-  // transition has finished. Live updates still land -- just a beat later
-  // when they'd otherwise collide with a navigation.
-  const routeChangedAt = useRef(0);
-  useEffect(() => {
-    routeChangedAt.current = Date.now();
-  }, [pathname]);
 
   useEffect(() => {
     if (!enabled) return;
 
     const debouncedReload = () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      const sinceNav = Date.now() - routeChangedAt.current;
-      // PAGE_TRANSITION_MS is the PageTransition duration; the small buffer
-      // covers the frame the exit/enter actually settles on.
-      const wait =
-        sinceNav < PAGE_TRANSITION_MS
-          ? Math.max(debounceMs, PAGE_TRANSITION_MS - sinceNav + 50)
-          : debounceMs;
-      timeoutRef.current = setTimeout(reload, wait);
+      timeoutRef.current = setTimeout(reload, debounceMs);
     };
 
     const unsubscribe = subscribeOutreachChannel({
