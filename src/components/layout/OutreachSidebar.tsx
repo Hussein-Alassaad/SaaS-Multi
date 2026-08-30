@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
 import { useState } from "react";
@@ -11,6 +11,14 @@ import { cn } from "@/lib/utils";
 import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
 import { useUnhealthyAccountCount } from "@/lib/outreach/useUnhealthyAccountCount";
+import { useReportNavPending } from "@/lib/navigation-pending";
+
+/** Must render as a descendant of <Link> -- see navigation-pending.tsx. */
+function NavPendingReporter() {
+  const { pending } = useLinkStatus();
+  useReportNavPending(pending);
+  return null;
+}
 
 interface CurrentUser {
   name: string;
@@ -60,6 +68,7 @@ export function OutreachSidebar({
               href={item.href}
               className="relative flex h-10 items-center rounded-lg px-2.5 text-sm transition-colors"
             >
+              <NavPendingReporter />
               {active && (
                 <motion.div
                   layoutId="outreach-active-nav-pill"

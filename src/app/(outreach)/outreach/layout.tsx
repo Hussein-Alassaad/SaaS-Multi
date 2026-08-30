@@ -10,6 +10,7 @@ import { getTenantSession } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getEnabledSectionHrefs } from "@/lib/agency/sections";
 import { getTenantNotifications } from "@/lib/notifications";
+import { NavPendingProvider } from "@/lib/navigation-pending";
 
 export default async function OutreachLayout({ children }: { children: React.ReactNode }) {
   const session = await getTenantSession();
@@ -47,31 +48,33 @@ export default async function OutreachLayout({ children }: { children: React.Rea
   ]);
 
   return (
-    <div className="relative min-h-screen outreach-theme">
-      {/* Moved here from the root layout (was a sibling of {children}, so
-          it never inherited .outreach-theme's overridden accent tokens --
-          it needs to render INSIDE this scoped wrapper to actually pick
-          up the blue/black theme instead of :root's default purple/cyan. */}
-      <div className="ambient-glows" aria-hidden="true" />
-      <OutreachSidebar currentUser={currentUser} enabledSections={enabledSections} />
-      <AmbientWordmark word="OUTREACH" />
-      <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
-        <OutreachMobileTopBar currentUser={currentUser} />
-        <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
-          <AnnouncementBanner
-            items={announcements.map((a) => ({
-              id: a.id,
-              title: a.title,
-              body: a.body,
-              imageUrl: a.imageUrl,
-              sentAt: a.sentAt?.toISOString() ?? null,
-            }))}
-          />
-          <PageTransition>{children}</PageTransition>
-        </main>
-        <OutreachMobileBottomBar enabledSections={enabledSections} />
+    <NavPendingProvider>
+      <div className="relative min-h-screen outreach-theme">
+        {/* Moved here from the root layout (was a sibling of {children}, so
+            it never inherited .outreach-theme's overridden accent tokens --
+            it needs to render INSIDE this scoped wrapper to actually pick
+            up the blue/black theme instead of :root's default purple/cyan. */}
+        <div className="ambient-glows" aria-hidden="true" />
+        <OutreachSidebar currentUser={currentUser} enabledSections={enabledSections} />
+        <AmbientWordmark word="OUTREACH" />
+        <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
+          <OutreachMobileTopBar currentUser={currentUser} />
+          <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
+            <AnnouncementBanner
+              items={announcements.map((a) => ({
+                id: a.id,
+                title: a.title,
+                body: a.body,
+                imageUrl: a.imageUrl,
+                sentAt: a.sentAt?.toISOString() ?? null,
+              }))}
+            />
+            <PageTransition>{children}</PageTransition>
+          </main>
+          <OutreachMobileBottomBar enabledSections={enabledSections} />
+        </div>
+        <OutreachRealtimeToasts tenantId={session.tenantId!} />
       </div>
-      <OutreachRealtimeToasts tenantId={session.tenantId!} />
-    </div>
+    </NavPendingProvider>
   );
 }

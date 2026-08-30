@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { useState } from "react";
@@ -8,6 +8,14 @@ import { Drawer } from "@/components/ui/Drawer";
 import { OUTREACH_NAV_ITEMS } from "./outreach-nav-config";
 import { cn } from "@/lib/utils";
 import { useUnhealthyAccountCount } from "@/lib/outreach/useUnhealthyAccountCount";
+import { useReportNavPending } from "@/lib/navigation-pending";
+
+/** Must render as a descendant of <Link> -- see navigation-pending.tsx. */
+function NavPendingReporter() {
+  const { pending } = useLinkStatus();
+  useReportNavPending(pending);
+  return null;
+}
 
 export function OutreachMobileBottomBar({ enabledSections }: { enabledSections: string[] }) {
   const pathname = usePathname();
@@ -50,6 +58,7 @@ export function OutreachMobileBottomBar({ enabledSections }: { enabledSections: 
                     : "border-[var(--border-hairline)] text-[var(--text-3)]"
                 )}
               >
+                <NavPendingReporter />
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="truncate">{item.label}</span>
                 {item.href === "/outreach/accounts" && unhealthyAccountCount > 0 && (

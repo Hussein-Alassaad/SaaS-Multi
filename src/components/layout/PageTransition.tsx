@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import { useIsNavPending } from "@/lib/navigation-pending";
+import { PageLoadingSkeleton } from "./PageLoadingSkeleton";
 
 /**
  * Previously used Framer Motion's AnimatePresence keyed on pathname, which
@@ -13,45 +15,65 @@ import { usePathname } from "next/navigation";
  * <main>) between the old page disappearing and the new page's content
  * being ready -- which read as a stutter/freeze, not a smooth fade.
  *
- * Next.js already keeps the OLD page mounted and visible for exactly this
- * reason (App Router navigations are React transitions -- interruptible,
- * non-blocking, old UI stays interactive while new content streams in).
- * The bug was fighting that behavior instead of using it. This version
- * never unmounts ANYTHING on navigation -- not even this wrapper div (an
- * earlier attempt keyed the div itself to force a remount, which is its
- * own bug: it destroys and rebuilds the whole subtree on every nav, which
- * can itself race the new page's data). `children` swap in place via
- * React's own reconciliation on this one persistent node, and the fade is
- * replayed by toggling a class directly via a ref, which never touches
- * mount state.
+ * Next.js already keeps the OLD page mounted and visible while new content
+ * streams in, and loading.tsx is SUPPOSED to fill the gap with a fallback.
+ * But under real slow/throttled conditions (confirmed via a live trace,
+ * repeated network+CPU-throttled runs against production), the loading.tsx
+ * fallback can ITSELF arrive late -- Next's own docs confirm this: "the
+ * loading.js fallback may not appear immediately because it hasn't been
+ * prefetched yet" on a slow network. That's a framework-level Suspense/
+ * streaming timing gap this component can't close from below.
+ *
+ * Fix: each nav <Link> reports its pending state up via NavPendingProvider
+ * (see navigation-pending.tsx) using useLinkStatus -- a pure client-side
+ * signal set the instant a link is clicked, independent of network
+ * conditions. That marks the START of a navigation reliably.
+ *
+ * For the END: useLinkStatus's `pending` goes false exactly when the URL
+ * updates, NOT when the new page's content has actually committed -- so it
+ * can't mark the end by itself (that gap between "URL changed" and
+ * "content committed" is the original bug). Instead: a navigation starts
+ * (isNavPending becomes true) -> latch the overlay on. It only ever comes
+ * back off once pathname has changed to a NEW value while NOT pending --
+ * i.e. after this component has re-rendered past the click AND the click
+ * is no longer in flight, which only happens once the destination's
+ * content has actually taken pathname's new value through a real commit.
  */
 export function PageTransition({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const prevPathname = useRef(pathname);
   const containerRef = useRef<HTMLDivElement>(null);
+  const isNavPending = useIsNavPending();
 
-  // Retriggers the CSS animation on the SAME DOM node (no remount, no key
-  // change) by removing and re-adding the class -- a class added once and
-  // left alone never replays on subsequent renders, since the class value
-  // itself doesn't change. Restarting via a fresh class name each time
-  // guarantees the animation always replays without ever unmounting
-  // anything, so it can never race the new page's data being ready.
+  const [overlayOn, setOverlayOn] = useState(false);
+  const latchedPathnameRef = useRef(pathname);
+
+  if (isNavPending && !overlayOn) {
+    setOverlayOn(true);
+  }
+
   useEffect(() => {
-    if (prevPathname.current === pathname) return;
-    prevPathname.current = pathname;
-    const el = containerRef.current;
-    if (!el) return;
-    el.classList.remove("animate-page-fade-in");
-    // Force a reflow so the browser registers the class removal before it's
-    // re-added -- otherwise the two class mutations coalesce into one and
-    // the animation never restarts.
-    void el.offsetWidth;
-    el.classList.add("animate-page-fade-in");
-  }, [pathname]);
+    if (overlayOn && !isNavPending && latchedPathnameRef.current !== pathname) {
+      latchedPathnameRef.current = pathname;
+      setOverlayOn(false);
+      const el = containerRef.current;
+      if (el) {
+        el.classList.remove("animate-page-fade-in");
+        void el.offsetWidth;
+        el.classList.add("animate-page-fade-in");
+      }
+    }
+  }, [pathname, isNavPending, overlayOn]);
 
   return (
-    <div ref={containerRef} className="animate-page-fade-in">
-      {children}
+    <div className="relative">
+      {overlayOn && (
+        <div className="absolute inset-0 z-20 bg-[var(--surface-1)]">
+          <PageLoadingSkeleton />
+        </div>
+      )}
+      <div ref={containerRef} className="animate-page-fade-in">
+        {children}
+      </div>
     </div>
   );
 }
