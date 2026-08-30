@@ -16,9 +16,16 @@ function EmptyState() {
       transition={{ delay: 0.1 }}
       className="mt-12 flex flex-col items-center px-4 text-center"
     >
+      {/* Was a perpetual float (repeat: Infinity). The Live Feed empty state
+          is what every tenant sees until an account is connected, so that
+          animation never stopped -- it kept a compositor animation running on
+          this page permanently, competing for frames with the page-transition
+          animation on the way in and out. A single settle-in keeps the same
+          visual character without leaving motion running forever. */}
       <motion.div
-        animate={{ y: [0, -8, 0] }}
-        transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
+        initial={{ y: -6, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.45, ease: "easeOut" }}
         className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-gradient/15 ring-1 ring-[var(--accent-from)]/20"
       >
         <Inbox className="h-7 w-7 text-[var(--accent-from)]" strokeWidth={1.5} />
