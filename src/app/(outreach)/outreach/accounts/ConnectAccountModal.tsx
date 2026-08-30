@@ -118,6 +118,14 @@ export function ConnectAccountModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-runs only when the modal opens/accountId changes, not on every render
   }, [open, accountId]);
 
+  // Focus the canvas as soon as the stream is actually up, so keyboard
+  // input works right away rather than requiring the user to notice they
+  // need to click into it first (the onMouseDown handler below also
+  // focuses on every click, as a second line of defense).
+  useEffect(() => {
+    if (state === "streaming") canvasRef.current?.focus();
+  }, [state]);
+
   const sendInput = useCallback((message: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
@@ -186,7 +194,17 @@ export function ConnectAccountModal({
             className="aspect-[1366/768] w-full cursor-pointer rounded-xl border border-[var(--border-hairline-strong)] bg-black"
             tabIndex={0}
             onMouseMove={(e) => sendInput({ type: "mousemove", ...toCanvasCoords(e) })}
-            onMouseDown={(e) => sendInput({ type: "mousedown", ...toCanvasCoords(e), button: "left" })}
+            onMouseDown={(e) => {
+              // Without this, a click can land and dispatch mousedown/up to
+              // the remote page just fine while never actually moving
+              // KEYBOARD focus onto this canvas element -- every keystroke
+              // afterward then silently goes nowhere (no onKeyDown ever
+              // fires) even though clicks keep working. Explicit focus()
+              // makes "click in, then type" reliable regardless of how
+              // focus landed (or didn't) before this click.
+              e.currentTarget.focus();
+              sendInput({ type: "mousedown", ...toCanvasCoords(e), button: "left" });
+            }}
             onMouseUp={(e) => sendInput({ type: "mouseup", ...toCanvasCoords(e), button: "left" })}
             onKeyDown={(e) => {
               e.preventDefault();
