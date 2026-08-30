@@ -87,16 +87,33 @@ export async function getPipelineStageCounts(tenantId: string) {
   return Object.fromEntries(PIPELINE_STAGES.map((stage, i) => [stage, counts[i]])) as Record<PipelineStage, number>;
 }
 
+/**
+ * Was 7 concurrent withTenant() calls (Promise.all over getPipelineColumn
+ * x6 + getPipelineStageCounts) -- each one its own real Postgres
+ * transaction/connection, all opened at once for a single page load.
+ * Harmless locally, but the Pipeline page crashed in production (Vercel
+ * serverless + Supabase's pgbouncer transaction pooler is far more
+ * connection-constrained than local dev) -- confirmed by reproducing the
+ * same 7-transaction-at-once shape being the one real difference between
+ * this page and every other working page in the app, all of which use a
+ * single sequential withTenant(). Now one scope, one transaction, six
+ * column queries plus six counts run sequentially against the same `tx`.
+ */
 export async function getPipelineBoard(tenantId: string) {
-  const [columns, counts] = await Promise.all([
-    Promise.all(PIPELINE_STAGES.map((stage) => getPipelineColumn(tenantId, stage))),
-    getPipelineStageCounts(tenantId),
-  ]);
-  const leadsByStage = Object.fromEntries(PIPELINE_STAGES.map((stage, i) => [stage, columns[i]])) as Record<
-    PipelineStage,
-    Awaited<ReturnType<typeof getPipelineColumn>>
-  >;
-  return { leadsByStage, counts };
+  return withTenant(tenantId, async (tx) => {
+    const leadsByStage = {} as Record<PipelineStage, { id: string; businessName: string | null; platform: string; score: number | null; temperature: string | null; status: string }[]>;
+    const counts = {} as Record<PipelineStage, number>;
+    for (const stage of PIPELINE_STAGES) {
+      leadsByStage[stage] = await tx.outreachLead.findMany({
+        where: { tenantId, status: stage },
+        select: { id: true, businessName: true, platform: true, score: true, temperature: true, status: true },
+        orderBy: { updatedAt: "desc" },
+        take: PIPELINE_COLUMN_PAGE_SIZE,
+      });
+      counts[stage] = await tx.outreachLead.count({ where: { tenantId, status: stage } });
+    }
+    return { leadsByStage, counts };
+  });
 }
 
 export async function getPendingApprovals(tenantId: string) {
