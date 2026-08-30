@@ -280,6 +280,24 @@ body {
   animation: kpi-in 0.3s ease-out;
 }
 
+/* PageTransition's post-swap fade -- plays AFTER the new page's content has
+   already committed to the DOM (see PageTransition.tsx), never before, so
+   it can never create the blank-gap stutter the old AnimatePresence
+   approach had. Old content simply stays put until this replaces it. */
+@keyframes page-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-page-fade-in {
+  animation: page-fade-in 0.2s ease-out;
+}
+
 .shimmer {
   background: linear-gradient(
     110deg,
