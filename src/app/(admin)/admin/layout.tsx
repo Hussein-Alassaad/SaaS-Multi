@@ -25,6 +25,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <ImpersonationProvider>
       <div className="relative min-h-screen">
+        {/* Moved here from the root layout so each product's ambient glow
+            can independently pick up a scoped theme override (see
+            Outreach's own layout, which now has a blue/black accent) --
+            Admin has no override, so this renders identically to before. */}
+        <div className="ambient-glows" aria-hidden="true" />
         <Sidebar currentUser={currentUser} />
         <AmbientWordmark word="NEXARIS" />
         <div className="relative z-10 flex min-h-screen flex-col md:ml-16">

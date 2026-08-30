@@ -49,6 +49,11 @@ export default async function OutreachLayout({ children }: { children: React.Rea
 
   return (
     <div className="relative min-h-screen outreach-theme">
+      {/* Moved here from the root layout (was a sibling of {children}, so
+          it never inherited .outreach-theme's overridden accent tokens --
+          it needs to render INSIDE this scoped wrapper to actually pick
+          up the blue/black theme instead of :root's default purple/cyan. */}
+      <div className="ambient-glows" aria-hidden="true" />
       <OutreachSidebar
         currentUser={currentUser}
         enabledSections={enabledSections}

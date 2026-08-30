@@ -29,7 +29,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col relative">
         <ThemeProvider>
           <ToastProvider>
-            <div className="ambient-glows" aria-hidden="true" />
             {children}
           </ToastProvider>
         </ThemeProvider>
