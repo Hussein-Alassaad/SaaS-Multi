@@ -26,17 +26,19 @@ export default async function AgencyLayout({ children }: { children: React.React
   // (a tenant fetch here was previously unused dead weight -- every
   // /agency session's product is "marketing", nothing else ever routes
   // here), so the section lookup can run directly without an extra
-  // Supabase round-trip to look up a value nothing checks. The marketing
-  // product's own id (not just its slug) IS needed now, for
-  // getTenantNotifications' PRODUCT_TENANTS matching -- fetched alongside
-  // sections rather than sequentially.
-  const [enabledSections, marketingProduct] = await Promise.all([
+  // Supabase round-trip to look up a value nothing checks. This layout
+  // re-runs on every Agency page load, so every extra sequential
+  // round-trip here is latency every navigation pays -- was sections +
+  // product id fetched together, THEN a 3rd round-trip for notifications
+  // that only needed the product id, waiting its own turn after. The
+  // product row is looked up first (cheap, single indexed lookup on
+  // `slug`) so notifications can join the same Promise.all as sections
+  // instead of waiting behind it.
+  const marketingProduct = await db.product.findUnique({ where: { slug: "marketing" }, select: { id: true } });
+  const [enabledSections, announcements] = await Promise.all([
     getEnabledSectionHrefs(session.tenantId!, "marketing"),
-    db.product.findUnique({ where: { slug: "marketing" }, select: { id: true } }),
+    marketingProduct ? getTenantNotifications(session.tenantId!, marketingProduct.id) : Promise.resolve([]),
   ]);
-  const announcements = marketingProduct
-    ? await getTenantNotifications(session.tenantId!, marketingProduct.id)
-    : [];
 
   return (
     <div dir={rtl ? "rtl" : "ltr"} className="relative min-h-screen">
