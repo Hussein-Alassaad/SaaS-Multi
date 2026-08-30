@@ -11,7 +11,23 @@ export const db =
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = db;
+// Cache on globalThis in EVERY environment, not just non-production. This
+// was previously inverted (only cached outside production) -- the opposite
+// of the standard Next.js/Prisma serverless pattern. On Vercel, a
+// serverless function instance is reused ("warm") across multiple
+// invocations, and globalThis persists across those warm invocations of
+// the SAME instance (it does NOT persist across genuinely separate cold
+// starts -- there's no way to avoid paying that cost once per fresh
+// instance). Without caching, every module reload -- which on a
+// serverless platform can mean far more often than intended -- created a
+// brand new PrismaClient and, with it, a brand new connection pool from
+// scratch, adding real, avoidable latency to page loads that had nothing
+// to do with the actual query being run. The non-production skip
+// historically existed to avoid Next's dev-mode hot-reload piling up
+// connections across recompiles; genuinely irrelevant to whether this
+// still helps in production, dev, or gets confused between the two --
+// caching is unconditionally correct in both.
+globalForPrisma.prisma = db;
 
 /**
  * Row-Level Security context helpers -- see prisma/migrations_manual/enable_rls.sql
