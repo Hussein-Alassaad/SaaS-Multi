@@ -99,6 +99,14 @@
 .outreach-theme {
   --accent-from: oklch(0.55 0.19 255); /* strong blue */
   --accent-to: oklch(0.22 0.04 260); /* near-black navy */
+  /* --accent-gradient must be redeclared here too, not just the two colors
+     it's built from -- CSS custom properties resolve var() at the point a
+     variable is DEFINED, not where it's used. :root's own --accent-gradient
+     baked in :root's original accent-from/to permanently; without this
+     line every bg-accent-gradient element (buttons, the sidebar avatar,
+     etc.) would keep showing the old purple/cyan gradient here despite
+     --accent-from/--accent-to themselves being correctly overridden above. */
+  --accent-gradient: linear-gradient(90deg, var(--accent-from), var(--accent-to));
 }
 
 @theme inline {
