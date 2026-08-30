@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 /**
  * useLinkStatus's `pending` is only readable from a descendant of the
@@ -35,9 +35,8 @@ function createPendingStore() {
 const NavPendingContext = createContext<ReturnType<typeof createPendingStore> | null>(null);
 
 export function NavPendingProvider({ children }: { children: React.ReactNode }) {
-  const storeRef = useRef<ReturnType<typeof createPendingStore> | null>(null);
-  if (!storeRef.current) storeRef.current = createPendingStore();
-  return <NavPendingContext.Provider value={storeRef.current}>{children}</NavPendingContext.Provider>;
+  const [store] = useState(createPendingStore);
+  return <NavPendingContext.Provider value={store}>{children}</NavPendingContext.Provider>;
 }
 
 /** Read from PageTransition: true the instant any nav link's click registers as pending. */

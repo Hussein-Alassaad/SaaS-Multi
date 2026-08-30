@@ -10,6 +10,7 @@ import { useTheme } from "next-themes";
 import { cn } from "@/lib/utils";
 import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
+import { NexarisLogo } from "./NexarisLogo";
 
 interface CurrentUser {
   name: string;
@@ -35,9 +36,7 @@ export function Sidebar({ currentUser }: { currentUser: CurrentUser | null }) {
       className="fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-[var(--border-hairline)] bg-[var(--surface-1)]/80 backdrop-blur-xl md:flex"
     >
       <div className="flex h-16 items-center px-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-gradient text-sm font-bold text-white">
-          {initial}
-        </div>
+        <NexarisLogo />
         {expanded && (
           <span className="ml-3 text-sm font-semibold text-gradient whitespace-nowrap">
             Nexaris

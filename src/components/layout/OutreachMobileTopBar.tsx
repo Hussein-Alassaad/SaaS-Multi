@@ -4,24 +4,17 @@ import { Bell, Moon, Sun, LogOut } from "lucide-react";
 import { useTheme } from "next-themes";
 import { logoutAction } from "@/lib/actions/auth";
 import { useHasMounted } from "@/lib/useHasMounted";
+import { NexarisLogo } from "./NexarisLogo";
 
-interface CurrentUser {
-  name: string;
-  role: string;
-}
-
-export function OutreachMobileTopBar({ currentUser }: { currentUser: CurrentUser | null }) {
+export function OutreachMobileTopBar() {
   const { theme, setTheme } = useTheme();
   const mounted = useHasMounted();
-  const initial = currentUser?.name?.trim()?.[0]?.toUpperCase() ?? "O";
 
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--surface-1)]/80 px-4 backdrop-blur-xl md:hidden">
       <div className="flex items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-gradient text-xs font-bold text-white">
-          {initial}
-        </div>
-        <span className="text-sm font-semibold text-gradient">Outreach</span>
+        <NexarisLogo size="sm" />
+        <span className="text-sm font-semibold text-gradient">Nexaris</span>
       </div>
       <div className="flex items-center gap-1">
         <button

@@ -45,7 +45,7 @@ export default async function AgencyLayout({ children }: { children: React.React
       <AgencySidebar currentUser={currentUser} lang={lang} enabledSections={enabledSections} />
       <AmbientWordmark word="AGENCY" />
       <div className={`relative z-10 flex min-h-screen flex-col ${rtl ? "md:mr-16" : "md:ml-16"}`}>
-        <AgencyMobileTopBar currentUser={currentUser} lang={lang} />
+        <AgencyMobileTopBar lang={lang} />
         <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
           <AnnouncementBanner
             items={announcements.map((a) => ({

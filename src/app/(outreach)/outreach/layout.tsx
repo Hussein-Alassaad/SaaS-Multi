@@ -58,7 +58,7 @@ export default async function OutreachLayout({ children }: { children: React.Rea
         <OutreachSidebar currentUser={currentUser} enabledSections={enabledSections} />
         <AmbientWordmark word="OUTREACH" />
         <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
-          <OutreachMobileTopBar currentUser={currentUser} />
+          <OutreachMobileTopBar />
           <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
             <AnnouncementBanner
               items={announcements.map((a) => ({

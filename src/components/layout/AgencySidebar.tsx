@@ -12,6 +12,7 @@ import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
 import { setUiLanguageAction } from "@/lib/actions/agency-ui-language";
 import { getDictionary, isRtl, type UiLanguage } from "@/lib/i18n";
+import { NexarisLogo } from "./NexarisLogo";
 
 interface CurrentUser {
   name: string;
@@ -81,12 +82,10 @@ export function AgencySidebar({
       )}
     >
       <div className="flex h-16 items-center px-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-gradient text-sm font-bold text-white">
-          {initial}
-        </div>
+        <NexarisLogo />
         {expanded && (
           <span className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">
-            Agency OS
+            Nexaris
           </span>
         )}
       </div>

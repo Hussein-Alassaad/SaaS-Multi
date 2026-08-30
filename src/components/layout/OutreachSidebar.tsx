@@ -12,6 +12,7 @@ import { useHasMounted } from "@/lib/useHasMounted";
 import { logoutAction } from "@/lib/actions/auth";
 import { useUnhealthyAccountCount } from "@/lib/outreach/useUnhealthyAccountCount";
 import { useReportNavPending } from "@/lib/navigation-pending";
+import { NexarisLogo } from "./NexarisLogo";
 
 /** Must render as a descendant of <Link> -- see navigation-pending.tsx. */
 function NavPendingReporter() {
@@ -52,10 +53,8 @@ export function OutreachSidebar({
       className="fixed left-0 top-0 z-40 hidden h-screen flex-col border-r border-[var(--border-hairline)] bg-[var(--surface-1)]/80 backdrop-blur-xl md:flex"
     >
       <div className="flex h-16 items-center px-4">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-gradient text-sm font-bold text-white">
-          {initial}
-        </div>
-        {expanded && <span className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">Outreach</span>}
+        <NexarisLogo />
+        {expanded && <span className="ms-3 text-sm font-semibold text-gradient whitespace-nowrap">Nexaris</span>}
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-2">

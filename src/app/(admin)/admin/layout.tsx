@@ -33,7 +33,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <Sidebar currentUser={currentUser} />
         <AmbientWordmark word="NEXARIS" />
         <div className="relative z-10 flex min-h-screen flex-col md:ml-16">
-          <MobileTopBar currentUser={currentUser} />
+          <MobileTopBar />
           <ImpersonationBanner />
           <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
             <PageTransition>{children}</PageTransition>
