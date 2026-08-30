@@ -35,20 +35,22 @@ export async function getOutreachErrorsAction() {
       return ctx;
     });
 
-    const [leads, accounts] = await Promise.all([
-      leadIds.size
-        ? tx.outreachLead.findMany({
-            where: { id: { in: [...leadIds] }, tenantId: session.tenantId! },
-            select: { id: true, businessName: true },
-          })
-        : Promise.resolve([]),
-      accountIds.size
-        ? tx.outreachAccount.findMany({
-            where: { id: { in: [...accountIds] }, tenantId: session.tenantId! },
-            select: { id: true, label: true },
-          })
-        : Promise.resolve([]),
-    ]);
+    // Sequential, not Promise.all: both of these run against the one shared
+    // TransactionClient above, which cannot have several queries in flight
+    // on it concurrently -- the same rule the rest of this file's withTenant
+    // bodies already follow.
+    const leads = leadIds.size
+      ? await tx.outreachLead.findMany({
+          where: { id: { in: [...leadIds] }, tenantId: session.tenantId! },
+          select: { id: true, businessName: true },
+        })
+      : [];
+    const accounts = accountIds.size
+      ? await tx.outreachAccount.findMany({
+          where: { id: { in: [...accountIds] }, tenantId: session.tenantId! },
+          select: { id: true, label: true },
+        })
+      : [];
 
     return { rows, parsedContexts, leads, accounts };
   });

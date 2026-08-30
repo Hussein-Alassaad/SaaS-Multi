@@ -421,7 +421,26 @@ export async function approveAllMessagesAction(messageIds: string[]) {
   if (messages.length === 0) return { ok: true as const, approvedCount: 0 };
 
   // Outside the transaction -- real SES sends, each opening its own scope.
-  await Promise.all(messages.map((m) => sendIfEmailChannel(session.tenantId!, m)));
+  //
+  // Sequential, NOT Promise.all. sendIfEmailChannel opens one to three
+  // withTenant() scopes per message (the locked cap-check-and-claim, then a
+  // correction and/or the sent-counter bump), so mapping it over N approved
+  // messages concurrently opened up to 3N real Postgres transactions at
+  // once, unbounded by how many messages the operator selected. That is the
+  // bug class that crashed the Pipeline page in production -- see
+  // src/lib/outreach/leads.ts's getPipelineBoard for the full writeup -- and
+  // Approve All is its worst case, since N is user-controlled rather than a
+  // fixed 7. Vercel serverless + Supabase's pgbouncer transaction pooler
+  // cannot absorb that; local dev could, which is why it never showed here.
+  //
+  // Concurrency bought nothing anyway: every message for a single account
+  // already serialized behind that account's SELECT ... FOR UPDATE row lock,
+  // so the sends queued up regardless -- they just each held a pooled
+  // connection open while waiting. Matches dispatchPacingQueueAction's
+  // existing sequential loop over the same function.
+  for (const message of messages) {
+    await sendIfEmailChannel(session.tenantId!, message);
+  }
 
   return { ok: true as const, approvedCount: messages.length };
 }
