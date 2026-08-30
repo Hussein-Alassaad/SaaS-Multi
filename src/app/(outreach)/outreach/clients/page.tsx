@@ -1,15 +1,13 @@
 import { getTenantSession } from "@/lib/auth";
-import { getClientsList, getClientsCounts } from "@/lib/outreach/clients";
+import { getClientsPageData } from "@/lib/outreach/clients";
 import { ClientsClient } from "./ClientsClient";
 
 export default async function OutreachClientsPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const [{ items, nextCursor }, counts] = await Promise.all([
-    getClientsList(tenantId),
-    getClientsCounts(tenantId),
-  ]);
+  // One withTenant() scope for the list and the counts -- see getClientsPageData.
+  const { items, nextCursor, counts } = await getClientsPageData(tenantId);
 
   const clients = items.map((lead) => ({
     id: lead.id,

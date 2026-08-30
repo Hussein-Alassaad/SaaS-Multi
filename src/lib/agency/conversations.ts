@@ -1,5 +1,7 @@
+import { Prisma } from "@prisma/client";
 import { withTenant } from "@/lib/db";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
+import { readPendingMeetingApprovals } from "@/lib/agency/meetings";
 
 /**
  * Paginated (cursor on id, sorted by lastMessageAt desc) -- fetches one
@@ -114,17 +116,35 @@ export async function getPipelineBoard(tenantId: string) {
   });
 }
 
-export async function getPendingApprovals(tenantId: string) {
+function readPendingApprovals(tx: Prisma.TransactionClient, tenantId: string) {
   // Message has no tenantId of its own -- it is scoped through its parent
   // conversation, which IS an RLS table, so the relation filter below is
   // itself enforced by the join under this tenant context.
-  return withTenant(tenantId, (tx) =>
-    tx.message.findMany({
-      where: { status: "PENDING_APPROVAL", conversation: { tenantId } },
-      include: {
-        conversation: { include: { nexarisClient: true, channel: true } },
-      },
-      orderBy: { createdAt: "asc" },
-    })
-  );
+  return tx.message.findMany({
+    where: { status: "PENDING_APPROVAL", conversation: { tenantId } },
+    include: {
+      conversation: { include: { nexarisClient: true, channel: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+export async function getPendingApprovals(tenantId: string) {
+  return withTenant(tenantId, (tx) => readPendingApprovals(tx, tenantId));
+}
+
+/**
+ * Approvals page's two reads in ONE tenant scope.
+ *
+ * Was Promise.all([getPendingApprovals, getPendingMeetingApprovals]) -- two
+ * concurrent withTenant() calls, so two real Postgres transactions for one
+ * page load. Same bug class as getPipelineBoard's 7 above. Both readers stay
+ * public and single-scope for callers that need only one.
+ */
+export async function getApprovalsPageData(tenantId: string) {
+  return withTenant(tenantId, async (tx) => {
+    const pendingMessages = await readPendingApprovals(tx, tenantId);
+    const pendingMeetings = await readPendingMeetingApprovals(tx, tenantId);
+    return { pendingMessages, pendingMeetings };
+  });
 }

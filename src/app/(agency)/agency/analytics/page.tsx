@@ -2,8 +2,7 @@ import { MessageSquare, TrendingUp, CalendarCheck, Trophy } from "lucide-react";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { getAnalyticsSummary } from "@/lib/agency/settings";
-import { getPipelineStageBreakdown, getConversationVolumeSeries } from "@/lib/agency/dashboard";
+import { getAnalyticsPageData } from "@/lib/agency/dashboard";
 import { getTenantSession } from "@/lib/auth";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { LeadStageChart } from "@/components/charts/LeadStageChart";
@@ -15,11 +14,8 @@ export default async function AnalyticsPage() {
   const lang = (session!.uiLanguage as UiLanguage) ?? "EN";
   const t = getDictionary(lang);
 
-  const [summary, stageBreakdown, volumeSeries] = await Promise.all([
-    getAnalyticsSummary(tenantId),
-    getPipelineStageBreakdown(tenantId),
-    getConversationVolumeSeries(tenantId),
-  ]);
+  // One withTenant() scope for all three reads -- see getAnalyticsPageData.
+  const { summary, stageBreakdown, volumeSeries } = await getAnalyticsPageData(tenantId);
 
   const growthSeries = volumeSeries.map((d) => ({ date: d.date, clients: d.conversations }));
 

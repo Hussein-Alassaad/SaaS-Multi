@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { withTenant } from "@/lib/db";
 
 /**
@@ -41,25 +42,59 @@ export interface AccountReachStats {
  * limits themselves reset (no per-tenant timezone stored for outreach yet).
  */
 export async function getAccountReachStats(tenantId: string): Promise<Map<string, AccountReachStats>> {
+  const rows = await withTenant(tenantId, (tx) => readReachStatRows(tx, tenantId));
+  return shapeReachStats(rows);
+}
+
+/**
+ * Account Health page's account list + reach stats in ONE tenant scope.
+ *
+ * Was a Promise.all over getAccountsList + getAccountReachStats (+ a plain
+ * db section lookup) -- two concurrent withTenant() calls, so two real
+ * Postgres transactions for one page load. Same bug class as
+ * getPipelineBoard's 7 (see src/lib/outreach/leads.ts's getPipelineBoard for
+ * the full writeup). Both readers stay public and single-scope: the client
+ * component refetches the account list on its own after every edit.
+ */
+export async function getAccountHealthPageData(tenantId: string) {
+  const { accounts, reachRows } = await withTenant(tenantId, async (tx) => {
+    const accounts = await tx.outreachAccount.findMany({
+      where: { tenantId },
+      orderBy: { label: "asc" },
+    });
+    const reachRows = await readReachStatRows(tx, tenantId);
+    return { accounts, reachRows };
+  });
+  return { accounts, reachStats: shapeReachStats(reachRows) };
+}
+
+/** Sequential -- a single Prisma TransactionClient can't run concurrent queries. */
+async function readReachStatRows(tx: Prisma.TransactionClient, tenantId: string) {
+  const { weekStart } = reachStatWindow();
+  const sentRows = await tx.outreachMessage.findMany({
+    where: { tenantId, sendStatus: "sent", sentAt: { gte: weekStart }, sentViaAccountId: { not: null } },
+    select: { sentViaAccountId: true, sentAt: true },
+  });
+  const replyRows = await tx.outreachReply.findMany({
+    where: { tenantId, repliedAt: { gte: weekStart }, accountId: { not: null } },
+    select: { accountId: true, repliedAt: true },
+  });
+  return { sentRows, replyRows };
+}
+
+function reachStatWindow() {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const weekStart = new Date(todayStart);
   weekStart.setDate(weekStart.getDate() - 6);
+  return { todayStart, weekStart };
+}
 
-  // Sequential inside one tenant scope rather than Promise.all -- a single
-  // Prisma TransactionClient can't run concurrent queries.
-  const { sentRows, replyRows } = await withTenant(tenantId, async (tx) => {
-    const sentRows = await tx.outreachMessage.findMany({
-      where: { tenantId, sendStatus: "sent", sentAt: { gte: weekStart }, sentViaAccountId: { not: null } },
-      select: { sentViaAccountId: true, sentAt: true },
-    });
-    const replyRows = await tx.outreachReply.findMany({
-      where: { tenantId, repliedAt: { gte: weekStart }, accountId: { not: null } },
-      select: { accountId: true, repliedAt: true },
-    });
-    return { sentRows, replyRows };
-  });
-
+function shapeReachStats({
+  sentRows,
+  replyRows,
+}: Awaited<ReturnType<typeof readReachStatRows>>): Map<string, AccountReachStats> {
+  const { todayStart } = reachStatWindow();
   const stats = new Map<string, AccountReachStats>();
   const get = (accountId: string) => {
     let s = stats.get(accountId);

@@ -22,34 +22,14 @@ import { AiUsageChart } from "@/components/charts/AiUsageChart";
 import { ApiRequestsChart } from "@/components/charts/ApiRequestsChart";
 import { ActiveUsersChart } from "@/components/charts/ActiveUsersChart";
 import { formatCents, timeAgo } from "@/lib/utils";
-import {
-  getDashboardKpis,
-  getRevenueGrowthSeries,
-  getTenantGrowthSeries,
-  getAiUsageSeries,
-  getApiRequestsSeries,
-  getActiveUsersSeries,
-  getRecentActivity,
-  getAiUsageLogsForSeries,
-} from "@/lib/mock/dashboard";
+import { getAdminDashboardPageData } from "@/lib/mock/dashboard";
 
 export default async function DashboardPage() {
-  // AI usage logs are fetched once (in parallel with everything else below)
-  // and shared between getAiUsageSeries and getApiRequestsSeries -- both
-  // used to independently pull the entire table, doubling a real network
-  // round-trip to Supabase for no reason.
-  const [kpis, revenue, tenantGrowth, aiUsageLogs, activeUsers, activity] = await Promise.all([
-    getDashboardKpis(),
-    getRevenueGrowthSeries(),
-    getTenantGrowthSeries(),
-    getAiUsageLogsForSeries(),
-    getActiveUsersSeries(),
-    getRecentActivity(),
-  ]);
-  const [aiUsage, apiRequests] = await Promise.all([
-    getAiUsageSeries(aiUsageLogs),
-    getApiRequestsSeries(aiUsageLogs),
-  ]);
+  // One withPlatformAccess() scope for every read on this page, and the AI
+  // usage logs / payments are each fetched once and shared between the
+  // series that derive from them -- see getAdminDashboardPageData.
+  const { kpis, revenue, tenantGrowth, activeUsers, activity, aiUsage, apiRequests } =
+    await getAdminDashboardPageData();
 
   return (
     <div className="space-y-6">

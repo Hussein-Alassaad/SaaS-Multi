@@ -1,5 +1,5 @@
 import { getTenantSession } from "@/lib/auth";
-import { getAccountsList, getAccountReachStats } from "@/lib/outreach/accounts";
+import { getAccountHealthPageData } from "@/lib/outreach/accounts";
 import { getEnabledSectionKeys } from "@/lib/agency/sections";
 import { AccountHealthClient } from "./AccountHealthClient";
 
@@ -7,10 +7,12 @@ export default async function OutreachAccountsPage() {
   const session = await getTenantSession();
   const tenantId = session!.tenantId!;
 
-  const [accounts, enabledSections, reachStats] = await Promise.all([
-    getAccountsList(tenantId),
+  // The account list and its reach stats share ONE withTenant() scope (see
+  // getAccountHealthPageData); the section lookup is a plain non-transactional
+  // db read, so it can still run alongside it without a second transaction.
+  const [{ accounts, reachStats }, enabledSections] = await Promise.all([
+    getAccountHealthPageData(tenantId),
     getEnabledSectionKeys(tenantId, "outreach"),
-    getAccountReachStats(tenantId),
   ]);
   // Which channels this client can create accounts for -- an Admin-side per-
   // tenant call (Sections tab on /admin/tenants/[tenantId]), not a hardcoded

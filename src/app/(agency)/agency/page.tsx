@@ -4,7 +4,7 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/Ca
 import { Badge } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
 import { timeAgo } from "@/lib/utils";
-import { getAgencyDashboardKpis, getRecentConversations } from "@/lib/agency/dashboard";
+import { getAgencyDashboardPageData } from "@/lib/agency/dashboard";
 import { getTenantSession } from "@/lib/auth";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import Link from "next/link";
@@ -15,10 +15,8 @@ export default async function AgencyDashboardPage() {
   const lang = (session!.uiLanguage as UiLanguage) ?? "EN";
   const t = getDictionary(lang);
 
-  const [kpis, recentConversations] = await Promise.all([
-    getAgencyDashboardKpis(tenantId),
-    getRecentConversations(tenantId, 6),
-  ]);
+  // One withTenant() scope for both reads -- see getAgencyDashboardPageData.
+  const { kpis, recentConversations } = await getAgencyDashboardPageData(tenantId, 6);
 
   return (
     <div className="space-y-6">

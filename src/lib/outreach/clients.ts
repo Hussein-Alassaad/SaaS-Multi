@@ -55,15 +55,45 @@ export async function getClientsList(
   return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
 }
 
+async function readClientsCounts(tx: Prisma.TransactionClient, tenantId: string) {
+  const total = await tx.outreachLead.count({ where: { tenantId } });
+  const numbersFound = await tx.outreachLead.count({
+    where: { tenantId, whatsappFound: true, whatsappNumber: { not: null } },
+  });
+  return { total, numbersFound };
+}
+
 /** Head-only counts, independent of pagination -- mirrors Clients.jsx's `loadCounts`. */
 export async function getClientsCounts(tenantId: string) {
-  return withTenant(tenantId, async (tx) => {
-    const total = await tx.outreachLead.count({ where: { tenantId } });
-    const numbersFound = await tx.outreachLead.count({
-      where: { tenantId, whatsappFound: true, whatsappNumber: { not: null } },
+  return withTenant(tenantId, (tx) => readClientsCounts(tx, tenantId));
+}
+
+/**
+ * Clients page's first-page list + head counts in ONE tenant scope.
+ *
+ * Was Promise.all([getClientsList, getClientsCounts]) -- two concurrent
+ * withTenant() calls, so two real Postgres transactions for one page load.
+ * Same bug class as getPipelineBoard's 7 (see src/lib/outreach/leads.ts's
+ * getPipelineBoard for the full writeup). getClientsList stays public and
+ * single-scope: the client component calls it on its own for "load more"
+ * pagination and for search/filter changes, which genuinely are independent
+ * single requests that should each get their own transaction.
+ */
+export async function getClientsPageData(tenantId: string) {
+  const { rows, counts } = await withTenant(tenantId, async (tx) => {
+    const rows = await tx.outreachLead.findMany({
+      where: { tenantId },
+      select: clientsListSelect,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: DEFAULT_PAGE_SIZE + 1,
     });
-    return { total, numbersFound };
+    const counts = await readClientsCounts(tx, tenantId);
+    return { rows, counts };
   });
+
+  const hasMore = rows.length > DEFAULT_PAGE_SIZE;
+  const items = hasMore ? rows.slice(0, DEFAULT_PAGE_SIZE) : rows;
+  return { items, nextCursor: hasMore ? items[items.length - 1].id : null, counts };
 }
 
 /**

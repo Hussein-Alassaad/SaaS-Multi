@@ -1,5 +1,4 @@
-import { getPendingApprovals } from "@/lib/agency/conversations";
-import { getPendingMeetingApprovals } from "@/lib/agency/meetings";
+import { getApprovalsPageData } from "@/lib/agency/conversations";
 import { getTenantSession } from "@/lib/auth";
 import { type UiLanguage } from "@/lib/i18n";
 import { ApprovalsClient } from "./ApprovalsClient";
@@ -9,10 +8,8 @@ export default async function ApprovalsPage() {
   const tenantId = session!.tenantId!;
   const lang = (session!.uiLanguage as UiLanguage) ?? "EN";
 
-  const [pendingMessages, pendingMeetings] = await Promise.all([
-    getPendingApprovals(tenantId),
-    getPendingMeetingApprovals(tenantId),
-  ]);
+  // One withTenant() scope for both reads -- see getApprovalsPageData.
+  const { pendingMessages, pendingMeetings } = await getApprovalsPageData(tenantId);
 
   const messages = pendingMessages.map((m) => ({
     id: m.id,

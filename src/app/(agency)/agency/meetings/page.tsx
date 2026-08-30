@@ -1,4 +1,4 @@
-import { getMeetingSlots, getMeetingRequests } from "@/lib/agency/meetings";
+import { getMeetingsPageData } from "@/lib/agency/meetings";
 import { getTenantSession } from "@/lib/auth";
 import { type UiLanguage } from "@/lib/i18n";
 import { MeetingsClient } from "./MeetingsClient";
@@ -8,7 +8,8 @@ export default async function MeetingsPage() {
   const tenantId = session!.tenantId!;
   const lang = (session!.uiLanguage as UiLanguage) ?? "EN";
 
-  const [slots, requests] = await Promise.all([getMeetingSlots(tenantId), getMeetingRequests(tenantId)]);
+  // One withTenant() scope for both reads -- see getMeetingsPageData.
+  const { slots, requests } = await getMeetingsPageData(tenantId);
 
   const serializedSlots = slots.map((s) => ({
     id: s.id,
