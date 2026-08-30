@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatDateTime } from "@/lib/utils";
 import { toggleChannelConnectionAction, disconnectOAuthChannelAction } from "@/lib/actions/agency-integrations";
-import { OAUTH_CHANNEL_PROVIDERS, type OAuthChannelProvider } from "@/lib/agency/channels";
+import { OAUTH_CHANNEL_PROVIDERS, type OAuthChannelProvider } from "@/lib/agency/channel-providers";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { MessageCircle, Camera, ThumbsUp, Mail } from "lucide-react";
 

@@ -1,22 +1,13 @@
 import { withTenant } from "@/lib/db";
 import { DEFAULT_PAGE_SIZE } from "@/lib/pagination";
+import { PIPELINE_STAGES, type PipelineStage } from "@/lib/outreach/pipeline-stages";
 
-/**
- * Kanban stages for the Outreach Pipeline board -- matches the original
- * single-tenant app's board exactly (agent/crm/pipeline.py's STAGES).
- * Leads only enter the board once status moves past the discovery/approval
- * statuses (discovered/analyzed/awaiting_approval/approved/manual_send_pending) --
- * there is deliberately no "new"/discovery column here, matching the original.
- */
-export const PIPELINE_STAGES = [
-  "contacted",
-  "replied",
-  "interested",
-  "meeting_booked",
-  "deal_closed",
-  "lost",
-] as const;
-export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+// Re-exported for existing server-side importers (page.tsx files) that
+// already import PIPELINE_STAGES/PipelineStage from here -- only
+// PipelineClient.tsx ("use client") was switched to import directly from
+// pipeline-stages.ts instead, since a client component can't safely
+// import this file (see pipeline-stages.ts's own docstring for why).
+export { PIPELINE_STAGES, type PipelineStage };
 
 const PIPELINE_COLUMN_PAGE_SIZE = 20;
 

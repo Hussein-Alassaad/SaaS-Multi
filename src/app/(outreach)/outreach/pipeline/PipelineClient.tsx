@@ -15,7 +15,7 @@ import {
 } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
 import { loadMorePipelineStageAction, moveLeadStageAction } from "@/lib/actions/outreach-leads";
-import { PIPELINE_STAGES, type PipelineStage } from "@/lib/outreach/leads";
+import { PIPELINE_STAGES, type PipelineStage } from "@/lib/outreach/pipeline-stages";
 
 interface PipelineLead {
   id: string;
