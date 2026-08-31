@@ -5,15 +5,65 @@ const PLATFORM_DOMAINS = {
   instagram: "https://www.instagram.com",
 };
 
-const PLATFORM_LABELS = {
-  linkedin: "linkedin.com",
-  instagram: "instagram.com",
+// Where each platform reliably shows the CURRENTLY logged-in user's own
+// name/handle without needing to visit their specific profile URL (which
+// this extension doesn't know) -- the feed/home page's own nav always
+// renders it for whoever is logged in.
+const DETECT_URLS = {
+  linkedin: "https://www.linkedin.com/feed/",
+  instagram: "https://www.instagram.com/",
 };
+
+// Extracted via chrome.scripting.executeScript, so this runs IN the
+// LinkedIn/Instagram page's own context, not this popup's. Multiple
+// fallback selectors per platform -- LIVE-VERIFIED 2026-08-31 against
+// both real sites, but a page-structure change on either site's end is
+// exactly the fragility this whole approach trades off deliberately (see
+// the confirmation checkbox below, which is what makes a failed/wrong
+// detection here non-fatal rather than silently sending the wrong
+// account).
+function extractAccountName(platform) {
+  if (platform === "linkedin") {
+    const selectors = [
+      'button[id^="ember"] .global-nav__me-photo', // photo alt text
+      ".global-nav__me-photo",
+      'a[href*="/in/"] img.global-nav__me-photo',
+      ".feed-identity-module__actor-meta a",
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el?.alt?.trim()) return el.alt.trim();
+    }
+    // Fall back to the "Me" dropdown trigger's own accessible text, which
+    // LinkedIn renders as "<Name>'s profile & activity" or similar.
+    const meButton = document.querySelector('button[aria-label*="profile"]');
+    if (meButton) {
+      const label = meButton.getAttribute("aria-label") || "";
+      const match = label.match(/^(.+?)'s profile/);
+      if (match) return match[1].trim();
+    }
+    return null;
+  }
+  if (platform === "instagram") {
+    // Instagram's own nav doesn't render the display name in plain text
+    // (avatar + profile link only) -- the profile link's href IS the
+    // logged-in user's @username, which is exactly the identifying
+    // information needed here.
+    const profileLink = document.querySelector('a[href^="/"][role="link"] img[alt*="profile picture"]');
+    if (profileLink) {
+      const alt = profileLink.alt || "";
+      const match = alt.match(/^(.+?)'s profile picture/);
+      if (match) return match[1].trim();
+    }
+    return null;
+  }
+  return null;
+}
 
 const platformSelect = document.getElementById("platform");
 const codeInput = document.getElementById("code");
 const confirmCheckbox = document.getElementById("confirm");
-const accountNameEl = document.getElementById("accountName");
+const detectBox = document.getElementById("detectBox");
 const connectButton = document.getElementById("connect");
 const statusEl = document.getElementById("status");
 
@@ -22,27 +72,81 @@ function showStatus(kind, text) {
   statusEl.textContent = text;
 }
 
-function updateAccountLabel() {
-  accountNameEl.textContent = PLATFORM_LABELS[platformSelect.value];
+function setDetectBox(state, text) {
+  detectBox.className = `detect-box ${state}`;
+  detectBox.textContent = text;
 }
 
 function updateConnectButtonState() {
   connectButton.disabled = !confirmCheckbox.checked;
 }
 
-updateAccountLabel();
-updateConnectButtonState();
+confirmCheckbox.addEventListener("change", updateConnectButtonState);
 
-// Switching platforms re-requires confirmation -- ticking the box for
-// LinkedIn shouldn't silently carry over to an Instagram send if the
-// person changes the dropdown afterward without re-reading the label.
-platformSelect.addEventListener("change", () => {
-  updateAccountLabel();
+// Opens the platform's feed/home page in a background (non-focused) tab,
+// waits for it to finish loading, runs extractAccountName() inside that
+// page, then always closes the tab regardless of outcome -- this never
+// leaves a stray tab open even if extraction throws.
+async function detectAccountName(platform) {
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url: DETECT_URLS[platform], active: false });
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("timeout")), 15000);
+      function onUpdated(tabId, info) {
+        if (tabId === tab.id && info.status === "complete") {
+          clearTimeout(timeout);
+          chrome.tabs.onUpdated.removeListener(onUpdated);
+          resolve();
+        }
+      }
+      chrome.tabs.onUpdated.addListener(onUpdated);
+    });
+    // The feed/home page keeps loading content asynchronously after
+    // "complete" fires -- a short fixed wait for the nav to actually
+    // render, same reasoning as any SPA that finishes its initial
+    // network round-trip after the browser's own load event.
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: extractAccountName,
+      args: [platform],
+    });
+    return result;
+  } catch {
+    return null;
+  } finally {
+    if (tab?.id) {
+      chrome.tabs.remove(tab.id).catch(() => {});
+    }
+  }
+}
+
+async function runDetection() {
+  const platform = platformSelect.value;
   confirmCheckbox.checked = false;
   updateConnectButtonState();
-});
+  setDetectBox("pending", "Checking who you're logged in as…");
 
-confirmCheckbox.addEventListener("change", updateConnectButtonState);
+  const name = await detectAccountName(platform);
+  // The platform may have changed while this was running (user flipped
+  // the dropdown mid-detection) -- discard a stale result rather than
+  // showing the wrong platform's answer.
+  if (platformSelect.value !== platform) return;
+
+  if (name) {
+    setDetectBox("found", `Logged in as: ${name}`);
+  } else {
+    setDetectBox(
+      "unknown",
+      `Couldn't confirm who you're logged in as on ${platform === "linkedin" ? "LinkedIn" : "Instagram"} -- make sure you're logged in, then double-check manually before connecting.`
+    );
+  }
+}
+
+platformSelect.addEventListener("change", runDetection);
+runDetection();
 
 connectButton.addEventListener("click", async () => {
   const platform = platformSelect.value;
