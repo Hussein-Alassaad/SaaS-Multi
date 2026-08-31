@@ -83,17 +83,53 @@ export function ImportSessionModal({
       title={`Connect ${accountLabel} via extension`}
       description="No remote browser window -- log in on your own device, then paste this code into the extension."
     >
-      <div className="space-y-4">
-        <ol className="list-decimal space-y-2 pl-4 text-sm text-[var(--text-2)]">
-          <li>
-            Install the{" "}
-            <span className="font-semibold text-[var(--text-1)]">Nexaris Connect</span> extension in
-            Chrome (your account manager can send you the link if you don&apos;t have it yet).
-          </li>
-          <li>Log into LinkedIn or Instagram normally, in your own browser.</li>
-          <li>Click the Nexaris Connect icon in your browser toolbar.</li>
-          <li>Paste the code below into the extension, then click Connect there.</li>
-        </ol>
+      <div className="space-y-5">
+        <div>
+          <p className="mb-2 text-xs font-semibold text-[var(--text-3)]">
+            Step 1 -- Install the extension (one time only)
+          </p>
+          <ol className="list-decimal space-y-1.5 pl-4 text-sm text-[var(--text-2)]">
+            <li>
+              <a
+                href="/downloads/nexaris-connect-extension.zip"
+                download
+                className="font-semibold text-[var(--accent-from)] underline underline-offset-2"
+              >
+                Download the Nexaris Connect extension
+              </a>{" "}
+              and unzip it somewhere you&apos;ll remember (e.g. your Desktop).
+            </li>
+            <li>
+              In Chrome, open a new tab and go to{" "}
+              <code className="rounded bg-[var(--surface-2)] px-1 py-0.5 text-xs">chrome://extensions</code>.
+            </li>
+            <li>
+              Turn on <span className="font-semibold text-[var(--text-1)]">Developer mode</span> (top
+              right corner of that page).
+            </li>
+            <li>
+              Click <span className="font-semibold text-[var(--text-1)]">Load unpacked</span> and
+              select the unzipped folder.
+            </li>
+            <li>
+              The Nexaris Connect icon now appears in your browser toolbar (click the puzzle-piece
+              icon and pin it if you don&apos;t see it).
+            </li>
+          </ol>
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-semibold text-[var(--text-3)]">Step 2 -- Connect this account</p>
+          <ol className="list-decimal space-y-1.5 pl-4 text-sm text-[var(--text-2)]">
+            <li>
+              Log into {accountLabel.toLowerCase().includes("instagram") ? "Instagram" : "LinkedIn"}{" "}
+              normally, in this same browser -- your usual email and password.
+            </li>
+            <li>Click the Nexaris Connect icon in your browser toolbar.</li>
+            <li>Paste the code below into the extension&apos;s popup.</li>
+            <li>Click Connect inside the extension.</li>
+          </ol>
+        </div>
 
         <div>
           <span className="mb-1 block text-xs font-medium text-[var(--text-3)]">Code (valid for 10 minutes)</span>
@@ -111,10 +147,14 @@ export function ImportSessionModal({
           ) : (
             <p className="text-sm text-[var(--text-4)]">Generating code...</p>
           )}
+          <p className="mt-1 text-xs text-[var(--text-5)]">
+            Code expired? Close this window and click &quot;Connect via extension&quot; again for a new one.
+          </p>
         </div>
 
         <p className="text-xs text-[var(--text-5)]">
-          This page will update automatically once the account connects -- no need to keep this open.
+          This page updates automatically once the account connects -- no need to keep this window open
+          while you set up the extension.
         </p>
       </div>
     </Modal>

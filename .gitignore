@@ -41,6 +41,11 @@ prisma/*.db-journal
 # user-uploaded files (local disk storage, not committed)
 /public/uploads/
 
+# generated on every build by scripts/build-extension-zip.mjs (npm run
+# build's "prebuild" step) from chrome-extension/ -- a build artifact, not
+# source, same reasoning as /public/uploads/ above.
+/public/downloads/
+
 # vercel
 .vercel
 
