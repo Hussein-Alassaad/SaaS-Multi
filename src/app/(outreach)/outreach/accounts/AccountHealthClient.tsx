@@ -13,6 +13,7 @@ import {
   deleteOutreachAccountAction,
   type AccountDraftInput,
 } from "@/lib/actions/outreach-accounts";
+import { disconnectAccountAction } from "@/lib/actions/outreach-live-login";
 import { ConnectAccountModal } from "./ConnectAccountModal";
 
 export interface AccountHealthRow {
@@ -172,6 +173,27 @@ export function AccountHealthClient({
 
   const [connectingAccount, setConnectingAccount] = useState<AccountHealthRow | null>(null);
   const openConnectModal = useCallback((account: AccountHealthRow) => setConnectingAccount(account), []);
+
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
+  const disconnectAccount = useCallback(
+    (account: AccountHealthRow) => {
+      if (!window.confirm(`Disconnect ${account.label}? This ends its saved login -- you'll need to connect it again before it can send.`)) {
+        return;
+      }
+      setDisconnectingId(account.id);
+      startTransition(async () => {
+        const result = await disconnectAccountAction(account.id);
+        setDisconnectingId(null);
+        if (!result.ok) {
+          showToast({ title: "Disconnect failed", description: result.error, variant: "error" });
+          return;
+        }
+        showToast({ title: "Disconnected", description: `${account.label} has been disconnected.`, variant: "success" });
+        router.refresh();
+      });
+    },
+    [showToast, router]
+  );
 
   // router.refresh() re-runs the server component and hands this component
   // fresh `initialAccounts` props -- sync that into `accounts` state on
@@ -508,6 +530,13 @@ export function AccountHealthClient({
                               className="rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]"
                             >
                               Reconnect
+                            </button>
+                            <button
+                              onClick={() => disconnectAccount(account)}
+                              disabled={disconnectingId === account.id}
+                              className="rounded-lg bg-[var(--status-hot)]/10 px-3 py-1.5 text-xs font-semibold text-[var(--status-hot)] transition-colors hover:bg-[var(--status-hot)]/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {disconnectingId === account.id ? "Disconnecting…" : "Disconnect"}
                             </button>
                           </>
                         ) : (

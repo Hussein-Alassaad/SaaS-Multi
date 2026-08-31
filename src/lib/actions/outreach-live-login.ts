@@ -143,3 +143,73 @@ export async function getConnectAccountStatusAction(accountId: string) {
     error: account.loginError,
   };
 }
+
+/**
+ * Disconnects a LinkedIn/Instagram account: deletes the saved login
+ * session on the droplet (browser_profiles/{accountId}.json -- the file
+ * the scheduler's own SessionManager reads on every real run) and resets
+ * loginStatus back to "not_connected". Unlike startConnectAccountAction,
+ * this is a one-shot request/response, not a persistent stream, so this
+ * server action makes the call to the droplet directly (a plain HTTPS
+ * POST) rather than handing the browser a URL to open itself -- there's
+ * no long-lived connection here for a Vercel serverless function to be
+ * unable to hold open.
+ *
+ * The droplet is the only thing that can actually delete that file (it's
+ * a different machine's filesystem, not reachable from this Vercel
+ * deployment) -- see live_login/server.py's disconnect handler, gated by
+ * the same short-lived JWT scheme startConnectAccountAction already uses,
+ * just with purpose="disconnect_account" so a leaked connect token can
+ * never be replayed to disconnect an account and vice versa.
+ */
+export async function disconnectAccountAction(accountId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const wsHost = process.env.LIVE_LOGIN_WS_HOST;
+  if (!wsHost) {
+    return { ok: false as const, error: "Live login isn't configured on this deployment yet." };
+  }
+
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.findFirst({
+      where: { id: accountId, tenantId: session.tenantId! },
+    })
+  );
+  if (!account) return { ok: false as const, error: "Account not found." };
+  if (account.platform !== "linkedin" && account.platform !== "instagram") {
+    return { ok: false as const, error: "Disconnect only applies to LinkedIn or Instagram accounts." };
+  }
+  if (account.loginStatus === "connecting") {
+    return { ok: false as const, error: "A connection attempt is currently in progress for this account." };
+  }
+
+  const token = await new SignJWT({
+    accountId,
+    tenantId: session.tenantId!,
+    purpose: "disconnect_account",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("120s")
+    .sign(getSecretKey());
+
+  let response: Response;
+  try {
+    response = await fetch(`https://${wsHost}/connect/${accountId}/disconnect`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    return { ok: false as const, error: "Could not reach the login server. Try again in a moment." };
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    return { ok: false as const, error: text || `Disconnect failed (${response.status}).` };
+  }
+
+  return { ok: true as const };
+}
