@@ -88,16 +88,24 @@ export function ImportSessionModal({
           <p className="mb-2 text-xs font-semibold text-[var(--text-3)]">
             Step 1 -- Install the extension (one time only)
           </p>
+          <p className="mb-2 text-xs text-[var(--text-4)]">
+            Chrome or Windows may show a warning since this is a small installer, not something from
+            the Chrome Web Store yet -- click <span className="font-semibold">Keep</span> /{" "}
+            <span className="font-semibold">More info → Run anyway</span> to continue. It only writes
+            three files to a folder on your Desktop.
+          </p>
           <ol className="list-decimal space-y-1.5 pl-4 text-sm text-[var(--text-2)]">
             <li>
               <a
-                href="/downloads/nexaris-connect-extension.zip"
+                href="/downloads/install-nexaris-connect.bat"
                 download
                 className="font-semibold text-[var(--accent-from)] underline underline-offset-2"
               >
-                Download the Nexaris Connect extension
+                Download the installer
               </a>{" "}
-              and unzip it somewhere you&apos;ll remember (e.g. your Desktop).
+              and double-click it. It places a folder called{" "}
+              <code className="rounded bg-[var(--surface-2)] px-1 py-0.5 text-xs">nexaris-connect-extension</code>{" "}
+              on your Desktop -- no unzipping needed.
             </li>
             <li>
               In Chrome, open a new tab and go to{" "}
@@ -109,7 +117,8 @@ export function ImportSessionModal({
             </li>
             <li>
               Click <span className="font-semibold text-[var(--text-1)]">Load unpacked</span> and
-              select the unzipped folder.
+              select the <code className="rounded bg-[var(--surface-2)] px-1 py-0.5 text-xs">nexaris-connect-extension</code>{" "}
+              folder on your Desktop.
             </li>
             <li>
               The Nexaris Connect icon now appears in your browser toolbar (click the puzzle-piece
