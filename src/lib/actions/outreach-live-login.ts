@@ -213,3 +213,54 @@ export async function disconnectAccountAction(accountId: string) {
 
   return { ok: true as const };
 }
+
+/**
+ * Mints the short-lived code a tenant pastes into the Nexaris Connect
+ * Chrome extension's popup -- the alternative to VNC-based Connect Account
+ * (see AccountHealthClient.tsx's "Connect via extension" button, sitting
+ * next to the original Connect Account button, not replacing it). Client
+ * logs into LinkedIn/Instagram normally in their own browser, the
+ * extension reads the resulting cookies, and sends {code, cookies} to
+ * /api/extension/import-session (a Route Handler, not a server action --
+ * a browser extension can't call a Next.js server action directly, it
+ * needs a plain HTTP endpoint).
+ *
+ * This token is verified there (not here) -- this action's only job is to
+ * confirm the requesting tenant session actually owns this account and
+ * hand back a signed, scoped, short-lived credential, same posture as
+ * every other purpose on this JWT scheme (connect_account/
+ * disconnect_account above). purpose="import_session" so this can never
+ * be replayed against the connect/disconnect endpoints or vice versa.
+ * Deliberately longer-lived than the other purposes' 120s (10 minutes) --
+ * unlike those, a human has to copy this code, switch to the extension
+ * popup, and paste it, which realistically takes longer than clicking a
+ * button that immediately opens a live connection.
+ */
+export async function mintImportSessionCodeAction(accountId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "accounts", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.findFirst({
+      where: { id: accountId, tenantId: session.tenantId! },
+    })
+  );
+  if (!account) return { ok: false as const, error: "Account not found." };
+  if (account.platform !== "linkedin" && account.platform !== "instagram") {
+    return { ok: false as const, error: "Session import only applies to LinkedIn or Instagram accounts." };
+  }
+
+  const code = await new SignJWT({
+    accountId,
+    tenantId: session.tenantId!,
+    purpose: "import_session_code",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("10m")
+    .sign(getSecretKey());
+
+  return { ok: true as const, code };
+}

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nexaris Connect</title>
+<style>
+  body {
+    width: 320px;
+    padding: 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #1a1a2e;
+    background: #ffffff;
+  }
+  h1 {
+    font-size: 15px;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  p.sub {
+    font-size: 12px;
+    color: #666;
+    margin: 0 0 14px;
+  }
+  label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  select, input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px;
+    border: 1px solid #d5d5e0;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  button {
+    width: 100%;
+    padding: 10px;
+    background: #4b3cf0;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  #status {
+    margin-top: 12px;
+    font-size: 12px;
+    padding: 8px;
+    border-radius: 6px;
+    display: none;
+  }
+  #status.success {
+    display: block;
+    background: #e6f7ee;
+    color: #0a7d43;
+  }
+  #status.error {
+    display: block;
+    background: #fdecec;
+    color: #c0392b;
+  }
+  #status.info {
+    display: block;
+    background: #eef0ff;
+    color: #4b3cf0;
+  }
+</style>
+</head>
+<body>
+  <h1>Nexaris Connect</h1>
+  <p class="sub">Paste the code from your Nexaris dashboard, then click Connect.</p>
+
+  <label for="platform">Platform</label>
+  <select id="platform">
+    <option value="linkedin">LinkedIn</option>
+    <option value="instagram">Instagram</option>
+  </select>
+
+  <label for="code">Code from dashboard</label>
+  <input type="text" id="code" placeholder="Paste code here">
+
+  <button id="connect">Connect</button>
+
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

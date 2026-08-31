@@ -15,6 +15,7 @@ import {
 } from "@/lib/actions/outreach-accounts";
 import { disconnectAccountAction } from "@/lib/actions/outreach-live-login";
 import { ConnectAccountModal } from "./ConnectAccountModal";
+import { ImportSessionModal } from "./ImportSessionModal";
 
 export interface AccountHealthRow {
   id: string;
@@ -173,6 +174,9 @@ export function AccountHealthClient({
 
   const [connectingAccount, setConnectingAccount] = useState<AccountHealthRow | null>(null);
   const openConnectModal = useCallback((account: AccountHealthRow) => setConnectingAccount(account), []);
+
+  const [importingAccount, setImportingAccount] = useState<AccountHealthRow | null>(null);
+  const openImportModal = useCallback((account: AccountHealthRow) => setImportingAccount(account), []);
 
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const disconnectAccount = useCallback(
@@ -549,21 +553,35 @@ export function AccountHealthClient({
                             </button>
                           </>
                         ) : (
-                          <button
-                            onClick={() => openConnectModal(account)}
-                            disabled={!account.proxyHost || (account.loginStatus === "connecting" && !isStaleConnecting(account))}
-                            className="rounded-lg bg-[var(--accent-from)]/15 px-3 py-1.5 text-xs font-semibold text-[var(--accent-from)] ring-1 ring-[var(--accent-from)]/30 transition-colors hover:bg-[var(--accent-from)]/25 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {account.loginStatus === "connecting" && !isStaleConnecting(account)
-                              ? "Connecting…"
-                              : "Connect account"}
-                          </button>
+                          <>
+                            <span className="inline-flex items-center gap-1.5">
+                              <button
+                                onClick={() => openImportModal(account)}
+                                className="rounded-lg bg-[var(--accent-from)]/15 px-3 py-1.5 text-xs font-semibold text-[var(--accent-from)] ring-1 ring-[var(--accent-from)]/30 transition-colors hover:bg-[var(--accent-from)]/25"
+                              >
+                                Connect via extension
+                              </button>
+                              <span className="rounded-full bg-[#4fd293]/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#4fd293]">
+                                Recommended
+                              </span>
+                            </span>
+                            <button
+                              onClick={() => openConnectModal(account)}
+                              disabled={!account.proxyHost || (account.loginStatus === "connecting" && !isStaleConnecting(account))}
+                              className="rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)] disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {account.loginStatus === "connecting" && !isStaleConnecting(account)
+                                ? "Connecting…"
+                                : "Connect account (browser)"}
+                            </button>
+                          </>
                         )}
                       </div>
                       <span className="mt-1 block text-[10px] leading-snug text-[var(--text-5)]">
+                        Extension: log in on your own device, no remote browser window.{" "}
                         {account.proxyHost
-                          ? "Log in with the account's own email/password directly in a live window -- never seen or stored by Nexaris."
-                          : "Set up a proxy below first, then connect the account."}
+                          ? "Or connect via a live window using this account's proxy -- never seen or stored by Nexaris."
+                          : "The browser option needs a proxy set up below first."}
                       </span>
                     </div>
                     <label className="block">
@@ -689,6 +707,16 @@ export function AccountHealthClient({
           }}
           accountId={connectingAccount.id}
           accountLabel={connectingAccount.label}
+        />
+      )}
+      {importingAccount && (
+        <ImportSessionModal
+          open={!!importingAccount}
+          onOpenChange={(open) => {
+            if (!open) setImportingAccount(null);
+          }}
+          accountId={importingAccount.id}
+          accountLabel={importingAccount.label}
         />
       )}
     </div>

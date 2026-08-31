@@ -18,6 +18,11 @@ const eslintConfig = defineConfig([
     // dashboard alone was flooding `npm run lint` with ~12.8k problems from
     // an entirely different lint setup.
     "outreach/**",
+    // chrome-extension/ is a separate deployable artifact (a Chrome
+    // extension, loaded by the browser directly, no build step) -- same
+    // reasoning as outreach/ above, not part of this Next.js app's TS/React
+    // lint scope.
+    "chrome-extension/**",
   ]),
 ]);
 
