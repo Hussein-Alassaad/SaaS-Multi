@@ -29,6 +29,28 @@
     font-weight: 600;
     margin-bottom: 6px;
   }
+  .confirm-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 8px;
+    background: #f7f7fb;
+    border-radius: 6px;
+  }
+  .confirm-row input[type="checkbox"] {
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+  .confirm-row label {
+    font-weight: 400;
+    font-size: 12px;
+    margin-bottom: 0;
+    color: #333;
+  }
+  #accountName {
+    font-weight: 700;
+  }
   select, input[type="text"] {
     width: 100%;
     box-sizing: border-box;
@@ -90,7 +112,15 @@
   <label for="code">Code from dashboard</label>
   <input type="text" id="code" placeholder="Paste code here">
 
-  <button id="connect">Connect</button>
+  <div class="confirm-row">
+    <input type="checkbox" id="confirm">
+    <label for="confirm">
+      I'm currently logged in on <span id="accountName">linkedin.com</span> as the account I want to
+      connect. This will send that account's session to Nexaris.
+    </label>
+  </div>
+
+  <button id="connect" disabled>Connect</button>
 
   <div id="status"></div>
 
