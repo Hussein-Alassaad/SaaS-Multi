@@ -453,7 +453,16 @@ export function AccountHealthClient({
                 <div className="mt-3 rounded-xl border border-[var(--status-hot)]/20 bg-[var(--status-hot)]/5 p-3 text-xs text-[var(--status-hot)]">
                   <p className="font-semibold">Login failed</p>
                   <p className="mt-1 opacity-80">{account.loginError}</p>
-                  <p className="mt-1 opacity-60">Double-check the email/password below and save again to retry.</p>
+                  {/* The generic "double-check your password" hint is actively wrong for a
+                      security-checkpoint or proxy failure (loginError's other two shapes --
+                      see live_login/session.py's wait_for_login()/start_login_session()) since
+                      re-entering the same correct password doesn't fix either of those. Only
+                      the plain 10-minute timeout is ambiguous enough (could genuinely be a
+                      form that was never submitted) to still warrant the hint. */}
+                  {!account.loginError.includes("asked for extra verification") &&
+                    !account.loginError.includes("proxy") && (
+                      <p className="mt-1 opacity-60">Double-check the email/password below and save again to retry.</p>
+                    )}
                 </div>
               )}
 
