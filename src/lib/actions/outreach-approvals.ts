@@ -352,6 +352,44 @@ export async function approveMessageAction(messageId: string) {
   return { ok: true as const };
 }
 
+/**
+ * Real gap fixed 2026-09-02: a failed email send used to have NO way back
+ * to a sendable state at all -- approveMessageAction() only ever runs
+ * sendIfEmailChannel() once, right after the approval itself, and a
+ * message that's already "approved" never re-enters that flow again on
+ * its own. A tenant hitting a real Resend failure (bad domain, transient
+ * API error, etc.) had no button anywhere to try again -- the message just
+ * sat "failed" permanently. This re-runs the exact same send path
+ * (sendIfEmailChannel, same cap-check/claim/Resend-call logic
+ * approveMessageAction already uses) against an existing approved message,
+ * without re-approving it (it's already approved -- this only concerns
+ * itself with getting the actual send to happen).
+ */
+export async function retryFailedEmailSendAction(messageId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const message = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } })
+  );
+  if (!message) return { ok: false as const, error: "Message not found." };
+  if (message.channel !== "email") {
+    return { ok: false as const, error: "Retry only applies to email messages." };
+  }
+  if (message.approvalStatus !== "approved") {
+    return { ok: false as const, error: "Only an approved message can be retried." };
+  }
+  if (message.sendStatus !== "failed") {
+    return { ok: false as const, error: "This message hasn't failed -- nothing to retry." };
+  }
+
+  await sendIfEmailChannel(session.tenantId!, message);
+
+  return { ok: true as const };
+}
+
 export async function holdMessageAction(messageId: string, reason?: string) {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };

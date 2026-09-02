@@ -139,13 +139,30 @@ export async function getChannelActivityAction(channel: "linkedin" | "email") {
       repliedAt: r.repliedAt.toISOString(),
       lead: { businessName: r.lead.businessName },
     })),
-    accounts: accounts.map((a) => ({
-      id: a.id,
-      label: a.label,
-      status: a.status,
-      warningReason: a.warningReason,
-      dailyLimit: channel === "email" ? a.emailDailyLimit : a.linkedinDailyLimit,
-      warmupCurrentLimit: a.warmupCurrentLimit,
-    })),
+    accounts: accounts.map((a) => {
+      // LIVE-CONFIRMED 2026-09-02: this box's label used to read
+      // "{warmupCurrentLimit}/{dailyLimit} daily limit" -- both are
+      // CONFIGURATION values (the account's current warm-up-ramped cap
+      // and its steady-state ceiling), neither is how many messages this
+      // account has actually sent today. A real tenant read that as a
+      // progress counter ("10 of 10 already sent") and was confused when
+      // the real count was 0-1 -- this computes the genuine sent-today
+      // count from `messages` (already fetched above, no extra query) so
+      // the label can show the real number instead.
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const sentToday = messages.filter(
+        (m) => m.sentViaAccountId === a.id && m.sendStatus === "sent" && m.sentAt && m.sentAt >= todayStart
+      ).length;
+      return {
+        id: a.id,
+        label: a.label,
+        status: a.status,
+        warningReason: a.warningReason,
+        dailyLimit: channel === "email" ? a.emailDailyLimit : a.linkedinDailyLimit,
+        warmupCurrentLimit: a.warmupCurrentLimit,
+        sentToday,
+      };
+    }),
   };
 }

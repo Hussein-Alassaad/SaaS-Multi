@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
+import { retryFailedEmailSendAction } from "@/lib/actions/outreach-approvals";
+import { useToast } from "@/components/ui/Toast";
 
 export interface ChannelMessage {
   id: string;
@@ -36,6 +38,7 @@ export interface ChannelAccount {
   warningReason: string | null;
   dailyLimit: number;
   warmupCurrentLimit: number;
+  sentToday: number;
 }
 
 const STATUS_RING: Record<string, string> = {
@@ -95,6 +98,26 @@ export function ChannelActivity({
   useOutreachRealtime({ table: "outreach_messages", tenantId, reload });
   useOutreachRealtime({ table: "outreach_replies", tenantId, reload, debounceMs: 500 });
   useOutreachRealtime({ table: "outreach_accounts", tenantId, reload, debounceMs: 500 });
+  const { showToast } = useToast();
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
+  const retrySend = useCallback(
+    async (messageId: string) => {
+      setRetryingId(messageId);
+      try {
+        const result = await retryFailedEmailSendAction(messageId);
+        if (result.ok) {
+          showToast({ title: "Retrying send", description: "Check back in a moment for the result.", variant: "success" });
+          reload();
+        } else {
+          showToast({ title: "Couldn't retry", description: result.error, variant: "error" });
+        }
+      } finally {
+        setRetryingId(null);
+      }
+    },
+    [showToast, reload]
+  );
 
   const sentCount = messages.filter((m) => m.sendStatus === "sent").length;
 
@@ -124,7 +147,10 @@ export function ChannelActivity({
                 </span>
               </div>
               <p className="mt-1 text-xs text-[var(--text-4)]">
-                {a.warmupCurrentLimit ?? "—"}/{a.dailyLimit ?? "—"} daily limit
+                {a.sentToday} of {a.warmupCurrentLimit ?? a.dailyLimit ?? "—"} sent today
+                {a.warmupCurrentLimit != null && a.dailyLimit != null && a.warmupCurrentLimit < a.dailyLimit
+                  ? ` (ramping up to ${a.dailyLimit})`
+                  : ""}
               </p>
               {a.warningReason && <p className="mt-1 text-xs text-[var(--status-warm)]">{a.warningReason}</p>}
             </div>
@@ -175,6 +201,15 @@ export function ChannelActivity({
                   >
                     {m.sendStatus}
                   </span>
+                  {channel === "email" && m.sendStatus === "failed" && (
+                    <button
+                      onClick={() => retrySend(m.id)}
+                      disabled={retryingId === m.id}
+                      className="rounded-full bg-[var(--surface-2)] px-2 py-0.5 text-[11px] font-medium text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {retryingId === m.id ? "Retrying…" : "Retry"}
+                    </button>
+                  )}
                 </div>
               </div>
               <p className="mt-1.5 line-clamp-2 text-xs text-[var(--text-4)]">{m.editedBody || m.body}</p>
