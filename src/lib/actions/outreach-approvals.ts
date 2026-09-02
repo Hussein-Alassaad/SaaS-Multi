@@ -19,6 +19,7 @@ function serializeApprovalMessage(
     body: message.body,
     editedBody: message.editedBody,
     approvalStatus: message.approvalStatus,
+    sendStatus: message.sendStatus,
     lead: {
       id: message.lead.id,
       businessName: message.lead.businessName,
@@ -37,7 +38,25 @@ export async function getApprovalQueueAction() {
 
   const messages = await withTenant(session.tenantId!, (tx) =>
     tx.outreachMessage.findMany({
-      where: { tenantId: session.tenantId!, approvalStatus: "awaiting" },
+      // LIVE-CONFIRMED 2026-09-02, real behavior change per the platform
+      // owner: originally "awaiting" only (a real pending decision). A
+      // message that's already approved but genuinely failed to send
+      // (email: sendIfEmailChannel's real Resend failure path) now also
+      // shows here -- NOT by reverting approvalStatus back to "awaiting"
+      // (that would incorrectly suggest it needs re-approval, and could
+      // confuse maybeAdvanceLead's "every message on this lead is
+      // approved" rule elsewhere), but as a distinct, still-"approved"
+      // row the UI renders with its own "Failed -- retry" treatment
+      // (serializeApprovalMessage now carries sendStatus so the client
+      // can tell the two cases apart) rather than mixing it in as if it
+      // were an ordinary pending approval.
+      where: {
+        tenantId: session.tenantId!,
+        OR: [
+          { approvalStatus: "awaiting" },
+          { approvalStatus: "approved", sendStatus: "failed" },
+        ],
+      },
       include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
       orderBy: { createdAt: "asc" },
     })

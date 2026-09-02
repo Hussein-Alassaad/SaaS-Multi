@@ -12,6 +12,7 @@ import {
   holdMessageAction,
   saveMessageEditAction,
   approveAllMessagesAction,
+  retryFailedEmailSendAction,
 } from "@/lib/actions/outreach-approvals";
 
 export interface ApprovalMessage {
@@ -21,6 +22,7 @@ export interface ApprovalMessage {
   body: string;
   editedBody: string | null;
   approvalStatus: string;
+  sendStatus: string;
   lead: {
     id: string;
     businessName: string | null;
@@ -161,10 +163,28 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
     });
   };
 
+  // A failed-but-already-approved row (see getApprovalQueueAction's own
+  // comment on why these now show here) is never a real pending decision
+  // -- it must not be counted, swiped, or bulk-"Approve All"'d as if it
+  // were still awaiting one; only its own Retry button applies to it.
+  const isFailedRetry = (m: ApprovalMessage) => m.approvalStatus === "approved" && m.sendStatus === "failed";
+
+  const retry = (message: ApprovalMessage) => {
+    startTransition(async () => {
+      const result = await retryFailedEmailSendAction(message.id);
+      if (!result.ok) {
+        showToast({ title: "Retry failed", description: result.error, variant: "error" });
+        return;
+      }
+      showToast({ title: "Retrying", description: "Check back in a moment for the result.", variant: "default" });
+      reload();
+    });
+  };
+
   const approveAll = () => {
-    const toApprove = messages.filter((m) => m.approvalStatus !== "held");
+    const toApprove = messages.filter((m) => m.approvalStatus !== "held" && !isFailedRetry(m));
     if (toApprove.length === 0) return;
-    setMessages((prev) => prev.filter((m) => m.approvalStatus === "held"));
+    setMessages((prev) => prev.filter((m) => m.approvalStatus === "held" || isFailedRetry(m)));
     startTransition(async () => {
       const result = await approveAllMessagesAction(toApprove.map((m) => m.id));
       if (!result.ok) {
@@ -179,7 +199,7 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
     });
   };
 
-  const pendingCount = messages.filter((m) => m.approvalStatus !== "held").length;
+  const pendingCount = messages.filter((m) => m.approvalStatus !== "held" && !isFailedRetry(m)).length;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -224,7 +244,40 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
 
       <div className="mt-6 space-y-4">
         <AnimatePresence mode="popLayout">
-          {messages.map((message) => (
+          {messages.map((message) =>
+            isFailedRetry(message) ? (
+              // Distinct, non-swipeable card -- this is already approved,
+              // not a pending decision, so Approve/Hold/edit don't apply.
+              // Only action is a real retry of the actual send.
+              <motion.div
+                key={message.id}
+                layout
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="glass rounded-2xl p-4 ring-1 ring-[var(--status-hot)]/30"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <Link
+                    href={`/outreach/leads/${message.leadId}`}
+                    className="text-sm font-semibold text-[var(--text-1)] underline-offset-2 hover:text-[var(--accent-from)] hover:underline"
+                  >
+                    {message.lead.businessName || "Unknown business"}
+                  </Link>
+                  <span className="rounded-full bg-[var(--status-hot)]/10 px-2 py-0.5 text-xs font-medium text-[var(--status-hot)]">
+                    Failed to send
+                  </span>
+                </div>
+                <p className="mt-2 line-clamp-2 text-xs text-[var(--text-4)]">{message.editedBody || message.body}</p>
+                <motion.button
+                  whileTap={{ scale: 0.96 }}
+                  onClick={() => retry(message)}
+                  className="mt-3 rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]"
+                >
+                  Retry send
+                </motion.button>
+              </motion.div>
+            ) : (
             <DraggableCard key={message.id} onApprove={() => approve(message)} onHold={() => hold(message)}>
               <div className="flex items-center justify-between gap-3">
                 <Link
@@ -284,7 +337,8 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
               </div>
               <p className="mt-2 text-[11px] text-[var(--text-5)] md:hidden">Swipe right to approve, left to hold.</p>
             </DraggableCard>
-          ))}
+            )
+          )}
         </AnimatePresence>
       </div>
     </div>
