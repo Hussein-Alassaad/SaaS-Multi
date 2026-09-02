@@ -33,6 +33,7 @@ export async function sendOutreachEmail(opts: {
   to: string;
   subject: string;
   html: string;
+  tenantId?: string;
 }): Promise<{ ok: true; skipped?: true; messageId?: string } | { ok: false; error: string }> {
   if (!resend) {
     console.log(`[resend:noop] RESEND_API_KEY unset — would send "${opts.subject}" from ${opts.fromEmail} to ${opts.to}`);
@@ -58,6 +59,7 @@ export async function sendOutreachEmail(opts: {
       await logError({
         source: "outreach.resend.send",
         error: result.error,
+        tenantId: opts.tenantId,
         context: { to: opts.to, subject: opts.subject, fromEmail: opts.fromEmail },
       });
       return { ok: false, error: result.error.message };
@@ -65,7 +67,7 @@ export async function sendOutreachEmail(opts: {
     return { ok: true, messageId: result.data?.id };
   } catch (err) {
     console.error("Failed to send outreach email via Resend", err);
-    await logError({ source: "outreach.resend.send", error: err, context: { to: opts.to, subject: opts.subject } });
+    await logError({ source: "outreach.resend.send", error: err, tenantId: opts.tenantId, context: { to: opts.to, subject: opts.subject } });
     return { ok: false, error: "Failed to send email." };
   }
 }

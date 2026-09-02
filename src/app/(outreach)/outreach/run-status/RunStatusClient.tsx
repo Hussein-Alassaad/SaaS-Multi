@@ -10,6 +10,7 @@ export interface RunRow {
   id: string;
   accountId: string | null;
   accountLabel: string;
+  stage: string;
   startedAt: string;
   finishedAt: string | null;
   status: string;

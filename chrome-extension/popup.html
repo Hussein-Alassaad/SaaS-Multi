@@ -120,11 +120,36 @@
     background: #eef0ff;
     color: #4b3cf0;
   }
+  .remembered-box {
+    margin-bottom: 12px;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    border: 1px solid #4b3cf0;
+    background: #eef0ff;
+    color: #1a1a2e;
+  }
+  .remembered-box .label {
+    font-weight: 700;
+  }
+  .link-button {
+    background: none;
+    border: none;
+    color: #4b3cf0;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: underline;
+    padding: 8px 0 0;
+    width: auto;
+    cursor: pointer;
+  }
+  [hidden] {
+    display: none !important;
+  }
 </style>
 </head>
 <body>
   <h1>Nexaris Connect</h1>
-  <p class="sub">Paste the code from your Nexaris dashboard, then click Connect.</p>
 
   <label for="platform">Platform</label>
   <select id="platform">
@@ -132,17 +157,30 @@
     <option value="instagram">Instagram</option>
   </select>
 
-  <label for="code">Code from dashboard</label>
-  <input type="text" id="code" placeholder="Paste code here">
-
-  <div id="detectBox" class="detect-box pending">Checking who you're logged in as…</div>
-
-  <div class="confirm-row">
-    <input type="checkbox" id="confirm">
-    <label for="confirm">This is the account I want to connect to Nexaris.</label>
+  <div id="reconnectPanel" hidden>
+    <div class="remembered-box">
+      This browser previously connected <span class="label" id="rememberedLabel"></span> to Nexaris.
+    </div>
+    <div id="detectBoxReconnect" class="detect-box pending">Checking who you're logged in as…</div>
+    <button id="reconnectButton">Reconnect</button>
+    <button id="useDifferentAccount" class="link-button">Connect a different account instead</button>
   </div>
 
-  <button id="connect" disabled>Connect</button>
+  <div id="codePanel">
+    <p class="sub">Paste the code from your Nexaris dashboard, then click Connect.</p>
+
+    <label for="code">Code from dashboard</label>
+    <input type="text" id="code" placeholder="Paste code here">
+
+    <div id="detectBox" class="detect-box pending">Checking who you're logged in as…</div>
+
+    <div class="confirm-row">
+      <input type="checkbox" id="confirm">
+      <label for="confirm">This is the account I want to connect to Nexaris.</label>
+    </div>
+
+    <button id="connect" disabled>Connect</button>
+  </div>
 
   <div id="status"></div>
 

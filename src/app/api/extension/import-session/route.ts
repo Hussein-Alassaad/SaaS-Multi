@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { SignJWT, jwtVerify } from "jose";
 import { getSecretKey } from "@/lib/auth";
+import { toPlaywrightCookies, type ExtensionCookie } from "@/lib/extension-cookies";
 
 /**
  * Receives an already-logged-in LinkedIn/Instagram session from the
@@ -32,40 +33,6 @@ import { getSecretKey } from "@/lib/auth";
  * access to write browser_profiles/{accountId}.json (a different
  * machine, not reachable from this Vercel deployment).
  */
-
-interface ExtensionCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expirationDate?: number; // chrome.cookies' field name -- seconds since epoch, absent for session cookies
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite?: "no_restriction" | "lax" | "strict" | "unspecified";
-}
-
-const SAME_SITE_MAP: Record<string, "Strict" | "Lax" | "None"> = {
-  strict: "Strict",
-  lax: "Lax",
-  no_restriction: "None",
-  unspecified: "Lax", // Playwright requires a value; Chrome's own default behavior is Lax
-};
-
-function toPlaywrightCookies(cookies: ExtensionCookie[]) {
-  return cookies.map((c) => ({
-    name: c.name,
-    value: c.value,
-    domain: c.domain,
-    path: c.path,
-    // Playwright wants epoch seconds, -1 for a session cookie (no
-    // expirationDate) -- chrome.cookies already reports epoch seconds,
-    // no unit conversion needed, just the session-cookie fallback.
-    expires: c.expirationDate ?? -1,
-    httpOnly: c.httpOnly,
-    secure: c.secure,
-    sameSite: SAME_SITE_MAP[c.sameSite ?? "unspecified"],
-  }));
-}
 
 export async function POST(request: NextRequest) {
   let body: { code?: string; cookies?: ExtensionCookie[] };
@@ -130,5 +97,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: text || `Import failed (${response.status}).` }, { status: 502 });
   }
 
-  return NextResponse.json({ ok: true });
+  // Forward the droplet's freshly-minted reconnectToken straight through --
+  // the extension saves it (chrome.storage.local, popup.js) so every LATER
+  // reconnect can skip the dashboard/code step entirely via
+  // /api/extension/reconnect. This response body is never persisted
+  // anywhere on this server, only relayed.
+  const dropletBody = await response.json().catch(() => ({}));
+  return NextResponse.json({ ok: true, reconnectToken: dropletBody.reconnectToken ?? null });
 }

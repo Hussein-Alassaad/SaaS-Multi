@@ -217,6 +217,7 @@ async function sendIfEmailChannel(tenantId: string, message: { id: string; leadI
     to: prepared.to,
     subject: prepared.businessName ? `Quick note for ${prepared.businessName}` : "Quick note",
     html: (message.editedBody || message.body).replace(/\n/g, "<br />"),
+    tenantId,
   });
 
   if (!result.ok) {
