@@ -37,6 +37,7 @@ export const PRODUCT_SECTIONS: Record<string, SectionDef[]> = {
     { key: "dashboard", label: "Live Feed", href: "/outreach", core: true },
     { key: "approvals", label: "Approval Queue", href: "/outreach/approvals" },
     { key: "replies", label: "Reply Here", href: "/outreach/replies", core: true },
+    { key: "followups", label: "Follow Up", href: "/outreach/followups" },
     { key: "instagram-manual", label: "Instagram Manual Send", href: "/outreach/instagram-manual" },
     { key: "linkedin", label: "LinkedIn Activity", href: "/outreach/linkedin" },
     { key: "email", label: "Email Outreach", href: "/outreach/email" },

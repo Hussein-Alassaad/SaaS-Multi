@@ -23,6 +23,7 @@ export interface ApprovalMessage {
   editedBody: string | null;
   approvalStatus: string;
   sendStatus: string;
+  isFollowup: boolean;
   lead: {
     id: string;
     businessName: string | null;
@@ -287,9 +288,16 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                 >
                   {message.lead.businessName || "Unknown business"}
                 </Link>
-                <span className="rounded-full border border-[var(--border-hairline-strong)] px-2 py-0.5 text-xs uppercase tracking-wide text-[var(--text-4)]">
-                  {message.channel}
-                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {message.isFollowup && (
+                    <span className="rounded-full bg-[var(--accent-from)]/10 px-2 py-0.5 text-[11px] font-medium text-[var(--accent-from)]">
+                      Follow-up
+                    </span>
+                  )}
+                  <span className="rounded-full border border-[var(--border-hairline-strong)] px-2 py-0.5 text-xs uppercase tracking-wide text-[var(--text-4)]">
+                    {message.channel}
+                  </span>
+                </div>
               </div>
 
               <textarea

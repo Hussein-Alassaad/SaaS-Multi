@@ -24,6 +24,7 @@ export const OUTREACH_RESOURCES = [
   "dashboard",
   "approvals",
   "replies",
+  "followups",
   "instagram-manual",
   "linkedin",
   "email",
@@ -56,6 +57,7 @@ export const OUTREACH_PERMISSION_MATRIX: OutreachPermissionMatrix = {
     dashboard: ["view"],
     approvals: ALL_ACTIONS,
     replies: ALL_ACTIONS,
+    followups: ALL_ACTIONS,
     "instagram-manual": ALL_ACTIONS,
     linkedin: ["view"],
     email: ["view"],
@@ -74,6 +76,7 @@ export const OUTREACH_PERMISSION_MATRIX: OutreachPermissionMatrix = {
     dashboard: ["view"],
     approvals: ["view", "edit"], // approve/hold/edit messages, not settings/accounts
     replies: ["view", "edit"], // read threads and send replies, not settings/accounts
+    followups: ["view", "edit"],
     "instagram-manual": ["view", "edit"],
     linkedin: ["view"],
     email: ["view"],

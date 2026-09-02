@@ -20,6 +20,7 @@ function serializeApprovalMessage(
     editedBody: message.editedBody,
     approvalStatus: message.approvalStatus,
     sendStatus: message.sendStatus,
+    isFollowup: message.isFollowup,
     lead: {
       id: message.lead.id,
       businessName: message.lead.businessName,
