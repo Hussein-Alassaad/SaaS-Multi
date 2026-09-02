@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
-import { saveLeadNotesAction, scheduleFollowUpAction, setDoNotContactAction } from "@/lib/actions/outreach-lead-detail";
+import { saveLeadNotesAction, setDoNotContactAction } from "@/lib/actions/outreach-lead-detail";
 import { Ban, CheckCircle2 } from "lucide-react";
 
 const section = { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 } };
@@ -76,8 +76,6 @@ export interface StageHistoryItem {
 
 export function LeadDetailClient({ lead, history }: { lead: LeadDetailData; history: StageHistoryItem[] }) {
   const [notes, setNotes] = useState(lead.notes ?? "");
-  const [followupEnabled, setFollowupEnabled] = useState(false);
-  const [followupAt, setFollowupAt] = useState("");
   const [doNotContact, setDoNotContact] = useState(lead.doNotContact);
   const [dncReason, setDncReason] = useState("");
   const [dncPending, startDncTransition] = useTransition();
@@ -109,18 +107,6 @@ export function LeadDetailClient({ lead, history }: { lead: LeadDetailData; hist
         return;
       }
       showToast({ title: "Saved", variant: "success" });
-    });
-  };
-
-  const scheduleFollowup = () => {
-    if (!followupAt) return;
-    startTransition(async () => {
-      const result = await scheduleFollowUpAction(lead.id, followupEnabled, followupAt);
-      if (!result.ok) {
-        showToast({ title: "Could not schedule", description: result.error, variant: "error" });
-        return;
-      }
-      showToast({ title: "Follow-up scheduled", variant: "success" });
     });
   };
 
@@ -246,28 +232,6 @@ export function LeadDetailClient({ lead, history }: { lead: LeadDetailData; hist
           className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]"
         >
           Save notes
-        </motion.button>
-      </motion.div>
-
-      <motion.div {...section} transition={{ delay: 0.25 }} className="glass mt-4 rounded-2xl p-4">
-        <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-5)]">Follow-up</p>
-        <p className="mt-1 text-xs text-[var(--text-5)]">On/off and timing are your call -- the agent never picks a delay.</p>
-        <label className="mt-3 flex items-center gap-2 text-sm text-[var(--text-3)]">
-          <input type="checkbox" checked={followupEnabled} onChange={(e) => setFollowupEnabled(e.target.checked)} />
-          Enable follow-up
-        </label>
-        <input
-          type="datetime-local"
-          value={followupAt}
-          onChange={(e) => setFollowupAt(e.target.value)}
-          className="mt-2 w-full rounded-xl border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 p-2 text-sm text-[var(--text-2)] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
-        />
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={scheduleFollowup}
-          className="mt-2 rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]"
-        >
-          Schedule
         </motion.button>
       </motion.div>
 
