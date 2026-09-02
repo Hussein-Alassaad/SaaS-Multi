@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
 import { followUpAllAction, type FollowUpLead } from "@/lib/actions/outreach-followups";
+import { setDoNotContactAction } from "@/lib/actions/outreach-lead-detail";
 
 const TEMPERATURE_VARIANT: Record<string, "hot" | "warm" | "cold"> = { hot: "hot", warm: "warm", cold: "cold" };
 
@@ -41,6 +42,35 @@ export function FollowUpsClient({
 
   const reload = useCallback(() => router.refresh(), [router]);
   useOutreachRealtime({ table: "outreach_leads", tenantId, reload, debounceMs: 500 });
+  const [excludingId, setExcludingId] = useState<string | null>(null);
+
+  // Real instruction from the platform owner (2026-09-02): a per-lead way
+  // to exclude one lead from this section specifically. There's no
+  // narrower "skip follow-up only" flag in the schema -- this reuses the
+  // existing doNotContact toggle (already permanently excluded from this
+  // list's own query, see getNotRepliedLeadsAction), which the owner
+  // explicitly confirmed is the right mechanism rather than building a
+  // separate flag. It IS a permanent, all-channel opt-out, not
+  // follow-up-only -- the confirm dialog says so plainly so this isn't a
+  // surprise later.
+  const excludeLead = (lead: FollowUpLead) => {
+    const confirmed = window.confirm(
+      `Mark ${lead.businessName || "this lead"} as Do Not Contact?\n\nThis is permanent and stops ALL future outreach to them, not just follow-ups -- the same toggle as on their own lead page.`
+    );
+    if (!confirmed) return;
+
+    setExcludingId(lead.id);
+    startTransition(async () => {
+      const result = await setDoNotContactAction(lead.id, true, "Excluded from bulk follow-up");
+      setExcludingId(null);
+      if (!result.ok) {
+        showToast({ title: "Couldn't exclude", description: result.error, variant: "error" });
+        return;
+      }
+      setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+      showToast({ title: "Excluded", description: `${lead.businessName || "This lead"} won't be contacted again.`, variant: "success" });
+    });
+  };
 
   const followUpAll = () => {
     startTransition(async () => {
@@ -130,6 +160,13 @@ export function FollowUpsClient({
                   {lead.contactCount} contact{lead.contactCount === 1 ? "" : "s"} so far
                 </span>
               </div>
+              <button
+                onClick={() => excludeLead(lead)}
+                disabled={excludingId === lead.id}
+                className="mt-3 rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {excludingId === lead.id ? "Excluding…" : "Exclude"}
+              </button>
             </motion.div>
           ))}
         </AnimatePresence>
