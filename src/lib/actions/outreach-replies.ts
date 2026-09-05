@@ -5,6 +5,7 @@ import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { revalidatePath } from "next/cache";
 import { saveReplyAttachment, AttachmentTooLarge } from "@/lib/outreach/reply-attachments";
+import { sendIfEmailChannel } from "@/lib/actions/outreach-approvals";
 
 /**
  * "Reply Here" -- lets a tenant read and respond to a lead's real
@@ -143,9 +144,16 @@ export async function getReplyThreadsAction() {
  * responding to another human, not agent-generated cold outreach) and
  * tagged isReply=true so the Python send-side delivers it INTO the
  * existing conversation thread rather than as a fresh connection request.
- * Picked up by scheduler.py's fast reply-send poll (~every 2-3 min), not
- * the normal once-daily full cycle, since a reply should feel close to
- * real-time -- see that function's own docstring.
+ * Picked up by scheduler.py's fast reply-send poll (~every 2-3 min) for
+ * linkedin/instagram/whatsapp -- that poll explicitly excludes email
+ * (repo.replies_pending() only queries those three channels, see
+ * run_reply_send_cycle()'s own docstring), so an email reply is sent
+ * directly from here via sendIfEmailChannel() instead, the same real
+ * Resend call (with the same daily-cap/pause/do-not-contact guards)
+ * outreach-approvals.ts already uses for approved outbound messages.
+ * Real gap fixed 2026-09-05: before this, a typed reply to an email lead
+ * sat at sendStatus "pending" forever -- nothing was ever going to pick
+ * it up.
  */
 /**
  * `attachment` is optional -- a reply can be text-only (the common case),
@@ -208,6 +216,16 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
       },
     })
   );
+
+  if (lead.platform === "email") {
+    await sendIfEmailChannel(session.tenantId!, {
+      id: message.id,
+      leadId,
+      channel: "email",
+      body: message.body,
+      editedBody: null,
+    });
+  }
 
   revalidatePath("/outreach/replies");
   return { ok: true as const, messageId: message.id };

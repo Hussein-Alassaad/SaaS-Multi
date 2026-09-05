@@ -123,7 +123,7 @@ async function maybeAdvanceLead(tx: Prisma.TransactionClient, tenantId: string, 
 const BOUNCE_RATE_PAUSE_THRESHOLD = 0.02; // 2% -- SES's own recommended ceiling before deliverability degrades broadly
 const BOUNCE_RATE_MIN_SAMPLE = 20; // don't act on bounce rate until there's enough sends to be a real signal, not noise from 1-2 early bounces
 
-async function sendIfEmailChannel(tenantId: string, message: { id: string; leadId: string; channel: string; body: string; editedBody: string | null }) {
+export async function sendIfEmailChannel(tenantId: string, message: { id: string; leadId: string; channel: string; body: string; editedBody: string | null }) {
   if (message.channel !== "email") return;
 
   // Everything up to (but NOT including) the real SES network call runs
