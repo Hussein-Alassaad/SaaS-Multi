@@ -8,8 +8,10 @@
   },
   "permissions": ["cookies", "tabs", "scripting", "storage"],
   "host_permissions": [
-    "https://www.linkedin.com/*",
-    "https://www.instagram.com/*",
+    "https://linkedin.com/*",
+    "https://*.linkedin.com/*",
+    "https://instagram.com/*",
+    "https://*.instagram.com/*",
     "https://app.nxrs.tech/*"
   ]
 }

@@ -6,6 +6,14 @@ const PLATFORM_DOMAINS = {
   instagram: "https://www.instagram.com",
 };
 
+// Bare registrable domains for chrome.cookies.getAll({domain}) -- this
+// matches the apex AND every subdomain, unlike a {url} filter. See
+// readCookiesFor() for why that distinction is load-bearing.
+const PLATFORM_COOKIE_DOMAINS = {
+  linkedin: "linkedin.com",
+  instagram: "instagram.com",
+};
+
 // Where each platform reliably shows the CURRENTLY logged-in user's own
 // name/handle without needing to visit their specific profile URL (which
 // this extension doesn't know) -- the feed/home page's own nav always
@@ -195,14 +203,20 @@ useDifferentAccountButton.addEventListener("click", async () => {
 });
 
 async function readCookiesFor(platform) {
-  // chrome.cookies.getAll with a `url` filter returns every cookie that
-  // would actually be sent on a request to that URL -- domain-scoped
-  // cookies (e.g. .linkedin.com) included, exactly what a real
-  // Playwright/browser session for that site needs. No host permission
-  // beyond the one already declared in manifest.json's host_permissions
-  // is required for this call.
-  const domain = PLATFORM_DOMAINS[platform];
-  return chrome.cookies.getAll({ url: domain });
+  // Query by DOMAIN, not by url. LIVE-CONFIRMED 2026-09-05 against a real
+  // logged-in session: getAll({url: "https://www.instagram.com"}) returned
+  // an empty array while DevTools showed sessionid plainly present in the
+  // same jar, because Instagram's session lives on the apex domain
+  // (instagram.com, cookies scoped to .instagram.com) and a `url` filter is
+  // matched against the extension's granted origins -- a
+  // https://www.instagram.com/* grant does NOT cover https://instagram.com/*.
+  // LinkedIn happened to work only because its session really is on
+  // www.linkedin.com. A {domain: "instagram.com"} query matches the apex
+  // and every subdomain, which is what a real browser session needs.
+  const domain = PLATFORM_COOKIE_DOMAINS[platform];
+  const cookies = await chrome.cookies.getAll({ domain });
+  console.log("[NexarisConnect] getAll(domain:", domain, ") ->", cookies?.length ?? 0);
+  return cookies;
 }
 
 reconnectButton.addEventListener("click", async () => {
