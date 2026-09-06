@@ -224,6 +224,7 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
       channel: "email",
       body: message.body,
       editedBody: null,
+      isReply: true,
     });
   }
 

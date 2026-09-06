@@ -123,7 +123,7 @@ async function maybeAdvanceLead(tx: Prisma.TransactionClient, tenantId: string, 
 const BOUNCE_RATE_PAUSE_THRESHOLD = 0.02; // 2% -- SES's own recommended ceiling before deliverability degrades broadly
 const BOUNCE_RATE_MIN_SAMPLE = 20; // don't act on bounce rate until there's enough sends to be a real signal, not noise from 1-2 early bounces
 
-export async function sendIfEmailChannel(tenantId: string, message: { id: string; leadId: string; channel: string; body: string; editedBody: string | null }) {
+export async function sendIfEmailChannel(tenantId: string, message: { id: string; leadId: string; channel: string; body: string; editedBody: string | null; isReply?: boolean }) {
   if (message.channel !== "email") return;
 
   // Everything up to (but NOT including) the real SES network call runs
@@ -210,6 +210,22 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       where: { id: message.id },
       data: { sendStatus: "sent", sentAt: new Date(), sentViaAccountId: account.id },
     });
+
+    // Threading: a reply should land in the SAME inbox conversation as the
+    // prior message, not show up as a fresh unrelated email. Look up the
+    // most recently sent message to this lead (excluding this one, which
+    // was just marked "sent" above) to get the resendMessageId to thread
+    // against.
+    let inReplyToResendMessageId: string | null = null;
+    if (message.isReply) {
+      const previous = await tx.outreachMessage.findFirst({
+        where: { leadId: message.leadId, tenantId, sendStatus: "sent", id: { not: message.id }, resendMessageId: { not: null } },
+        orderBy: { sentAt: "desc" },
+        select: { resendMessageId: true },
+      });
+      inReplyToResendMessageId = previous?.resendMessageId ?? null;
+    }
+
     return {
       kind: "send" as const,
       fromEmail: account.sesFromEmail,
@@ -217,6 +233,7 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       to: lead.contactEmail,
       businessName: lead.businessName,
       accountId: account.id,
+      inReplyToResendMessageId,
     };
   });
 
@@ -231,13 +248,15 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
     return;
   }
 
+  const baseSubject = prepared.businessName ? `Quick note for ${prepared.businessName}` : "Quick note";
   const result = await sendOutreachEmail({
     fromEmail: prepared.fromEmail,
     fromName: prepared.fromName,
     to: prepared.to,
-    subject: prepared.businessName ? `Quick note for ${prepared.businessName}` : "Quick note",
+    subject: message.isReply && prepared.inReplyToResendMessageId ? `Re: ${baseSubject}` : baseSubject,
     html: (message.editedBody || message.body).replace(/\n/g, "<br />"),
     tenantId,
+    inReplyToResendMessageId: prepared.inReplyToResendMessageId,
   });
 
   if (!result.ok) {

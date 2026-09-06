@@ -27,6 +27,15 @@ import { logError } from "@/lib/error-log";
  */
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
+// Resend's own send response only returns its internal id (result.data.id),
+// not an RFC 5322 Message-ID -- this derives one deterministically from
+// that id so a later reply can reference it via In-Reply-To/References
+// without needing a new column (OutreachMessage.resendMessageId already
+// stores the raw id every send gets back).
+export function toRfc822MessageId(resendMessageId: string): string {
+  return `<${resendMessageId}@resend.dev>`;
+}
+
 export async function sendOutreachEmail(opts: {
   fromEmail: string;
   fromName?: string | null;
@@ -34,6 +43,7 @@ export async function sendOutreachEmail(opts: {
   subject: string;
   html: string;
   tenantId?: string;
+  inReplyToResendMessageId?: string | null;
 }): Promise<{ ok: true; skipped?: true; messageId?: string } | { ok: false; error: string }> {
   if (!resend) {
     console.log(`[resend:noop] RESEND_API_KEY unset — would send "${opts.subject}" from ${opts.fromEmail} to ${opts.to}`);
@@ -42,12 +52,25 @@ export async function sendOutreachEmail(opts: {
 
   const fromAddress = opts.fromName ? `${opts.fromName} <${opts.fromEmail}>` : opts.fromEmail;
 
+  // Real inbox threading (so a reply lands in the same conversation instead
+  // of showing as a new email) needs BOTH a matching subject prefix ("Re: ")
+  // AND the standard In-Reply-To/References headers pointing at the prior
+  // message's Message-ID -- either alone is not reliable across mail
+  // clients (Gmail leans on the headers, some older clients go by subject).
+  const headers = opts.inReplyToResendMessageId
+    ? {
+        "In-Reply-To": toRfc822MessageId(opts.inReplyToResendMessageId),
+        References: toRfc822MessageId(opts.inReplyToResendMessageId),
+      }
+    : undefined;
+
   try {
     const result = await resend.emails.send({
       from: fromAddress,
       to: opts.to,
       subject: opts.subject,
       html: opts.html,
+      ...(headers ? { headers } : {}),
     });
     if (result.error) {
       // Resend returns a typed error object (not a thrown exception) for
