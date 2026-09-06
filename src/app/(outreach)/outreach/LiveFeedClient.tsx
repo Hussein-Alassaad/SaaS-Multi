@@ -4,6 +4,7 @@ import { useState, useTransition, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Inbox } from "lucide-react";
 import { LeadCard, type LeadCardData } from "@/components/outreach/LeadCard";
+import { OutreachPauseControl } from "@/components/outreach/OutreachPauseControl";
 import { loadMoreLiveFeedAction } from "@/lib/actions/outreach-leads";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
 import { useRouter } from "next/navigation";
@@ -35,10 +36,12 @@ export function LiveFeedClient({
   tenantId,
   initialLeads,
   initialNextCursor,
+  initialPaused,
 }: {
   tenantId: string;
   initialLeads: LeadCardData[];
   initialNextCursor: string | null;
+  initialPaused: boolean;
 }) {
   const [leads, setLeads] = useState(initialLeads);
   const [nextCursor, setNextCursor] = useState(initialNextCursor);
@@ -62,11 +65,18 @@ export function LiveFeedClient({
 
   return (
     <div className="mx-auto max-w-3xl">
-      <motion.header initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">
-          Live <span className="text-gradient">Feed</span>
-        </h1>
-        <p className="mt-1 text-sm text-[var(--text-4)]">Today&apos;s leads, hottest first.</p>
+      <motion.header
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-start justify-between gap-3"
+      >
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">
+            Live <span className="text-gradient">Feed</span>
+          </h1>
+          <p className="mt-1 text-sm text-[var(--text-4)]">Today&apos;s leads, hottest first.</p>
+        </div>
+        <OutreachPauseControl initialPaused={initialPaused} />
       </motion.header>
 
       {leads.length === 0 ? (

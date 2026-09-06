@@ -951,35 +951,46 @@ model OutreachAccount {
 
 // Single row per tenant (was one single global row pre-rebuild).
 model OutreachSettings {
-  id                      String   @id @default(cuid())
-  tenantId                String   @unique @map("tenant_id")
-  businessName            String   @default("") @map("business_name")
-  businessDescription     String   @default("") @map("business_description")
-  targetNiche             String   @default("") @map("target_niche")
-  targetIndustry          String   @default("") @map("target_industry")
-  targetLocation          String   @default("") @map("target_location")
-  targetBusinessType      String   @default("") @map("target_business_type")
-  targetCompanySizeMin    Int?     @map("target_company_size_min")
-  targetCompanySizeMax    Int?     @map("target_company_size_max")
-  targetNeeds             String   @default("[]") @map("target_needs") // JSON-encoded string[] -- e.g. ["security systems","cameras"]
-  outreachLanguages       String   @default("[\"English\"]") @map("outreach_languages") // JSON-encoded string[]
-  messageStyle            String   @default("discovery") @map("message_style")
-  styleDurationDays       Int      @default(7) @map("style_duration_days")
-  styleLastRotatedAt      DateTime @default(now()) @map("style_last_rotated_at")
-  defaultRecontactGapDays Int      @default(30) @map("default_recontact_gap_days")
-  maxContactsPerLead      Int      @default(2) @map("max_contacts_per_lead")
-  whatsappRecipient1      String?  @map("whatsapp_recipient_1")
-  whatsappRecipient2      String?  @map("whatsapp_recipient_2")
-  approvalRequired        Boolean  @default(true) @map("approval_required")
-  approvalReminderHours   Int      @default(24) @map("approval_reminder_hours")
+  id                      String    @id @default(cuid())
+  tenantId                String    @unique @map("tenant_id")
+  businessName            String    @default("") @map("business_name")
+  businessDescription     String    @default("") @map("business_description")
+  targetNiche             String    @default("") @map("target_niche")
+  targetIndustry          String    @default("") @map("target_industry")
+  targetLocation          String    @default("") @map("target_location")
+  targetBusinessType      String    @default("") @map("target_business_type")
+  targetCompanySizeMin    Int?      @map("target_company_size_min")
+  targetCompanySizeMax    Int?      @map("target_company_size_max")
+  targetNeeds             String    @default("[]") @map("target_needs") // JSON-encoded string[] -- e.g. ["security systems","cameras"]
+  outreachLanguages       String    @default("[\"English\"]") @map("outreach_languages") // JSON-encoded string[]
+  messageStyle            String    @default("discovery") @map("message_style")
+  styleDurationDays       Int       @default(7) @map("style_duration_days")
+  styleLastRotatedAt      DateTime  @default(now()) @map("style_last_rotated_at")
+  defaultRecontactGapDays Int       @default(30) @map("default_recontact_gap_days")
+  maxContactsPerLead      Int       @default(2) @map("max_contacts_per_lead")
+  whatsappRecipient1      String?   @map("whatsapp_recipient_1")
+  whatsappRecipient2      String?   @map("whatsapp_recipient_2")
+  approvalRequired        Boolean   @default(true) @map("approval_required")
+  approvalReminderHours   Int       @default(24) @map("approval_reminder_hours")
   // IANA zone name (e.g. "America/New_York") that every OutreachAccount.runTime
   // for this tenant is interpreted against -- Admin-only editable (see
   // setOutreachTimezoneAction in src/lib/actions/admin-tenants.ts), shown
   // read-only on the tenant's own Settings page. Falls back to the agent's
   // config.TIMEZONE if this row is somehow missing (new-tenant safety net,
   // not expected in normal operation since this column always has a default).
-  timezone                String   @default("Asia/Beirut")
-  updatedAt               DateTime @updatedAt @map("updated_at")
+  timezone                String    @default("Asia/Beirut")
+  // Tenant-facing "pause my outreach" switch (2026-09-06) -- distinct from
+  // OutreachAccount.status ("active"/"paused"), which is per-account and
+  // reserved for account-health issues under core rule R9 (redistribution/
+  // resuming is always a human call, never automatic). This flag is a
+  // whole-tenant, self-service, fully reversible toggle a client uses for
+  // something like "stop everything for 2 days" -- checked by every Python
+  // cycle (discovery/analysis/message-generation/sending/reply-send) as an
+  // early per-tenant skip, so pausing never touches or overwrites any
+  // individual account's own status.
+  paused                  Boolean   @default(false)
+  pausedAt                DateTime? @map("paused_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
