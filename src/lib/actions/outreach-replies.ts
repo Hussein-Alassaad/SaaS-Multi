@@ -1,11 +1,58 @@
 "use server";
 
+import { SignJWT } from "jose";
 import { withTenant } from "@/lib/db";
-import { getTenantSession } from "@/lib/auth";
+import { getTenantSession, getSecretKey } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { revalidatePath } from "next/cache";
 import { saveReplyAttachment, AttachmentTooLarge } from "@/lib/outreach/reply-attachments";
 import { sendIfEmailChannel } from "@/lib/actions/outreach-approvals";
+
+/**
+ * Real gap fixed 2026-09-06, live-verified against a real Instagram DM:
+ * a tenant-written Instagram/LinkedIn reply from this page relied entirely
+ * on scheduler.py's fast reply-send poll (run_reply_send_cycle(), ~every
+ * 2-3 min) to actually deliver it -- which only works if the scheduler is
+ * running continuously in production. Per DEPLOY.md's own gate ("do not
+ * start the scheduler unsupervised until every channel has a supervised
+ * live send confirmed"), it never has been, so a reply just sat at
+ * send_status "pending" forever with nothing to pick it up. Email dodges
+ * this by calling Resend directly (sendIfEmailChannel) since Next.js can
+ * reach it over plain HTTP -- Instagram/LinkedIn need the actual
+ * Playwright browser-automation process, which only exists on the
+ * droplet, so this calls that same real send right now instead of hoping
+ * a background poll is running. Same JWT-minting convention as
+ * agentControlAction()/startConnectAccountAction() (jose + AUTH_SECRET,
+ * short-lived, purpose-scoped) -- deliberately NOT gated behind the
+ * "agent-control" platform permission that action uses, since triggering
+ * one's own reply-send is a normal tenant action, not an infra control.
+ */
+async function sendReplyViaAgent(tenantId: string, leadId: string, messageId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const controlHost = process.env.LIVE_LOGIN_WS_HOST;
+  if (!controlHost) return { ok: false, error: "Agent control isn't configured on this deployment yet." };
+
+  const token = await new SignJWT({ purpose: "agent_control", action: "send_reply" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("60s")
+    .sign(getSecretKey());
+
+  let response: Response;
+  try {
+    response = await fetch(`https://${controlHost}/control`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "send_reply", tenantId, leadId, messageId }),
+      cache: "no-store",
+    });
+  } catch {
+    return { ok: false, error: "Could not reach the agent." };
+  }
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok) return { ok: false, error: body?.error ?? `Agent returned HTTP ${response.status}.` };
+  return { ok: true };
+}
 
 /**
  * "Reply Here" -- lets a tenant read and respond to a lead's real
@@ -226,6 +273,15 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
       editedBody: null,
       isReply: true,
     });
+  } else if (lead.platform === "instagram" || lead.platform === "linkedin") {
+    const result = await sendReplyViaAgent(session.tenantId!, leadId, message.id);
+    if (!result.ok) {
+      // Don't fail the whole action -- the message is saved and will still
+      // be picked up by scheduler.py's reply-send poll if/when that's
+      // running, same fallback path this had before today. Surface the
+      // agent error so a stuck reply isn't silently unexplained.
+      return { ok: true as const, messageId: message.id, agentWarning: result.error };
+    }
   }
 
   revalidatePath("/outreach/replies");
