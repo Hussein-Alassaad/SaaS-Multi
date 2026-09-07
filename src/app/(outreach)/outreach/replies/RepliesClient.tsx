@@ -91,11 +91,7 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
       }
       setDraft("");
       setAttachment(null);
-      if ("agentWarning" in result && result.agentWarning) {
-        showToast({ title: "Saved, but not sent yet", description: result.agentWarning, variant: "error" });
-      } else {
-        showToast({ title: "Reply queued", description: "The agent will deliver it shortly.", variant: "success" });
-      }
+      showToast({ title: "Reply queued", description: "The agent will deliver it shortly.", variant: "success" });
       onSent();
     });
   };

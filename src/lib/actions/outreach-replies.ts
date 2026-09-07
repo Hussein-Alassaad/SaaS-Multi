@@ -5,6 +5,7 @@ import { withTenant } from "@/lib/db";
 import { getTenantSession, getSecretKey } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
 import { saveReplyAttachment, AttachmentTooLarge } from "@/lib/outreach/reply-attachments";
 import { sendIfEmailChannel } from "@/lib/actions/outreach-approvals";
 
@@ -274,14 +275,24 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
       isReply: true,
     });
   } else if (lead.platform === "instagram" || lead.platform === "linkedin") {
-    const result = await sendReplyViaAgent(session.tenantId!, leadId, message.id);
-    if (!result.ok) {
-      // Don't fail the whole action -- the message is saved and will still
-      // be picked up by scheduler.py's reply-send poll if/when that's
-      // running, same fallback path this had before today. Surface the
-      // agent error so a stuck reply isn't silently unexplained.
-      return { ok: true as const, messageId: message.id, agentWarning: result.error };
-    }
+    // Deliberately NOT awaited. A real send drives a whole browser session
+    // (launch Chromium, load the feed, open the inbox, find the thread, type
+    // at human pace, click send) and measured 30-71s live on 2026-09-07 --
+    // awaiting it left the composer visibly hung for that long on every
+    // reply, which read as the app being broken.
+    //
+    // Safe to defer: the message row is already persisted above, send_status
+    // tracks delivery, the agent logs its own failures, and scheduler.py's
+    // reply-send poll re-picks up anything still pending -- the same fallback
+    // that already covered an unreachable agent.
+    //
+    // after() rather than a bare floating promise: on serverless the function
+    // can be frozen once the response is returned, which would cut the send
+    // off mid-browser-session. after() is the platform's own contract for
+    // "run this once the response is sent, before teardown".
+    after(async () => {
+      await sendReplyViaAgent(session.tenantId!, leadId, message.id);
+    });
   }
 
   revalidatePath("/outreach/replies");
