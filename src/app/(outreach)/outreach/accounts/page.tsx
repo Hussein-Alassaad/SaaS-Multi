@@ -39,6 +39,8 @@ export default async function OutreachAccountsPage() {
     sentThisWeek: reachStats.get(a.id)?.sentThisWeek ?? 0,
     sentThisMonth: reachStats.get(a.id)?.sentThisMonth ?? 0,
     repliedThisWeek: reachStats.get(a.id)?.repliedThisWeek ?? 0,
+    bouncedThisMonth: reachStats.get(a.id)?.bouncedThisMonth ?? 0,
+    complainedThisMonth: reachStats.get(a.id)?.complainedThisMonth ?? 0,
     proxyHost: a.proxyHost,
     proxyPort: a.proxyPort,
     proxyUsername: a.proxyUsername,

@@ -32,6 +32,8 @@ export interface AccountHealthRow {
   sentThisWeek: number;
   sentThisMonth: number;
   repliedThisWeek: number;
+  bouncedThisMonth: number;
+  complainedThisMonth: number;
   proxyHost: string | null;
   proxyPort: string | null;
   proxyUsername: string | null;
@@ -131,7 +133,27 @@ function ReachProgress({ account }: { account: AccountHealthRow }) {
           {replyRate}% reply rate this week ({account.repliedThisWeek} of {account.sentThisWeek})
         </p>
       )}
+      {account.platform === "email" && <DeliverabilityRow account={account} />}
     </div>
+  );
+}
+
+// Bounces/complaints matter most for email specifically -- new-domain
+// warm-up lives or dies on keeping both near zero (see Resend's own
+// email.bounced/email.complained webhook events, wired in
+// src/app/api/webhooks/resend/route.ts). Shown only for the email channel:
+// LinkedIn/Instagram sends never populate deliveryStatus at all, so the row
+// would just be permanently "0 / 0" noise there.
+function DeliverabilityRow({ account }: { account: AccountHealthRow }) {
+  const hasIssues = account.bouncedThisMonth > 0 || account.complainedThisMonth > 0;
+  return (
+    <p
+      className={`mt-1.5 text-[11px] ${
+        hasIssues ? "text-[var(--status-hot)]" : "text-[var(--text-5)]"
+      }`}
+    >
+      {account.bouncedThisMonth} bounced &middot; {account.complainedThisMonth} marked as spam this month
+    </p>
   );
 }
 

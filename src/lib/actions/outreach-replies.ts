@@ -1,5 +1,6 @@
 "use server";
 
+import { z } from "zod";
 import { SignJWT } from "jose";
 import { withTenant } from "@/lib/db";
 import { getTenantSession, getSecretKey } from "@/lib/auth";
@@ -297,4 +298,101 @@ export async function sendReplyAction(leadId: string, body: string, attachment?:
 
   revalidatePath("/outreach/replies");
   return { ok: true as const, messageId: message.id };
+}
+
+const freeSendSchema = z.object({
+  to: z.string().trim().email("Enter a valid email address"),
+  body: z.string().trim().min(1, "Message can't be empty"),
+});
+
+/**
+ * "Send to anyone" -- an ad-hoc email to an address that has no existing
+ * lead/conversation, requested 2026-09-08 for exactly the kind of one-off
+ * deliverability test this session spent all night running by hand
+ * (creating a throwaway outreach_leads row via a direct DB script every
+ * time, e.g. the DMARC-verification sends to husseinalasaad5@gmail.com).
+ * This is the same operation as a real product feature, not a debug tool.
+ *
+ * Email-only: unlike sendReplyAction, this deliberately does NOT support
+ * LinkedIn/Instagram. Both of those channels' send_reply() (Python) finds
+ * the target thread by matching business_name inside the account's OWN
+ * existing conversation list -- there is no way to start a brand-new
+ * conversation with an arbitrary handle that never messaged first, so
+ * "type any handle and send" isn't a real capability there the way it
+ * genuinely is for email (see linkedin_reply_check.py/instagram_send.py's
+ * own docstrings on how thread-finding works).
+ *
+ * Creates a real OutreachLead (platform="email", status="contacted" --
+ * matching how a first cold-outreach send already marks a lead once sent,
+ * not "discovered", since there's no discovery step to skip past here) so
+ * every ad-hoc send leaves the exact same trail (Client History, Pipeline,
+ * reply detection eligibility) a normal cold-outreach lead does -- nothing
+ * about this path is a shortcut around the rest of the product.
+ */
+export async function sendFreeEmailAction(to: string, body: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "replies", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const parsed = freeSendSchema.safeParse({ to, body });
+  if (!parsed.success) return { ok: false as const, error: parsed.error.issues[0]?.message ?? "Invalid input." };
+
+  const account = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachAccount.findFirst({ where: { tenantId: session.tenantId!, platform: "email" } })
+  );
+  if (!account) return { ok: false as const, error: "No email-sending account is set up for this tenant yet." };
+
+  const { lead, message } = await withTenant(session.tenantId!, async (tx) => {
+    const lead = await tx.outreachLead.create({
+      data: {
+        tenantId: session.tenantId!,
+        accountId: account.id,
+        platform: "email",
+        businessName: parsed.data.to,
+        profileUrl: `mailto:${parsed.data.to}`,
+        contactEmail: parsed.data.to,
+        status: "contacted",
+      },
+    });
+    const message = await tx.outreachMessage.create({
+      data: {
+        tenantId: session.tenantId!,
+        leadId: lead.id,
+        channel: "email",
+        body: parsed.data.body,
+        isReply: false,
+        approvalStatus: "approved",
+        approvedById: session.id,
+        approvedAt: new Date(),
+        sendStatus: "pending",
+        sentViaAccountId: account.id,
+      },
+    });
+    return { lead, message };
+  });
+
+  await sendIfEmailChannel(session.tenantId!, {
+    id: message.id,
+    leadId: lead.id,
+    channel: "email",
+    body: message.body,
+    editedBody: null,
+    isReply: false,
+  });
+
+  revalidatePath("/outreach/replies");
+
+  // sendIfEmailChannel writes real failure reasons (no account configured,
+  // paused/warned, over daily cap) onto the message row via sendStatus, but
+  // doesn't throw or return anything itself -- re-read the row so the
+  // composer can show an honest result instead of always claiming success.
+  const sent = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachMessage.findUnique({ where: { id: message.id }, select: { sendStatus: true } })
+  );
+  if (sent?.sendStatus === "sent") return { ok: true as const, messageId: message.id };
+  if (sent?.sendStatus === "queued_for_pacing") {
+    return { ok: true as const, messageId: message.id, warning: "Queued -- today's sending cap is already reached for this account." };
+  }
+  return { ok: false as const, error: "Couldn't send -- check the account's status on Account Health." };
 }

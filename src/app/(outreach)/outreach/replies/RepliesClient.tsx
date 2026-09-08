@@ -2,11 +2,11 @@
 
 import { useState, useTransition, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessagesSquare, Send, ExternalLink, AlertTriangle, Paperclip, Mic, Square, X, FileText } from "lucide-react";
+import { MessagesSquare, Send, ExternalLink, AlertTriangle, Paperclip, Mic, Square, X, FileText, Mail, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
-import { getReplyThreadsAction, sendReplyAction, type ReplyThreadLead } from "@/lib/actions/outreach-replies";
+import { getReplyThreadsAction, sendReplyAction, sendFreeEmailAction, type ReplyThreadLead } from "@/lib/actions/outreach-replies";
 
 const TEMPERATURE_VARIANT: Record<string, "hot" | "warm" | "cold"> = { hot: "hot", warm: "warm", cold: "cold" };
 
@@ -261,6 +261,86 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
   );
 }
 
+// Ad-hoc email to an address with no existing lead/conversation -- e.g. a
+// deliverability test to your own inbox, or a one-off to someone who never
+// went through discovery. Collapsed by default: this is an occasional tool,
+// not the primary way replies get sent, so it shouldn't compete for
+// attention with the actual reply threads below it.
+function FreeSendComposer({ onSent }: { onSent: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [to, setTo] = useState("");
+  const [body, setBody] = useState("");
+  const [pending, startTransition] = useTransition();
+  const { showToast } = useToast();
+
+  const send = () => {
+    startTransition(async () => {
+      const result = await sendFreeEmailAction(to, body);
+      if (!result.ok) {
+        showToast({ title: "Couldn't send", description: result.error, variant: "error" });
+        return;
+      }
+      if (result.warning) {
+        showToast({ title: "Saved", description: result.warning, variant: "success" });
+      } else {
+        showToast({ title: "Sent", description: `Delivered to ${to}.`, variant: "success" });
+      }
+      setTo("");
+      setBody("");
+      setOpen(false);
+      onSent();
+    });
+  };
+
+  return (
+    <div className="mt-4 rounded-2xl border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/40">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left"
+      >
+        <span className="flex items-center gap-2 text-sm font-medium text-[var(--text-2)]">
+          <Mail className="h-4 w-4 text-[var(--text-4)]" />
+          Send to anyone
+        </span>
+        <ChevronDown className={`h-4 w-4 text-[var(--text-5)] transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="space-y-2.5 border-t border-[var(--border-hairline)] px-4 py-3">
+          <p className="text-xs text-[var(--text-5)]">
+            For an address that isn&apos;t already a lead here -- e.g. a quick deliverability test to your own inbox.
+          </p>
+          <input
+            type="email"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder="name@example.com"
+            className="w-full rounded-xl border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 px-3 py-2 text-sm text-[var(--text-2)] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+          />
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={3}
+            placeholder="Message"
+            className="w-full resize-none rounded-xl border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 p-3 text-sm text-[var(--text-2)] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+          />
+          <div className="flex justify-end">
+            <motion.button
+              whileTap={{ scale: 0.97 }}
+              disabled={pending || !to.trim() || !body.trim()}
+              onClick={send}
+              className="flex items-center gap-1.5 rounded-xl bg-accent-gradient px-4 py-2 text-xs font-semibold text-white disabled:opacity-40"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Send
+            </motion.button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RepliesClient({
   tenantId,
   initialReplied,
@@ -320,6 +400,8 @@ export function RepliesClient({
           Not replied yet ({notReplied.length})
         </button>
       </div>
+
+      <FreeSendComposer onSent={reload} />
 
       {tab === "notReplied" && notReplied.length > 0 && (
         <div className="mt-3 flex items-start gap-2 rounded-xl border border-[var(--status-warm)]/30 bg-[var(--status-warm)]/10 p-3 text-xs text-[var(--status-warm)]">

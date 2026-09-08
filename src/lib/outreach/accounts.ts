@@ -32,6 +32,8 @@ export interface AccountReachStats {
   sentThisWeek: number;
   sentThisMonth: number;
   repliedThisWeek: number;
+  bouncedThisMonth: number;
+  complainedThisMonth: number;
 }
 
 /**
@@ -77,7 +79,7 @@ async function readReachStatRows(tx: Prisma.TransactionClient, tenantId: string)
   const { monthStart } = reachStatWindow();
   const sentRows = await tx.outreachMessage.findMany({
     where: { tenantId, sendStatus: "sent", sentAt: { gte: monthStart }, sentViaAccountId: { not: null } },
-    select: { sentViaAccountId: true, sentAt: true },
+    select: { sentViaAccountId: true, sentAt: true, deliveryStatus: true },
   });
   const replyRows = await tx.outreachReply.findMany({
     where: { tenantId, repliedAt: { gte: monthStart }, accountId: { not: null } },
@@ -104,7 +106,7 @@ function shapeReachStats({
   const get = (accountId: string) => {
     let s = stats.get(accountId);
     if (!s) {
-      s = { sentToday: 0, sentThisWeek: 0, sentThisMonth: 0, repliedThisWeek: 0 };
+      s = { sentToday: 0, sentThisWeek: 0, sentThisMonth: 0, repliedThisWeek: 0, bouncedThisMonth: 0, complainedThisMonth: 0 };
       stats.set(accountId, s);
     }
     return s;
@@ -116,6 +118,11 @@ function shapeReachStats({
     s.sentThisMonth += 1;
     if (row.sentAt >= weekStart) s.sentThisWeek += 1;
     if (row.sentAt >= todayStart) s.sentToday += 1;
+    // deliveryStatus only ever gets set by the Resend webhook (email channel),
+    // never for LinkedIn/Instagram sends -- see OutreachMessage.deliveryStatus's
+    // own schema comment. Harmless no-op for non-email rows.
+    if (row.deliveryStatus === "bounced") s.bouncedThisMonth += 1;
+    if (row.deliveryStatus === "complained") s.complainedThisMonth += 1;
   }
   for (const row of replyRows) {
     if (!row.accountId || !row.repliedAt || row.repliedAt < weekStart) continue;
