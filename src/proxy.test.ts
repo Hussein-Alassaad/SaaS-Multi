@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import { SignJWT } from "jose";
 import { proxy } from "./proxy";
+import { db } from "@/lib/db";
 
 const SECRET = new TextEncoder().encode("dev-only-insecure-fallback-secret-do-not-use-in-production");
 
@@ -13,9 +14,10 @@ async function makeToken(scope: "PLATFORM" | "TENANT") {
     .sign(SECRET);
 }
 
-function requestWithCookie(url: string, token?: string) {
+function requestWithCookie(url: string, token?: string, ip?: string) {
   const req = new NextRequest(new URL(url, "http://localhost:3000"));
   if (token) req.cookies.set("admin_session", token);
+  if (ip) req.headers.set("x-forwarded-for", ip);
   return req;
 }
 
@@ -56,5 +58,45 @@ describe("proxy", () => {
     const token = await makeToken("PLATFORM");
     const res = await proxy(requestWithCookie("/agency", token));
     expect(res.headers.get("location")).toContain("/agency-login");
+  });
+
+  describe("IP allowlist", () => {
+    afterEach(async () => {
+      await db.ipAllowlistEntry.deleteMany({});
+    });
+
+    it("allows any IP on /admin when the allowlist is empty", async () => {
+      const token = await makeToken("PLATFORM");
+      const res = await proxy(requestWithCookie("/admin/tenants", token, "9.9.9.9"));
+      expect(res.status).not.toBe(403);
+    });
+
+    it("blocks a PLATFORM session on /admin from an IP outside a configured allowlist", async () => {
+      await db.ipAllowlistEntry.create({ data: { cidr: "203.0.113.0/24" } });
+      const token = await makeToken("PLATFORM");
+      const res = await proxy(requestWithCookie("/admin/tenants", token, "9.9.9.9"));
+      expect(res.status).toBe(403);
+    });
+
+    it("allows a PLATFORM session on /admin from an IP inside a configured CIDR range", async () => {
+      await db.ipAllowlistEntry.create({ data: { cidr: "203.0.113.0/24" } });
+      const token = await makeToken("PLATFORM");
+      const res = await proxy(requestWithCookie("/admin/tenants", token, "203.0.113.42"));
+      expect(res.status).not.toBe(403);
+    });
+
+    it("allows a PLATFORM session on /admin from an exact bare-IP allowlist entry", async () => {
+      await db.ipAllowlistEntry.create({ data: { cidr: "198.51.100.7" } });
+      const token = await makeToken("PLATFORM");
+      const res = await proxy(requestWithCookie("/admin/tenants", token, "198.51.100.7"));
+      expect(res.status).not.toBe(403);
+    });
+
+    it("does not apply the allowlist to tenant-scoped paths", async () => {
+      await db.ipAllowlistEntry.create({ data: { cidr: "203.0.113.0/24" } });
+      const token = await makeToken("TENANT");
+      const res = await proxy(requestWithCookie("/agency", token, "9.9.9.9"));
+      expect(res.status).not.toBe(403);
+    });
   });
 });

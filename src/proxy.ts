@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { db } from "@/lib/db";
+import { ipMatchesCidr } from "@/lib/ip-match";
 
 const SESSION_COOKIE_NAME = "admin_session";
 
@@ -22,6 +24,32 @@ const TENANT_LOGIN_PATHS: Record<string, string> = {
   "/outreach": "/outreach-login",
 };
 
+function getRequestIp(request: NextRequest): string | null {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) return forwardedFor.split(",")[0].trim();
+  return request.headers.get("x-real-ip");
+}
+
+// IpAllowlistEntry has a full CRUD admin UI (src/app/(admin)/admin/security)
+// but, found in the 2026-09-09 platform review, was never actually enforced
+// anywhere -- any admin could add every entry they wanted and it changed
+// nothing about who could reach /admin. Enforced here, scoped to /admin only
+// (this is an Admin-only control per its own page), and only once a session
+// has already been proven valid above -- an allowlist miss is a 403, not a
+// redirect to /login, so it reads as "blocked" rather than "please log in".
+// Empty table = unrestricted, matching the UI's own "access is unrestricted
+// by IP" copy -- this must stay opt-in so nobody locks themselves out by
+// simply never having configured it.
+async function isIpAllowed(request: NextRequest): Promise<boolean> {
+  const entries = await db.ipAllowlistEntry.findMany({ select: { cidr: true } });
+  if (entries.length === 0) return true;
+
+  const ip = getRequestIp(request);
+  if (!ip) return false;
+
+  return entries.some((e) => ipMatchesCidr(ip, e.cidr));
+}
+
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const tenantPrefix = Object.keys(TENANT_LOGIN_PATHS).find((prefix) => pathname.startsWith(prefix));
@@ -38,6 +66,11 @@ export async function proxy(request: NextRequest) {
     if (payload.scope !== requiredScope) {
       return NextResponse.redirect(new URL(loginPath, request.url));
     }
+
+    if (requiredScope === "PLATFORM" && !(await isIpAllowed(request))) {
+      return NextResponse.json({ error: "Access denied from this network." }, { status: 403 });
+    }
+
     return NextResponse.next();
   } catch {
     return NextResponse.redirect(new URL(loginPath, request.url));
