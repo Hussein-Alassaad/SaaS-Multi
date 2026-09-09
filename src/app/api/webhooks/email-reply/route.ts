@@ -83,6 +83,35 @@ export async function POST(req: NextRequest) {
   }
 
   const repliedAt = new Date();
+  const body = payload.text || "(no text body)";
+
+  // Idempotency guard, found missing in the 2026-09-09 platform review: the
+  // Worker (outside this repo, see this route's own SETUP docs) has no
+  // retry/backoff logic documented, and any ordinary network blip (a
+  // timeout, a non-2xx response, Cloudflare's own retry behavior) resends
+  // the exact same payload. Without this, a retry created a duplicate
+  // OutreachReply row AND re-ran the lead-status/follow-up-cancellation
+  // side effects below on every retry. No message-id is available from the
+  // Worker's payload to dedup on directly (see InboundEmailPayload above --
+  // adding one needs a Worker-side change outside this repo's control), so
+  // this matches on the same lead + same body text within a short window,
+  // which is exactly what a genuine retry of the same inbound email looks
+  // like -- a real second reply with coincidentally identical text inside
+  // the same few seconds is not a realistic case to protect against here.
+  const DEDUP_WINDOW_MS = 5 * 60_000;
+  const isDuplicate = await withTenant(lead.tenantId, (tx) =>
+    tx.outreachReply.findFirst({
+      where: {
+        leadId: lead.id,
+        body,
+        repliedAt: { gte: new Date(repliedAt.getTime() - DEDUP_WINDOW_MS) },
+      },
+      select: { id: true },
+    })
+  );
+  if (isDuplicate) {
+    return NextResponse.json({ ok: true, matched: true, duplicate: true });
+  }
 
   try {
     await withTenant(lead.tenantId, async (tx) => {
@@ -92,7 +121,7 @@ export async function POST(req: NextRequest) {
           leadId: lead.id,
           accountId: lead.accountId,
           channel: "email",
-          body: payload.text || "(no text body)",
+          body,
           repliedAt,
         },
       });
