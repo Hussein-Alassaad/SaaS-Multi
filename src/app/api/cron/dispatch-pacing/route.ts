@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatchPacingQueueAction } from "@/lib/actions/outreach-approvals";
+import { safeCompare } from "@/lib/safe-compare";
 
 /**
  * Redispatches every email stuck at "queued_for_pacing" (approved, but held
@@ -16,8 +17,8 @@ export async function POST(req: NextRequest) {
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
   }
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${secret}`) {
+  const authHeader = req.headers.get("authorization") ?? "";
+  if (!safeCompare(authHeader, `Bearer ${secret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

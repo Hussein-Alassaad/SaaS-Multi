@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withPlatformAccess, withTenant } from "@/lib/db";
 import { logError } from "@/lib/error-log";
+import { safeCompare } from "@/lib/safe-compare";
 
 /**
  * Real gap fixed 2026-09-02: email had NO reply detection at all, unlike
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
     console.error("email-reply webhook: EMAIL_REPLY_WEBHOOK_SECRET not configured");
     return NextResponse.json({ error: "Webhook not configured" }, { status: 503 });
   }
-  if (req.headers.get("x-webhook-secret") !== secret) {
+  if (!safeCompare(req.headers.get("x-webhook-secret") ?? "", secret)) {
     console.error("email-reply webhook: secret mismatch");
     return NextResponse.json({ error: "Invalid secret" }, { status: 400 });
   }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendWeeklyDigestsAction } from "@/lib/actions/outreach-digest";
+import { safeCompare } from "@/lib/safe-compare";
 
 /**
  * Emails every active Outreach tenant's owner a 7-day sends/replies summary.
@@ -12,8 +13,8 @@ export async function POST(req: NextRequest) {
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
   }
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${secret}`) {
+  const authHeader = req.headers.get("authorization") ?? "";
+  if (!safeCompare(authHeader, `Bearer ${secret}`)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
