@@ -843,7 +843,14 @@ model AiSettings {
 //   OutreachLead.temperature          hot | warm | cold
 //   OutreachMessage.channel            linkedin | whatsapp | instagram
 //   OutreachMessage.approvalStatus     awaiting | approved | held | edited
-//   OutreachMessage.sendStatus         pending | sent | manual_pending | failed | queued_for_pacing
+//   OutreachMessage.sendStatus         pending | sending | sent | manual_pending | failed | queued_for_pacing
+//     "sending" is a short-lived claim state written only by the Python
+//     agent's repo.claim_message_for_sending() (linkedin/instagram/whatsapp
+//     channels only) between claiming a message and the real send actually
+//     completing -- see that function's docstring for the duplicate-send
+//     bug it exists to close. Released back to "pending" on failure, or
+//     advanced to "sent" on success; a row should never observably sit at
+//     "sending" for more than the duration of one real send attempt.
 //   OutreachSettings.messageStyle      direct | discovery
 //   OutreachFollowUp.status            scheduled | sent | cancelled | paused
 //   OutreachRun.status                 running | completed | error
