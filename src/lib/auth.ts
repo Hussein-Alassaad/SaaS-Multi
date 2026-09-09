@@ -6,6 +6,16 @@ import { db } from "@/lib/db";
 export const SESSION_COOKIE_NAME = "admin_session";
 const SESSION_DURATION_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
+// Separate cookie from admin_session on purpose: the admin's own login is
+// never touched by impersonation (ending it, or the cookie expiring, must
+// never log the admin out). Short-lived and re-verified against a real,
+// still-open ImpersonationSession row on every read (see
+// getTenantSession() below) so ending a session server-side (or another
+// admin/support action revoking it) takes effect immediately, not only
+// after this JWT's own expiry.
+const IMPERSONATION_COOKIE_NAME = "impersonation_session";
+const IMPERSONATION_DURATION_SECONDS = 60 * 60 * 2; // 2 hours
+
 // How often an active session's UserSession.lastActiveAt is allowed to be
 // re-touched. Every authenticated request calling getSession() would
 // otherwise mean a write on every single page load/server action across
@@ -75,6 +85,65 @@ export interface SessionPayload {
   role: string;
   scope: string;
   sessionId: string;
+}
+
+interface ImpersonationPayload {
+  adminId: string;
+  tenantId: string;
+  impersonationSessionId: string;
+}
+
+/**
+ * Signs the impersonation cookie's JWT. Deliberately carries the acting
+ * admin's own id (not just the target tenant) so a stolen/replayed cookie
+ * can't be used to claim a different admin started it -- every read
+ * re-verifies this matches the CURRENT real session's admin, see
+ * getImpersonatedTenantId() below.
+ */
+async function signImpersonationToken(payload: ImpersonationPayload): Promise<string> {
+  return new SignJWT({ ...payload, purpose: "impersonation" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${IMPERSONATION_DURATION_SECONDS}s`)
+    .sign(getSecretKey());
+}
+
+async function verifyImpersonationToken(token: string): Promise<ImpersonationPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, getSecretKey());
+    if (
+      payload.purpose !== "impersonation" ||
+      typeof payload.adminId !== "string" ||
+      typeof payload.tenantId !== "string" ||
+      typeof payload.impersonationSessionId !== "string"
+    ) {
+      return null;
+    }
+    return {
+      adminId: payload.adminId,
+      tenantId: payload.tenantId,
+      impersonationSessionId: payload.impersonationSessionId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function setImpersonationCookie(payload: ImpersonationPayload): Promise<void> {
+  const token = await signImpersonationToken(payload);
+  const cookieStore = await cookies();
+  cookieStore.set(IMPERSONATION_COOKIE_NAME, token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: IMPERSONATION_DURATION_SECONDS,
+  });
+}
+
+export async function clearImpersonationCookie(): Promise<void> {
+  const cookieStore = await cookies();
+  cookieStore.delete(IMPERSONATION_COOKIE_NAME);
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -168,11 +237,88 @@ export async function getSession() {
  * Same as getSession() but only returns tenant-scope users, and only when
  * their tenant is still reachable (not suspended/churned). Used by every
  * Agency OS server component/action instead of getSession() directly.
+ *
+ * Impersonation, real as of 2026-09-09: if the REAL logged-in user is a
+ * Platform admin (scope "PLATFORM") and a valid impersonation cookie is
+ * present, this resolves and returns the target tenant's OWNER user
+ * instead -- the admin's own admin_session cookie is never touched, so
+ * ending impersonation (or the 2h cookie expiring) can never log the admin
+ * out. This is the ONLY function impersonation hooks into; getSession()
+ * itself is deliberately untouched (40+ call sites platform-wide, most of
+ * them Platform/Admin code that must never see a tenant identity here).
+ *
+ * The cookie's claims are re-verified against a REAL, still-open
+ * ImpersonationSession row on every call (not just the JWT signature) --
+ * ending a session server-side, or a future "force-end all sessions"
+ * admin action, takes effect on the very next request, not only once the
+ * 2h JWT itself expires.
  */
 export async function getTenantSession() {
   const session = await getSession();
+
+  if (session?.scope === "PLATFORM") {
+    const cookieStore = await cookies();
+    const token = cookieStore.get(IMPERSONATION_COOKIE_NAME)?.value;
+    if (!token) return null;
+
+    const claims = await verifyImpersonationToken(token);
+    if (!claims || claims.adminId !== session.id) return null;
+
+    const impersonationSession = await db.impersonationSession.findUnique({
+      where: { id: claims.impersonationSessionId },
+    });
+    if (!impersonationSession || impersonationSession.endedAt || impersonationSession.tenantId !== claims.tenantId) {
+      return null;
+    }
+
+    const tenant = await db.tenant.findUnique({
+      where: { id: claims.tenantId },
+      include: { owner: { include: { role: true } } },
+    });
+    if (!tenant?.owner || tenant.owner.status !== "ACTIVE") return null;
+    if (tenant.status === "SUSPENDED" || tenant.status === "CHURNED") return null;
+
+    return tenant.owner;
+  }
+
   if (!session || session.scope !== "TENANT" || !session.tenantId) return null;
   return session;
+}
+
+/**
+ * True when the CURRENT request is a Platform admin impersonating a
+ * tenant -- i.e. getTenantSession() above is about to return (or just
+ * returned) the tenant owner's identity rather than a real tenant login.
+ * Read by the impersonation banner's server-rendered wrapper so the "you
+ * are viewing as X" UI reflects a real, cookie-and-DB-verified state
+ * instead of the pre-2026-09-09 client-only React state, which showed the
+ * banner and let it be dismissed/reappear with no bearing on what data
+ * was actually being served.
+ */
+export async function getActiveImpersonation(): Promise<{ tenantId: string; tenantName: string; sessionId: string } | null> {
+  const session = await getSession();
+  if (session?.scope !== "PLATFORM") return null;
+
+  const cookieStore = await cookies();
+  const token = cookieStore.get(IMPERSONATION_COOKIE_NAME)?.value;
+  if (!token) return null;
+
+  const claims = await verifyImpersonationToken(token);
+  if (!claims || claims.adminId !== session.id) return null;
+
+  const impersonationSession = await db.impersonationSession.findUnique({
+    where: { id: claims.impersonationSessionId },
+    include: { tenant: true },
+  });
+  if (!impersonationSession || impersonationSession.endedAt || impersonationSession.tenantId !== claims.tenantId) {
+    return null;
+  }
+
+  return {
+    tenantId: impersonationSession.tenantId,
+    tenantName: impersonationSession.tenant.companyName,
+    sessionId: impersonationSession.id,
+  };
 }
 
 export async function setSessionCookie(token: string) {

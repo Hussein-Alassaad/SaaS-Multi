@@ -9,8 +9,8 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { formatCents, formatDate } from "@/lib/utils";
-import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
+import { useToast } from "@/components/ui/Toast";
 import { UserCog, Plus } from "lucide-react";
 import { CreateTenantModal } from "./CreateTenantModal";
 
@@ -30,7 +30,7 @@ interface TenantRow {
 
 export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
   const router = useRouter();
-  const { startImpersonation } = useImpersonation();
+  const { showToast } = useToast();
   const [search, setSearch] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -101,7 +101,11 @@ export function TenantsTableClient({ tenants }: { tenants: TenantRow[] }) {
           onClick={async (e) => {
             e.stopPropagation();
             const result = await startImpersonationAction(t.id);
-            startImpersonation(t.id, t.companyName, result.ok ? result.sessionId : null);
+            if (!result.ok) {
+              showToast({ title: "Couldn't start impersonation", description: result.error, variant: "error" });
+              return;
+            }
+            router.push(result.dashboardPath);
           }}
         >
           <UserCog className="h-3.5 w-3.5" />

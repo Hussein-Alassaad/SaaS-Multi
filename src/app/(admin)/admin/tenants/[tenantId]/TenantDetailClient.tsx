@@ -18,8 +18,8 @@ import {
   PriorityBadge,
 } from "@/components/ui/StatusBadge";
 import { formatCents, formatDate, formatDateTime, timeAgo } from "@/lib/utils";
-import { useImpersonation } from "@/lib/store/impersonation";
 import { startImpersonationAction } from "@/lib/actions/impersonation";
+import { useToast } from "@/components/ui/Toast";
 import { setFeatureFlagEnabledAction, setTenantSectionEnabledAction } from "@/lib/actions/feature-flags";
 import {
   resetTenantOwnerPasswordAction,
@@ -185,7 +185,7 @@ const TABS = [
 
 export function TenantDetailClient({ tenant }: Props) {
   const router = useRouter();
-  const { startImpersonation } = useImpersonation();
+  const { showToast } = useToast();
   const [tab, setTab] = useState("General");
   const [flagState, setFlagState] = useState(
     Object.fromEntries(tenant.flags.map((f) => [f.id, f.enabled]))
@@ -301,7 +301,11 @@ export function TenantDetailClient({ tenant }: Props) {
           variant="outline"
           onClick={async () => {
             const result = await startImpersonationAction(tenant.id);
-            startImpersonation(tenant.id, tenant.companyName, result.ok ? result.sessionId : null);
+            if (!result.ok) {
+              showToast({ title: "Couldn't start impersonation", description: result.error, variant: "error" });
+              return;
+            }
+            router.push(result.dashboardPath);
           }}
         >
           <UserCog className="h-4 w-4" />
