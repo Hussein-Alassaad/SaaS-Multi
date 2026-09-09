@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { createSessionToken, setSessionCookie, clearSessionCookie, verifyPassword, getSession } from "@/lib/auth";
 import { PRODUCT_DASHBOARD_PATH, PRODUCT_LOGIN_PATH } from "@/lib/sections";
+import { rateLimit, getRequestIp } from "@/lib/rate-limit";
 
 export interface LoginState {
   error?: string;
@@ -28,6 +29,25 @@ export async function loginAnyAction(_prevState: LoginState, formData: FormData)
 
   if (!email || !password) {
     return { error: "Email and password are required." };
+  }
+
+  // Unlike signup/password-reset (already rate-limited elsewhere in this
+  // codebase), this was the one universal login entry point -- Admin,
+  // Agency, and Outreach all funnel through it -- with NO rate limiting at
+  // all, found in a 2026-09-09 review. Limited by IP AND by the submitted
+  // email, not just one or the other: IP alone lets an attacker spread
+  // guesses across many known emails from one IP without ever being
+  // slowed down per-target; email alone lets a botnet spread the same
+  // attack across many IPs. Both together closes both gaps. Checked
+  // BEFORE the real DB lookup/password verify, so a lockout doesn't even
+  // cost a bcrypt compare.
+  const ip = await getRequestIp();
+  const [ipLimit, emailLimit] = await Promise.all([
+    rateLimit(`login-ip:${ip}`, 20, 60_000),
+    rateLimit(`login-email:${email}`, 5, 60_000),
+  ]);
+  if (!ipLimit.ok || !emailLimit.ok) {
+    return { error: "Too many login attempts. Please try again in a minute." };
   }
 
   const user = await db.user.findFirst({
