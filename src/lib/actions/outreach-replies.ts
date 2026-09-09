@@ -33,7 +33,15 @@ async function sendReplyViaAgent(tenantId: string, leadId: string, messageId: st
   const controlHost = process.env.LIVE_LOGIN_WS_HOST;
   if (!controlHost) return { ok: false, error: "Agent control isn't configured on this deployment yet." };
 
-  const token = await new SignJWT({ purpose: "agent_control", action: "send_reply" })
+  // tenantId is signed into the token itself, not just carried in the
+  // request body -- found missing in the 2026-09-09 platform review: the
+  // control server previously trusted whatever tenantId showed up in the
+  // JSON body with nothing cryptographically tying it to what this token
+  // was actually authorized for. Any valid agent_control token plus an
+  // arbitrary tenantId in the body could dispatch a send for a different
+  // tenant. Binding it here closes that regardless of what future callers
+  // of the control endpoint end up doing.
+  const token = await new SignJWT({ purpose: "agent_control", action: "send_reply", tenantId })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("60s")
@@ -125,7 +133,11 @@ export async function getReplyThreadsAction() {
         contactEmail: true,
         updatedAt: true,
         messages: {
-          where: { sendStatus: { in: ["sent", "pending", "failed"] } },
+          // "sending" included so a message doesn't briefly vanish from
+          // this view during the short claim-to-sent window the Python
+          // agent's send_message()/send_cold_message() now use (see
+          // repo.claim_message_for_sending's docstring).
+          where: { sendStatus: { in: ["sent", "pending", "sending", "failed"] } },
           select: {
             id: true, body: true, editedBody: true, isReply: true, sendStatus: true, sentAt: true, createdAt: true,
             attachmentUrl: true, attachmentKind: true, attachmentName: true,
@@ -138,6 +150,13 @@ export async function getReplyThreadsAction() {
         },
       },
       orderBy: { updatedAt: "desc" },
+      // Found unbounded in the 2026-09-09 platform review: this fetches
+      // every lead+nested-messages+nested-replies row matching those 4
+      // statuses, with no cap, on every page load. The 200 most recently
+      // active threads is already far more than a human would scroll
+      // through in this inbox view; capped here rather than paginated
+      // since the UI has no "load more" affordance to page through yet.
+      take: 200,
     })
   );
 
