@@ -12,6 +12,7 @@ const TEMPERATURE_VARIANT: Record<string, "hot" | "warm" | "cold"> = { hot: "hot
 
 const SEND_STATUS_LABEL: Record<string, { label: string; variant: "neutral" | "success" | "hot" }> = {
   pending: { label: "Pending — not sent yet", variant: "neutral" },
+  sending: { label: "Sending…", variant: "neutral" },
   sent: { label: "Sent", variant: "success" },
   failed: { label: "Failed to send", variant: "hot" },
 };
