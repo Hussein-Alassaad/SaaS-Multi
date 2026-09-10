@@ -50,6 +50,9 @@
 //   TenantFeatureRequest.status          NEW | UNDER_REVIEW | PLANNED | COMPLETED | REJECTED
 //   AiSettings.tone                     PROFESSIONAL | FRIENDLY | FORMAL
 //   AiSettings.primaryLanguage          AR | EN
+//   MarketingFile.type                  image | pdf | document | other
+//   ScheduledReport.frequency            weekly | monthly
+//   ScheduledReport.reportType            analytics | campaigns | contacts
 
 generator client {
   provider = "prisma-client-js"
@@ -146,6 +149,16 @@ model Tenant {
   outreachRuns            OutreachRun[]
   outreachReplies         OutreachReply[]
 
+  // Marketing (tenant-facing) settings features
+  companySettings        CompanySettings?
+  smtpConfig             SmtpConfig?
+  localizationSettings   LocalizationSettings?
+  marketingFiles         MarketingFile[]
+  tenantApiKeys          TenantApiKey[]
+  emailTemplates         EmailTemplate[]
+  scheduledReports       ScheduledReport[]
+  tenantIpAllowlist      TenantIpAllowlistEntry[]
+
   @@index([productId])
   @@map("tenants")
 }
@@ -197,6 +210,13 @@ model User {
   sessions         UserSession[]
   createdApiKeys   ApiKey[]
   createdAllowlist IpAllowlistEntry[]
+
+  // Marketing (tenant-facing) settings features
+  uploadedMarketingFiles  MarketingFile[]
+  createdTenantApiKeys    TenantApiKey[]
+  createdEmailTemplates   EmailTemplate[]
+  createdScheduledReports ScheduledReport[]
+  createdTenantAllowlist  TenantIpAllowlistEntry[]
 
   @@index([tenantId])
   @@index([roleId])
@@ -825,6 +845,177 @@ model AiSettings {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("ai_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Marketing (tenant-facing) settings & tooling -- Company/Brand, SMTP,
+// Localization, Files, API keys, Email templates, Scheduled reports, and a
+// tenant-scoped IP allowlist. All 1:1-with-tenant rows follow the same
+// create-on-first-access pattern as AiSettings above (see
+// src/lib/actions/marketing-settings.ts).
+// ---------------------------------------------------------------------------
+
+model CompanySettings {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique
+  companyName    String?
+  logoUrl        String?
+  website        String?
+  primaryColor   String?
+  secondaryColor String?
+  fontFamily     String?
+  senderName     String? // display name used as the email "From" name
+  emailSignature String?
+  voiceTone      String? // free text brand voice/tone guidance, distinct from AiSettings.tone
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("company_settings")
+}
+
+// Tenant-owned outbound SMTP server for their own campaign sends -- distinct
+// from src/lib/email.ts's Resend integration, which this app uses for its
+// OWN transactional email (invites, password resets) regardless of any
+// tenant's SMTP config.
+model SmtpConfig {
+  id                String    @id @default(cuid())
+  tenantId          String    @unique
+  host              String
+  port              Int
+  username          String
+  passwordEncrypted String // encryptSecret() -- see src/lib/crypto.ts
+  useTls            Boolean   @default(true)
+  fromEmail         String
+  fromName          String?
+  lastTestedAt      DateTime?
+  lastTestOk        Boolean?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("smtp_configs")
+}
+
+model LocalizationSettings {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique
+  defaultLanguage String   @default("en")
+  timezone        String   @default("UTC")
+  dateFormat      String   @default("MM/DD/YYYY")
+  numberFormat    String   @default("en-US")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("localization_settings")
+}
+
+// Marketing asset library (logos, PDFs, campaign images). Named
+// MarketingFile (not File) to avoid colliding with the built-in Web File
+// type used throughout this file's own upload helpers.
+model MarketingFile {
+  id           String   @id @default(cuid())
+  tenantId     String
+  name         String
+  url          String // local-disk path from saveUploadedFile(), see src/lib/storage.ts
+  type         String // 'image' | 'pdf' | 'document' | 'other' -- see guessAssetType()
+  size         Int
+  mimeType     String
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy User?  @relation(fields: [uploadedById], references: [id])
+
+  @@index([tenantId])
+  @@map("marketing_files")
+}
+
+// Tenant-scoped API keys for Marketing integrations. Separate from the
+// platform-level ApiKey model above (Admin -> Security) -- same
+// hash-once-show-once design, but these are created by and scoped to a
+// single tenant.
+model TenantApiKey {
+  id          String    @id @default(cuid())
+  tenantId    String
+  name        String
+  keyHash     String    @unique // SHA-256 hex -- the real key is never stored
+  keyPreview  String // last 4 chars, for display only
+  createdById String?
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id])
+
+  @@index([tenantId])
+  @@map("tenant_api_keys")
+}
+
+// Reusable email copy for the Emails tab's template library.
+model EmailTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  subject     String
+  body        String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id])
+
+  @@index([tenantId])
+  @@map("email_templates")
+}
+
+// Records a tenant's intent to receive a recurring analytics report. No job
+// runner exists in this app yet (same gap as Notification.scheduledAt, see
+// admin-notifications.ts) -- nextRunAt is stored for future automation to
+// pick up, not acted on automatically today.
+model ScheduledReport {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  frequency   String // 'weekly' | 'monthly'
+  recipients  String // JSON-encoded string[] of email addresses
+  reportType  String // 'analytics' | 'campaigns' | 'contacts'
+  nextRunAt   DateTime
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id])
+
+  @@index([tenantId])
+  @@map("scheduled_reports")
+}
+
+// Tenant-scoped IP allowlist for their own Marketing login -- distinct from
+// the platform-wide IpAllowlistEntry above (which restricts Admin access).
+// Enforced in src/lib/actions/auth.ts's loginAnyAction: fails OPEN (no
+// entries = no restriction), same posture as the platform allowlist.
+model TenantIpAllowlistEntry {
+  id          String   @id @default(cuid())
+  tenantId    String
+  cidr        String
+  label       String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id])
+
+  @@unique([tenantId, cidr])
+  @@index([tenantId])
+  @@map("tenant_ip_allowlist_entries")
 }
 
 // ---------------------------------------------------------------------------

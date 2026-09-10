@@ -38,7 +38,9 @@ DECLARE
     'knowledge_entries', 'tenant_feature_requests', 'ai_settings',
     'outreach_accounts', 'outreach_settings', 'outreach_leads', 'outreach_messages',
     'outreach_pipeline_history', 'outreach_follow_ups', 'outreach_client_history',
-    'outreach_notifications_log', 'outreach_runs', 'outreach_replies'
+    'outreach_notifications_log', 'outreach_runs', 'outreach_replies',
+    'company_settings', 'smtp_configs', 'localization_settings', 'marketing_files',
+    'tenant_api_keys', 'email_templates', 'scheduled_reports', 'tenant_ip_allowlist_entries'
   ];
 BEGIN
   FOREACH t IN ARRAY tables LOOP

@@ -40,6 +40,10 @@ export const AGENCY_RESOURCES = [
   "feature-requests",
   "settings",
   "team",
+  "files",
+  "api-keys",
+  "emails",
+  "security",
 ] as const;
 export type AgencyResource = (typeof AGENCY_RESOURCES)[number];
 
@@ -69,6 +73,10 @@ export const AGENCY_PERMISSION_MATRIX: AgencyPermissionMatrix = {
     "feature-requests": ALL_ACTIONS,
     settings: ["view", "edit"],
     team: ALL_ACTIONS,
+    files: ALL_ACTIONS,
+    "api-keys": ["view", "edit"],
+    emails: ALL_ACTIONS,
+    security: ["view", "edit"],
   },
   Sales: {
     dashboard: ["view"],
@@ -90,6 +98,8 @@ export const AGENCY_PERMISSION_MATRIX: AgencyPermissionMatrix = {
     "knowledge-base": ["view", "create", "edit"],
     analytics: ["view"],
     "feature-requests": ["view", "create"],
+    files: ["view", "create", "edit"],
+    emails: ALL_ACTIONS,
   },
   "Content Creator": {
     dashboard: ["view"],

@@ -31,6 +31,10 @@ export const PRODUCT_SECTIONS: Record<string, SectionDef[]> = {
     { key: "analytics", label: "Analytics", href: "/agency/analytics" },
     { key: "feature-requests", label: "Feature Requests", href: "/agency/feature-requests" },
     { key: "team", label: "Team", href: "/agency/team" },
+    { key: "files", label: "Files", href: "/agency/files" },
+    { key: "api-keys", label: "API Keys", href: "/agency/api-keys" },
+    { key: "emails", label: "Emails", href: "/agency/emails" },
+    { key: "security", label: "Security", href: "/agency/security" },
     { key: "settings", label: "Settings", href: "/agency/settings", core: true },
   ],
   outreach: [

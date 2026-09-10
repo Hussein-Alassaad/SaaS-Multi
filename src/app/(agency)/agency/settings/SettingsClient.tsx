@@ -49,11 +49,6 @@ export function SettingsClient({ settings, lang }: { settings: AiSettingsForm; l
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">{t.settings.title}</h1>
-        <p className="text-sm text-[var(--text-4)] mt-1">{t.settings.subtitle}</p>
-      </div>
-
       <Card padding="md">
         <CardHeader>
           <div>
