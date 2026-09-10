@@ -7,6 +7,8 @@ import { getTenantSession } from "@/lib/auth";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { LeadStageChart } from "@/components/charts/LeadStageChart";
 import { ClientGrowthChart } from "@/components/charts/ClientGrowthChart";
+import { listScheduledReportsAction } from "@/lib/actions/marketing-reports";
+import { AnalyticsExportControls } from "./AnalyticsExportControls";
 
 export default async function AnalyticsPage() {
   const session = await getTenantSession();
@@ -15,7 +17,10 @@ export default async function AnalyticsPage() {
   const t = getDictionary(lang);
 
   // One withTenant() scope for all three reads -- see getAnalyticsPageData.
-  const { summary, stageBreakdown, volumeSeries } = await getAnalyticsPageData(tenantId);
+  const [{ summary, stageBreakdown, volumeSeries }, reportsResult] = await Promise.all([
+    getAnalyticsPageData(tenantId),
+    listScheduledReportsAction(),
+  ]);
 
   const growthSeries = volumeSeries.map((d) => ({ date: d.date, clients: d.conversations }));
 
@@ -25,6 +30,8 @@ export default async function AnalyticsPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">{t.analytics.title}</h1>
         <p className="text-sm text-[var(--text-4)] mt-1">{t.analytics.subtitle}</p>
       </div>
+
+      <AnalyticsExportControls initialReports={reportsResult.ok ? reportsResult.reports : []} />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <KpiCard label={t.analytics.kpiTotalConversations} value={summary.totalConversations.toString()} icon={<MessageSquare className="h-3.5 w-3.5" />} />

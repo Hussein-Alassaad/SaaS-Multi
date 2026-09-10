@@ -48,12 +48,44 @@ export async function seedMinimalFixtures() {
   return { product, plan };
 }
 
+/**
+ * A tenant plus one ACTIVE Agency Owner user, for tests of tenant-scoped
+ * Marketing actions (settings/files/api-keys/etc.) that call getTenantSession()
+ * -- callers mock getTenantSession() to resolve to the returned `owner` row.
+ */
+export async function createTenantWithOwner(opts: { productId: string; subdomain: string; email?: string }) {
+  const tenant = await db.tenant.create({
+    data: { productId: opts.productId, companyName: "Acme Agency", subdomain: opts.subdomain, status: "ACTIVE" },
+  });
+  const ownerRole = await db.role.findUnique({ where: { name: agencyRoleDbName("Owner") } });
+  const owner = await db.user.create({
+    data: {
+      email: opts.email ?? `owner-${opts.subdomain}@acme.example.com`,
+      name: "Jane Owner",
+      scope: "TENANT",
+      status: "ACTIVE",
+      tenantId: tenant.id,
+      roleId: ownerRole!.id,
+    },
+    include: { role: true },
+  });
+  return { tenant, owner };
+}
+
 /** Deletes all rows created by tests, in FK-safe order. Call in afterEach. */
 export async function resetDb() {
   await db.auditLog.deleteMany();
   await db.payment.deleteMany();
   await db.subscription.deleteMany();
   await db.teamInvite.deleteMany();
+  await db.companySettings.deleteMany();
+  await db.smtpConfig.deleteMany();
+  await db.localizationSettings.deleteMany();
+  await db.marketingFile.deleteMany();
+  await db.tenantApiKey.deleteMany();
+  await db.emailTemplate.deleteMany();
+  await db.scheduledReport.deleteMany();
+  await db.tenantIpAllowlistEntry.deleteMany();
   await db.user.deleteMany();
   await db.tenant.deleteMany();
   await db.plan.deleteMany();

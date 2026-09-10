@@ -1,9 +1,17 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { db } from "@/lib/db";
-import { createSessionToken, setSessionCookie, clearSessionCookie, verifyPassword, getSession } from "@/lib/auth";
+import { db, withTenant } from "@/lib/db";
+import {
+  createSessionToken,
+  setSessionCookie,
+  clearSessionCookie,
+  verifyPassword,
+  getSession,
+  requestIp,
+} from "@/lib/auth";
 import { PRODUCT_DASHBOARD_PATH, PRODUCT_LOGIN_PATH } from "@/lib/sections";
+import { ipMatchesAnyCidr } from "@/lib/ip-allowlist";
 
 export interface LoginState {
   error?: string;
@@ -50,6 +58,22 @@ export async function loginAnyAction(_prevState: LoginState, formData: FormData)
   const valid = await verifyPassword(password, user.passwordHash);
   if (!valid) {
     return { error: "Invalid email or password." };
+  }
+
+  // Tenant IP allowlist (Marketing -> Security page only -- Outreach has no
+  // equivalent feature and isn't touched here). Fails OPEN: an empty
+  // allowlist means no restriction, same posture as the platform-wide
+  // allowlist in src/middleware.ts.
+  if (user.scope === "TENANT" && user.tenant?.product.slug === "marketing") {
+    const allowlist = await withTenant(user.tenant.id, (tx) =>
+      tx.tenantIpAllowlistEntry.findMany({ where: { tenantId: user.tenant!.id }, select: { cidr: true } })
+    );
+    if (allowlist.length > 0) {
+      const ip = await requestIp();
+      if (!ipMatchesAnyCidr(ip, allowlist.map((e) => e.cidr))) {
+        return { error: "Your network is not on this workspace's allowed IP list. Contact an administrator." };
+      }
+    }
   }
 
   const token = await createSessionToken({

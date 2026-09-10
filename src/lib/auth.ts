@@ -56,7 +56,7 @@ function parseDeviceLabel(userAgent: string | null): string {
 /** Best-effort client IP from standard proxy headers -- whichever the
  * deployment's reverse proxy/load balancer actually sets; falls back to
  * null (shown as "Unknown" in the UI) rather than guessing. */
-async function requestIp(): Promise<string | null> {
+export async function requestIp(): Promise<string | null> {
   const h = await headers();
   const forwarded = h.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0].trim();
