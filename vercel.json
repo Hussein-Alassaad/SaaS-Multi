@@ -1,3 +1,17 @@
 {
-  "regions": ["fra1"]
+  "regions": ["fra1"],
+  "crons": [
+    {
+      "path": "/api/cron/dispatch-pacing",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/prune-logs",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-digest",
+      "schedule": "0 6 * * 1"
+    }
+  ]
 }
