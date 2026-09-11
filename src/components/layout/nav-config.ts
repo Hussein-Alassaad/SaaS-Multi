@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   Lock,
   AlertTriangle,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,6 +29,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/admin", icon: LayoutDashboard },
   { label: "Tenants", href: "/admin/tenants", icon: Building2 },
+  { label: "Outreach Performance", href: "/admin/outreach-performance", icon: TrendingUp },
   { label: "Subscriptions", href: "/admin/subscriptions", icon: CreditCard },
   { label: "Billing", href: "/admin/billing", icon: Receipt },
   { label: "AI Control", href: "/admin/ai", icon: Sparkles },

@@ -202,6 +202,15 @@ export function AnalyticsClient({ leads }: { leads: AnalyticsLeadRow[] }) {
     const contacted = scoped.filter((l) => l.contactCount > 0 || l.status === "contacted").length;
     const replied = scoped.filter((l) => l.status === "replied").length;
     const replyRate = contacted > 0 ? Math.round((replied / contacted) * 100) : 0;
+    // Message rate: how much of the discovered funnel actually got a
+    // message sent, not just found. Deal rate: of the leads actually
+    // contacted, how many the client has manually dragged to "Deal Closed"
+    // on the Pipeline board (src/lib/outreach/pipeline-stages.ts) -- no new
+    // manual-input mechanism needed, that drag-and-drop move already
+    // exists and already writes status="deal_closed".
+    const messageRate = total > 0 ? Math.round((contacted / total) * 100) : 0;
+    const dealsClosed = scoped.filter((l) => l.status === "deal_closed").length;
+    const dealRate = contacted > 0 ? Math.round((dealsClosed / contacted) * 100) : 0;
     const linkedinCount = scoped.filter((l) => l.platform === "linkedin").length;
     const instagramCount = scoped.filter((l) => l.platform === "instagram").length;
     const emailCount = scoped.filter((l) => l.platform === "email").length;
@@ -234,13 +243,15 @@ export function AnalyticsClient({ leads }: { leads: AnalyticsLeadRow[] }) {
     ];
 
     return {
-      total, hot, warm, cold, contacted, replied, replyRate, linkedinCount, instagramCount, emailCount,
+      total, hot, warm, cold, contacted, replied, replyRate, messageRate, dealsClosed, dealRate,
+      linkedinCount, instagramCount, emailCount,
       dailyCounts, totalTrend, hotTrend, warmTrend, coldTrend, temperatureData, platformData,
     };
   }, [leads, rangeKey, customStart, customEnd]);
 
   const {
-    total, hot, warm, cold, contacted, replied, replyRate, linkedinCount, instagramCount, emailCount,
+    total, hot, warm, cold, contacted, replied, replyRate, messageRate, dealsClosed, dealRate,
+    linkedinCount, instagramCount, emailCount,
     dailyCounts, totalTrend, hotTrend, warmTrend, coldTrend, temperatureData, platformData,
   } = derived;
 
@@ -282,6 +293,9 @@ export function AnalyticsClient({ leads }: { leads: AnalyticsLeadRow[] }) {
         <KpiCard label="Contacted" value={String(contacted)} />
         <KpiCard label="Replied" value={String(replied)} />
         <KpiCard label="Reply rate" value={`${replyRate}%`} />
+        <KpiCard label="Message rate" value={`${messageRate}%`} />
+        <KpiCard label="Deals closed" value={String(dealsClosed)} />
+        <KpiCard label="Deal rate" value={`${dealRate}%`} highlight />
         <KpiCard label="LinkedIn leads" value={String(linkedinCount)} />
         <KpiCard label="Instagram leads" value={String(instagramCount)} />
         <KpiCard label="Email leads" value={String(emailCount)} />
