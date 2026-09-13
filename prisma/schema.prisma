@@ -150,14 +150,14 @@ model Tenant {
   outreachReplies         OutreachReply[]
 
   // Marketing (tenant-facing) settings features
-  companySettings        CompanySettings?
-  smtpConfig             SmtpConfig?
-  localizationSettings   LocalizationSettings?
-  marketingFiles         MarketingFile[]
-  tenantApiKeys          TenantApiKey[]
-  emailTemplates         EmailTemplate[]
-  scheduledReports       ScheduledReport[]
-  tenantIpAllowlist      TenantIpAllowlistEntry[]
+  companySettings      CompanySettings?
+  smtpConfig           SmtpConfig?
+  localizationSettings LocalizationSettings?
+  marketingFiles       MarketingFile[]
+  tenantApiKeys        TenantApiKey[]
+  emailTemplates       EmailTemplate[]
+  scheduledReports     ScheduledReport[]
+  tenantIpAllowlist    TenantIpAllowlistEntry[]
 
   @@index([productId])
   @@map("tenants")
@@ -1255,13 +1255,13 @@ model OutreachLead {
 }
 
 model OutreachMessage {
-  id               String    @id @default(cuid())
-  tenantId         String    @map("tenant_id")
-  leadId           String    @map("lead_id")
-  channel          String
-  body             String
-  isFollowup       Boolean   @default(false) @map("is_followup")
-  isReengagement   Boolean   @default(false) @map("is_reengagement")
+  id                String    @id @default(cuid())
+  tenantId          String    @map("tenant_id")
+  leadId            String    @map("lead_id")
+  channel           String
+  body              String
+  isFollowup        Boolean   @default(false) @map("is_followup")
+  isReengagement    Boolean   @default(false) @map("is_reengagement")
   // A tenant-written reply sent from the "Reply Here" dashboard page
   // (src/app/(outreach)/outreach/replies/), not agent-generated cold
   // outreach -- tells the Python send-side (sending/*_send.py) to deliver
@@ -1272,23 +1272,34 @@ model OutreachMessage {
   // and picked up by a fast-polling loop (scheduler.py's
   // run_reply_send_cycle(), ~every 2-3 min) rather than the normal daily
   // full-cycle send, so a reply feels close to real-time.
-  isReply          Boolean   @default(false) @map("is_reply")
+  isReply           Boolean   @default(false) @map("is_reply")
   // Optional media attachment on a reply (Vercel Blob URL -- see
   // src/lib/outreach/reply-attachments.ts). Body can be empty when an
   // attachment carries the whole message (e.g. a voice note with no typed
   // text) -- sendReplyAction() only requires at least one of body/attachment,
   // not both. Never set on agent-generated cold outreach.
-  attachmentUrl    String?   @map("attachment_url")
-  attachmentKind   String?   @map("attachment_kind") // "image" | "video" | "audio" | "file"
-  attachmentName   String?   @map("attachment_name") // original filename, for display
-  approvalStatus   String    @default("awaiting") @map("approval_status")
-  approvedById     String?   @map("approved_by_id")
-  approvedAt       DateTime? @map("approved_at")
-  editedBody       String?   @map("edited_body")
-  holdReason       String?   @map("hold_reason")
-  sendStatus       String    @default("pending") @map("send_status")
-  sentAt           DateTime? @map("sent_at")
-  sentViaAccountId String?   @map("sent_via_account_id")
+  attachmentUrl     String?   @map("attachment_url")
+  attachmentKind    String?   @map("attachment_kind") // "image" | "video" | "audio" | "file"
+  attachmentName    String?   @map("attachment_name") // original filename, for display
+  approvalStatus    String    @default("awaiting") @map("approval_status")
+  approvedById      String?   @map("approved_by_id")
+  approvedAt        DateTime? @map("approved_at")
+  editedBody        String?   @map("edited_body")
+  holdReason        String?   @map("hold_reason")
+  sendStatus        String    @default("pending") @map("send_status")
+  // Human-readable reason for the most recent send failure, set only when
+  // sendStatus == "failed" (a PERMANENT failure -- e.g. the lead's LinkedIn
+  // page has no Message button at all, so no future retry can succeed).
+  // A TRANSIENT failure (a network blip, a selector timeout) does not set
+  // this -- it still resets sendStatus back to "pending" for a genuine
+  // retry on the next cycle, unchanged from that existing behavior. Added
+  // 2026-09-13 after the owner asked to see the SPECIFIC reason a send
+  // failed ("no message button") instead of a generic "Failed" label, once
+  // the discovery-time pre-check for this was removed (that check itself
+  // had a ~25% false-reject rate on real, reachable companies).
+  sendFailureReason String?   @map("send_failure_reason")
+  sentAt            DateTime? @map("sent_at")
+  sentViaAccountId  String?   @map("sent_via_account_id")
   // Real delivery lifecycle for email channel only (Resend) -- distinct
   // from sendStatus above, which only ever means "did OUR API call to
   // Resend succeed", not "did the email actually reach an inbox".
@@ -1300,10 +1311,10 @@ model OutreachMessage {
   // Both null for LinkedIn/Instagram messages and for any email message
   // sent before this column existed -- callers must treat null as
   // "unknown", not "failed".
-  resendMessageId  String?   @map("resend_message_id")
-  deliveryStatus   String?   @map("delivery_status")
-  deliveryStatusAt DateTime? @map("delivery_status_at")
-  createdAt        DateTime  @default(now()) @map("created_at")
+  resendMessageId   String?   @map("resend_message_id")
+  deliveryStatus    String?   @map("delivery_status")
+  deliveryStatusAt  DateTime? @map("delivery_status_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   lead           OutreachLead     @relation(fields: [leadId], references: [id], onDelete: Cascade)

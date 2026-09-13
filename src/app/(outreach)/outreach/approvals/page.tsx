@@ -33,6 +33,7 @@ export default async function OutreachApprovalsPage() {
     editedBody: m.editedBody,
     approvalStatus: m.approvalStatus,
     sendStatus: m.sendStatus,
+    sendFailureReason: m.sendFailureReason,
     isFollowup: m.isFollowup,
     lead: {
       id: m.lead.id,

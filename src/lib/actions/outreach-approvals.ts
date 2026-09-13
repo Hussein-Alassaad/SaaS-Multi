@@ -27,6 +27,15 @@ function serializeApprovalMessage(
     editedBody: message.editedBody,
     approvalStatus: message.approvalStatus,
     sendStatus: message.sendStatus,
+    // Human-readable reason for the most recent send failure (e.g. "no
+    // Message button enabled on this company's LinkedIn page") -- only
+    // ever set when sendStatus === "failed" (a PERMANENT failure the Python
+    // agent will never silently retry, as opposed to a transient one that
+    // resets back to "pending"). Added 2026-09-13 so the owner sees the
+    // SPECIFIC reason instead of a generic "Failed" label, after the
+    // discovery-time pre-check for this exact case was removed (it had a
+    // ~25% false-reject rate on real, reachable companies).
+    sendFailureReason: message.sendFailureReason,
     isFollowup: message.isFollowup,
     lead: {
       id: message.lead.id,
