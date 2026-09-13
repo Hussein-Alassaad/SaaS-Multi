@@ -30,6 +30,7 @@ export interface ApprovalMessage {
     platform: string;
     score: number | null;
     temperature: string | null;
+    discoveredAt: string;
   };
 }
 
@@ -299,6 +300,9 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                   </span>
                 </div>
               </div>
+              <p className="mt-0.5 text-[11px] text-[var(--text-5)]">
+                Discovered {new Date(message.lead.discoveredAt).toLocaleString()}
+              </p>
 
               <textarea
                 defaultValue={message.editedBody || message.body}

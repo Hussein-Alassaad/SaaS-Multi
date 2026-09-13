@@ -9,7 +9,14 @@ import { logError } from "@/lib/error-log";
 
 function serializeApprovalMessage(
   message: Awaited<ReturnType<typeof db.outreachMessage.findMany>>[number] & {
-    lead: { id: string; businessName: string | null; platform: string; score: number | null; temperature: string | null };
+    lead: {
+      id: string;
+      businessName: string | null;
+      platform: string;
+      score: number | null;
+      temperature: string | null;
+      createdAt: Date;
+    };
   }
 ) {
   return {
@@ -27,6 +34,14 @@ function serializeApprovalMessage(
       platform: message.lead.platform,
       score: message.lead.score,
       temperature: message.lead.temperature,
+      // The date the AI actually discovered this lead (OutreachLead's own
+      // insert timestamp, set the moment discovery first saves it -- see
+      // outreach/agent/scheduler.py's insert at status "discovered") --
+      // NOT this message row's own createdAt, which is set later once
+      // message generation runs. Owner-requested 2026-09-13: "i need the
+      // date" -- when did the AI find this lead, shown alongside it in
+      // the Approval queue.
+      discoveredAt: message.lead.createdAt.toISOString(),
     },
   };
 }
@@ -58,7 +73,9 @@ export async function getApprovalQueueAction() {
           { approvalStatus: "approved", sendStatus: "failed" },
         ],
       },
-      include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
+      include: {
+        lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true, createdAt: true } },
+      },
       orderBy: { createdAt: "asc" },
     })
   );

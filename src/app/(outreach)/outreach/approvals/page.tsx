@@ -18,7 +18,9 @@ export default async function OutreachApprovalsPage() {
           { approvalStatus: "approved", sendStatus: "failed" },
         ],
       },
-      include: { lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true } } },
+      include: {
+        lead: { select: { id: true, businessName: true, platform: true, score: true, temperature: true, createdAt: true } },
+      },
       orderBy: { createdAt: "asc" },
     })
   );
@@ -38,6 +40,9 @@ export default async function OutreachApprovalsPage() {
       platform: m.lead.platform,
       score: m.lead.score,
       temperature: m.lead.temperature,
+      // See outreach-approvals.ts's serializeApprovalMessage for why this
+      // is the LEAD's own createdAt (discovery time), not the message's.
+      discoveredAt: m.lead.createdAt.toISOString(),
     },
   }));
 
