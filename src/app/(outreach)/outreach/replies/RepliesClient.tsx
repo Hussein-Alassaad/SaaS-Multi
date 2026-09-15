@@ -105,9 +105,8 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
   // there is no "unsend" on either platform -- this only removes
   // NexarisOutreach's own record, e.g. to clean up a confirmed duplicate.
   const deleteMsg = (messageId: string) => {
-    if (!window.confirm("Delete this message from the record? This cannot be undone, and does not unsend anything already delivered on LinkedIn/Instagram.")) {
-      return;
-    }
+    // Owner-requested 2026-09-15: "urgent delete meaning delete it
+    // directly" -- no confirm dialog, immediate.
     startTransition(async () => {
       const result = await deleteMessageAction(messageId);
       if (!result.ok) {
