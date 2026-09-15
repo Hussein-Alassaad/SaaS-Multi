@@ -455,6 +455,37 @@ export async function retryFailedEmailSendAction(messageId: string) {
   return { ok: true as const };
 }
 
+/**
+ * Owner-requested 2026-09-15 after a real duplicate-send incident (the
+ * same lead got a second, unauthorized copy of its message sent for real
+ * -- root cause still under investigation, this is the tool to clean up
+ * the record while that's ongoing): permanently removes one message row.
+ *
+ * Deleting the row does NOT un-send anything already delivered to a real
+ * LinkedIn/Instagram inbox -- there is no "unsend" available on either
+ * platform, this only removes NexarisOutreach's own record of it. Safe to
+ * call on a message in any state (awaiting, approved, sent, failed) --
+ * this is a cleanup tool for a bad/duplicate/stale row, not a cancel-send
+ * action (holdMessageAction already covers "don't send this", for a
+ * message that hasn't gone out yet).
+ */
+export async function deleteMessageAction(messageId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const found = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
+    if (!message) return false;
+    await tx.outreachMessage.delete({ where: { id: messageId } });
+    return true;
+  });
+  if (!found) return { ok: false as const, error: "Message not found." };
+
+  return { ok: true as const };
+}
+
 export async function holdMessageAction(messageId: string, reason?: string) {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };

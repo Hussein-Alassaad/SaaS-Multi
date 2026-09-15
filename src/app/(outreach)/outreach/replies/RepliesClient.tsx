@@ -2,11 +2,12 @@
 
 import { useState, useTransition, useCallback, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { MessagesSquare, Send, ExternalLink, AlertTriangle, Paperclip, Mic, Square, X, FileText, Mail, ChevronDown } from "lucide-react";
+import { MessagesSquare, Send, ExternalLink, AlertTriangle, Paperclip, Mic, Square, X, FileText, Mail, ChevronDown, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
 import { getReplyThreadsAction, sendReplyAction, sendFreeEmailAction, type ReplyThreadLead } from "@/lib/actions/outreach-replies";
+import { deleteMessageAction } from "@/lib/actions/outreach-approvals";
 
 const TEMPERATURE_VARIANT: Record<string, "hot" | "warm" | "cold"> = { hot: "hot", warm: "warm", cold: "cold" };
 
@@ -97,6 +98,27 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
     });
   };
 
+  // Owner-requested 2026-09-15 after a real duplicate-send incident: a
+  // second, unauthorized copy of a message was sent for real to several
+  // leads (root cause still under investigation). Deleting the row here
+  // does NOT un-send anything already delivered to LinkedIn/Instagram --
+  // there is no "unsend" on either platform -- this only removes
+  // NexarisOutreach's own record, e.g. to clean up a confirmed duplicate.
+  const deleteMsg = (messageId: string) => {
+    if (!window.confirm("Delete this message from the record? This cannot be undone, and does not unsend anything already delivered on LinkedIn/Instagram.")) {
+      return;
+    }
+    startTransition(async () => {
+      const result = await deleteMessageAction(messageId);
+      if (!result.ok) {
+        showToast({ title: "Couldn't delete", description: result.error, variant: "error" });
+        return;
+      }
+      showToast({ title: "Deleted", description: "Message removed from the record.", variant: "default" });
+      onSent();
+    });
+  };
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -149,7 +171,17 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
         {thread.messages.map((m) => {
           const statusMeta = m.sendStatus ? SEND_STATUS_LABEL[m.sendStatus] : null;
           return (
-            <div key={m.id} className={`flex ${m.from === "us" ? "justify-end" : "justify-start"}`}>
+            <div key={m.id} className={`group flex items-start gap-1.5 ${m.from === "us" ? "justify-end" : "justify-start"}`}>
+              {m.from === "us" && (
+                <button
+                  type="button"
+                  onClick={() => deleteMsg(m.id)}
+                  title="Delete this message from the record"
+                  className="mt-2 shrink-0 rounded-md p-1 text-[var(--text-5)] opacity-0 transition-opacity hover:bg-[var(--surface-2)] hover:text-[var(--status-hot)] group-hover:opacity-100"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
               <div
                 className={`max-w-[80%] rounded-2xl px-3.5 py-2.5 text-sm ${
                   m.from === "us"
