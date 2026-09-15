@@ -80,6 +80,54 @@ export async function getNotRepliedLeadsAction() {
   return { ok: true as const, leads: serialized };
 }
 
+/**
+ * Owner-requested 2026-09-15: a simple box on the Follow-ups page for
+ * what the agent's follow-up messages should be about, applied to every
+ * follow-up for this tenant (not per-lead) -- the smallest possible
+ * version of "let me influence the follow-up content" the owner actually
+ * asked for, deliberately NOT a full review/approval workflow around it.
+ *
+ * This does NOT replace AI generation with a fixed template -- the agent
+ * (agent/messaging/generate.py's generate_followup_message()) still
+ * writes a fresh, distinct message every time (never repeats the
+ * original pitch verbatim, per _FOLLOWUP_RULES), this text is passed in
+ * as extra guidance alongside the original sent message. Empty string
+ * means "no guidance", follow-ups generate exactly as before this field
+ * existed.
+ */
+export async function getFollowUpGuidanceAction() {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "leads", "view");
+  if (!permCheck.ok) return permCheck;
+
+  const settings = await withTenant(session.tenantId!, (tx) =>
+    tx.outreachSettings.findUnique({
+      where: { tenantId: session.tenantId! },
+      select: { followUpGuidance: true },
+    })
+  );
+
+  return { ok: true as const, guidance: settings?.followUpGuidance ?? "" };
+}
+
+export async function setFollowUpGuidanceAction(guidance: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "leads", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  await withTenant(session.tenantId!, (tx) =>
+    tx.outreachSettings.update({
+      where: { tenantId: session.tenantId! },
+      data: { followUpGuidance: guidance.trim().slice(0, 2000) },
+    })
+  );
+
+  revalidatePath("/outreach/followups");
+  return { ok: true as const };
+}
+
 export async function followUpAllAction() {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };

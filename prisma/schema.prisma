@@ -1170,6 +1170,18 @@ model OutreachSettings {
   whatsappRecipient2      String?   @map("whatsapp_recipient_2")
   approvalRequired        Boolean   @default(true) @map("approval_required")
   approvalReminderHours   Int       @default(24) @map("approval_reminder_hours")
+  // Owner-editable free text (Follow-ups page), applies to every follow-up
+  // message generated for this tenant -- e.g. "mention our new pricing" or
+  // "ask if they saw our LinkedIn page". Passed to Claude as extra context
+  // alongside the original sent message; NOT a fixed template that
+  // replaces AI generation -- the agent still writes a fresh, distinct
+  // follow-up each time (never repeats the original pitch verbatim, see
+  // generate.py's _FOLLOWUP_RULES), this just steers what that fresh
+  // message is about. Empty string means no guidance given, follow-ups
+  // generate exactly as they did before this field existed. Added
+  // 2026-09-15, real owner request: a simple box to influence follow-up
+  // content without building a whole review/approval workflow around it.
+  followUpGuidance        String    @default("") @map("follow_up_guidance")
   // IANA zone name (e.g. "America/New_York") that every OutreachAccount.runTime
   // for this tenant is interpreted against -- Admin-only editable (see
   // setOutreachTimezoneAction in src/lib/actions/admin-tenants.ts), shown

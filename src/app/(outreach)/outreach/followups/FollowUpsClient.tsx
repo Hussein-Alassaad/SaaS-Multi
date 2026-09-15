@@ -8,7 +8,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
 import { useOutreachRealtime } from "@/lib/outreach/realtime";
-import { followUpAllAction, type FollowUpLead } from "@/lib/actions/outreach-followups";
+import { followUpAllAction, setFollowUpGuidanceAction, type FollowUpLead } from "@/lib/actions/outreach-followups";
 import { setDoNotContactAction } from "@/lib/actions/outreach-lead-detail";
 
 const TEMPERATURE_VARIANT: Record<string, "hot" | "warm" | "cold"> = { hot: "hot", warm: "warm", cold: "cold" };
@@ -30,15 +30,39 @@ function EmptyState() {
 export function FollowUpsClient({
   tenantId,
   initialLeads,
+  initialGuidance,
 }: {
   tenantId: string;
   initialLeads: FollowUpLead[];
+  initialGuidance: string;
 }) {
   const [leads, setLeads] = useState(initialLeads);
   const [isPending, startTransition] = useTransition();
   const [justScheduled, setJustScheduled] = useState<number | null>(null);
   const { showToast } = useToast();
   const router = useRouter();
+
+  // Owner-requested 2026-09-15: a simple box for what the agent's
+  // follow-up messages should be about, applied to every follow-up for
+  // this tenant. NOT a fixed template -- the agent still writes a fresh,
+  // distinct message each time; this text is passed in as extra guidance.
+  const [guidance, setGuidance] = useState(initialGuidance);
+  const [guidanceSaving, setGuidanceSaving] = useState(false);
+  const [guidanceDirty, setGuidanceDirty] = useState(false);
+
+  const saveGuidance = () => {
+    setGuidanceSaving(true);
+    startTransition(async () => {
+      const result = await setFollowUpGuidanceAction(guidance);
+      setGuidanceSaving(false);
+      if (!result.ok) {
+        showToast({ title: "Couldn't save", description: result.error, variant: "error" });
+        return;
+      }
+      setGuidanceDirty(false);
+      showToast({ title: "Saved", description: "New follow-ups will use this.", variant: "success" });
+    });
+  };
 
   const reload = useCallback(() => router.refresh(), [router]);
   useOutreachRealtime({ table: "outreach_leads", tenantId, reload, debounceMs: 500 });
@@ -102,6 +126,38 @@ export function FollowUpsClient({
           Approval Queue before anything sends.
         </p>
       </motion.header>
+
+      <div className="glass mt-4 rounded-2xl p-4">
+        <label htmlFor="followup-guidance" className="text-xs font-semibold text-[var(--text-2)]">
+          What should follow-ups be about?
+        </label>
+        <p className="mt-0.5 text-[11px] text-[var(--text-5)]">
+          Optional. The agent still writes a fresh message each time, never the same text twice — this just
+          steers what it's about, e.g. &ldquo;mention our new pricing&rdquo;.
+        </p>
+        <textarea
+          id="followup-guidance"
+          value={guidance}
+          onChange={(e) => {
+            setGuidance(e.target.value);
+            setGuidanceDirty(true);
+          }}
+          rows={2}
+          maxLength={2000}
+          placeholder="e.g. mention our new pricing, ask if they saw our LinkedIn page…"
+          className="mt-2 w-full rounded-xl border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 p-3 text-sm text-[var(--text-2)] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+        />
+        {guidanceDirty && (
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={saveGuidance}
+            disabled={guidanceSaving}
+            className="mt-2 rounded-lg bg-accent-gradient px-3 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {guidanceSaving ? "Saving…" : "Save"}
+          </motion.button>
+        )}
+      </div>
 
       {leads.length > 0 && (
         <motion.button
