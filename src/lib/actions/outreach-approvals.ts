@@ -36,6 +36,7 @@ function serializeApprovalMessage(
     // discovery-time pre-check for this exact case was removed (it had a
     // ~25% false-reject rate on real, reachable companies).
     sendFailureReason: message.sendFailureReason,
+    holdReason: message.holdReason,
     isFollowup: message.isFollowup,
     lead: {
       id: message.lead.id,
@@ -75,11 +76,24 @@ export async function getApprovalQueueAction() {
       // (serializeApprovalMessage now carries sendStatus so the client
       // can tell the two cases apart) rather than mixing it in as if it
       // were an ordinary pending approval.
+      //
+      // FIXED 2026-09-16: "held" was missing from this filter entirely --
+      // holdMessageAction() (below) has always been able to write
+      // approvalStatus: "held", but nothing ever queried for it, so a
+      // held message had NO dashboard surface anywhere once it left this
+      // page (real incident: 3 Zimmar/Instagram messages stuck "held",
+      // invisible to the owner with no way to approve/reject/delete them).
+      // Included here as a distinct, non-swipeable "On hold" card
+      // (ApprovalQueueClient.tsx) rather than mixed into the normal
+      // pending flow -- a hold is a deliberate decision, not something
+      // Approve All should ever sweep up (see approveAllMessagesAction's
+      // existing `approvalStatus: { not: "held" }` guard, unchanged).
       where: {
         tenantId: session.tenantId!,
         OR: [
           { approvalStatus: "awaiting" },
           { approvalStatus: "approved", sendStatus: "failed" },
+          { approvalStatus: "held" },
         ],
       },
       include: {

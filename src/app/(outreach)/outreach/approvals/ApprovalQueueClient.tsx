@@ -13,6 +13,7 @@ import {
   saveMessageEditAction,
   approveAllMessagesAction,
   retryFailedEmailSendAction,
+  deleteMessageAction,
 } from "@/lib/actions/outreach-approvals";
 
 export interface ApprovalMessage {
@@ -24,6 +25,7 @@ export interface ApprovalMessage {
   approvalStatus: string;
   sendStatus: string;
   sendFailureReason: string | null;
+  holdReason: string | null;
   isFollowup: boolean;
   lead: {
     id: string;
@@ -172,6 +174,31 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
   // were still awaiting one; only its own Retry button applies to it.
   const isFailedRetry = (m: ApprovalMessage) => m.approvalStatus === "approved" && m.sendStatus === "failed";
 
+  // Fixed 2026-09-16: "held" messages now reach the client at all (see
+  // getApprovalQueueAction), but a hold is a deliberate, already-made
+  // decision -- it renders as its own non-swipeable card (like the
+  // failed-retry case above) instead of the normal Approve/Hold flow, and
+  // stays out of pendingCount/Approve All, same as it already did before
+  // this fix (approveAll/pendingCount already filtered approvalStatus !==
+  // "held", just for a list that never actually contained any).
+  const isHeld = (m: ApprovalMessage) => m.approvalStatus === "held";
+
+  const deleteHeld = (message: ApprovalMessage) => {
+    setMessages((prev) => prev.filter((m) => m.id !== message.id));
+    startTransition(async () => {
+      const result = await deleteMessageAction(message.id);
+      if (!result.ok) {
+        showToast({ title: "Delete failed", description: result.error, variant: "error" });
+        return;
+      }
+      showToast({
+        title: "Deleted",
+        description: `${message.lead.businessName || "This lead"}'s held message was removed.`,
+        variant: "default",
+      });
+    });
+  };
+
   const retry = (message: ApprovalMessage) => {
     startTransition(async () => {
       const result = await retryFailedEmailSendAction(message.id);
@@ -248,7 +275,52 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
       <div className="mt-6 space-y-4">
         <AnimatePresence mode="popLayout">
           {messages.map((message) =>
-            isFailedRetry(message) ? (
+            isHeld(message) ? (
+              // Deliberate, already-made decision -- not swipeable, not
+              // part of Approve All. Only actions here are un-holding it
+              // (Approve, if the owner changes their mind) or removing it
+              // for good (Delete, reusing the existing cleanup action).
+              <motion.div
+                key={message.id}
+                layout
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="glass rounded-2xl p-4 ring-1 ring-[var(--text-5)]/30"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <Link
+                    href={`/outreach/leads/${message.leadId}`}
+                    className="text-sm font-semibold text-[var(--text-1)] underline-offset-2 hover:text-[var(--accent-from)] hover:underline"
+                  >
+                    {message.lead.businessName || "Unknown business"}
+                  </Link>
+                  <span className="rounded-full bg-[var(--text-5)]/15 px-2 py-0.5 text-xs font-medium text-[var(--text-3)]">
+                    On hold
+                  </span>
+                </div>
+                <p className="mt-2 line-clamp-2 text-xs text-[var(--text-4)]">{message.editedBody || message.body}</p>
+                <p className="mt-1.5 text-[11px] text-[var(--text-5)]">
+                  {message.holdReason || message.sendFailureReason || "No reason recorded."}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <motion.button
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => approve(message)}
+                    className="rounded-lg bg-[#4fd293]/15 px-3 py-1.5 text-xs font-semibold text-[#3fb87e] ring-1 ring-[#4fd293]/30 transition-colors hover:bg-[#4fd293]/25"
+                  >
+                    Approve
+                  </motion.button>
+                  <motion.button
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => deleteHeld(message)}
+                    className="rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]"
+                  >
+                    Delete
+                  </motion.button>
+                </div>
+              </motion.div>
+            ) : isFailedRetry(message) ? (
               // Distinct, non-swipeable card -- this is already approved,
               // not a pending decision, so Approve/Hold/edit don't apply.
               // Only action is a real retry of the actual send.

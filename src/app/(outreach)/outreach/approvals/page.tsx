@@ -8,7 +8,9 @@ export default async function OutreachApprovalsPage() {
 
   // Same widened scope as getApprovalQueueAction (see that function's own
   // comment): a failed-but-already-approved message shows here too, as a
-  // distinct retry-only card, not reverted to "awaiting".
+  // distinct retry-only card, not reverted to "awaiting". "held" is
+  // included too (fixed 2026-09-16) -- previously excluded here entirely,
+  // which left held messages with no dashboard surface at all.
   const messages = await withTenant(tenantId, (tx) =>
     tx.outreachMessage.findMany({
       where: {
@@ -16,6 +18,7 @@ export default async function OutreachApprovalsPage() {
         OR: [
           { approvalStatus: "awaiting" },
           { approvalStatus: "approved", sendStatus: "failed" },
+          { approvalStatus: "held" },
         ],
       },
       include: {
@@ -34,6 +37,7 @@ export default async function OutreachApprovalsPage() {
     approvalStatus: m.approvalStatus,
     sendStatus: m.sendStatus,
     sendFailureReason: m.sendFailureReason,
+    holdReason: m.holdReason,
     isFollowup: m.isFollowup,
     lead: {
       id: m.lead.id,
