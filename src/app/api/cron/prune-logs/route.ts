@@ -19,7 +19,11 @@ import { safeCompare } from "@/lib/safe-compare";
 const ERROR_LOG_RETENTION_DAYS = 90;
 const OUTREACH_RUN_RETENTION_DAYS = 30;
 
-export async function POST(req: NextRequest) {
+// Same fix as /api/cron/dispatch-pacing (2026-09-16): Vercel Cron Jobs
+// invoke this path with GET, not POST -- a GET-only route returns 405
+// before any of this code runs, so this cron has been silently failing
+// every scheduled fire. POST kept for manual authenticated triggers.
+async function handle(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
@@ -44,3 +48,6 @@ export async function POST(req: NextRequest) {
     deleted: { errorLogs: errorLogs.count, outreachRuns: outreachRuns.count },
   });
 }
+
+export const GET = handle;
+export const POST = handle;

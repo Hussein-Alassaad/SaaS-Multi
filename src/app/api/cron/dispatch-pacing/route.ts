@@ -12,7 +12,16 @@ import { safeCompare } from "@/lib/safe-compare";
  * has no in-process job runner. Protected by CRON_SECRET so it can't be
  * triggered by anyone who finds the URL.
  */
-export async function POST(req: NextRequest) {
+// REAL BUG FOUND 2026-09-16: this route only exported POST, but Vercel Cron
+// Jobs invoke the configured path with GET, attaching the CRON_SECRET
+// bearer token itself. With no GET handler, Next.js's router returned a
+// 405 before this file's own code (the secret check, dispatchPacingQueueAction)
+// ever ran -- every scheduled 05:00 UTC run was silently rejected at the
+// framework level since this route was written, which is why emails stuck
+// at queued_for_pacing/approved+pending never actually got redispatched on
+// their own. GET now handles the real Vercel Cron invocation; POST is kept
+// so a manual authenticated trigger still works.
+async function handle(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 503 });
@@ -25,3 +34,6 @@ export async function POST(req: NextRequest) {
   const result = await dispatchPacingQueueAction();
   return NextResponse.json(result);
 }
+
+export const GET = handle;
+export const POST = handle;

@@ -1129,6 +1129,21 @@ model OutreachAccount {
   sesFromEmail            String?   @map("ses_from_email") // verified SES sender identity -- only used when platform = "email"
   sesFromName             String?   @map("ses_from_name")
   warmupCurrentLimit      Int       @default(5) @map("warmup_current_limit")
+  // Owner-requested 2026-09-15: discovery and sending were both silently
+  // gated by the exact same warmup.effective_limit() number (5/day during
+  // week 1), and Hussein wanted a backlog of already-approved messages to
+  // clear faster WITHOUT raising how many new leads get discovered per day
+  // -- those are two different risk profiles (discovery is outbound
+  // profile visits/searches; sending is the actual outbound message
+  // volume LinkedIn/Instagram watch most closely) that happened to share
+  // one knob purely because no one had needed to split them before. NULL
+  // (the default, and the only value every other tenant/account has) means
+  // "no override -- keep using warmup.effective_limit() for sending too,"
+  // so this is purely additive and changes nothing for MJivity or any
+  // future tenant. Discovery is untouched by this field on purpose --
+  // still governed solely by warmupCurrentLimit/igDailyLimit/
+  // linkedinDailyLimit as before.
+  sendDailyLimitOverride  Int?      @map("send_daily_limit_override")
   status                  String    @default("active")
   warningType             String?   @map("warning_type")
   warningReason           String?   @map("warning_reason")
