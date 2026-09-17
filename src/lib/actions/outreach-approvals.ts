@@ -406,27 +406,70 @@ export async function dispatchPacingQueueAction(): Promise<{ ok: true; processed
   return { ok: true, processed: queued.length };
 }
 
+/**
+ * Real incident 2026-09-17: the owner re-approved 6 leads whose LinkedIn
+ * company page has no "Message" button at all -- a genuine, PERMANENT
+ * LinkedIn/Instagram limitation (agent/sending/linkedin_send.py's and
+ * instagram_send.py's NoMessageButtonAvailable) that can never succeed no
+ * matter how many times it's retried. The Approval Queue's failed-retry
+ * card (ApprovalQueueClient.tsx) already renders these with a "Can't be
+ * reached" / "Hold (unreachable)" treatment instead of a Retry button --
+ * but that was only ever a UI suggestion. Nothing stopped the SAME message
+ * being re-approved from elsewhere (e.g. Hold -> the held-message card's
+ * generic Approve button, which calls this same action with no
+ * failure-awareness at all), silently re-queuing a send that is guaranteed
+ * to fail again identically.
+ *
+ * The signal reused here (sendFailureReason set on a channel === "email"
+ * message is NEVER written for a permanent failure) -- checked across every
+ * write site in the repo: the Python agent's linkedin_send.py/
+ * instagram_send.py only ever set BOTH sendStatus "failed" AND
+ * sendFailureReason together for exactly this NoMessageButtonAvailable
+ * case (see each file's `except NoMessageButtonAvailable` handler). Every
+ * OTHER "failed" write in this file (sendIfEmailChannel's three call
+ * sites) is email-only and never sets sendFailureReason. So
+ * `sendStatus === "failed" && sendFailureReason` is already a clean,
+ * unambiguous "permanently unreachable on this channel" marker -- reusing
+ * it here rather than adding a new column/migration for a same-day fix.
+ * lead-level doNotContact was considered and rejected: these leads can
+ * still be valid on OTHER channels (e.g. email), so a lead-wide block
+ * would incorrectly kill a still-reachable channel too. This guard is
+ * scoped to the one message/channel that's actually dead.
+ */
+function permanentlyUnreachableReason(message: { sendStatus: string; sendFailureReason: string | null }): string | null {
+  if (message.sendStatus !== "failed" || !message.sendFailureReason) return null;
+  return message.sendFailureReason;
+}
+
 export async function approveMessageAction(messageId: string) {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const message = await withTenant(session.tenantId!, async (tx) => {
+  const result = await withTenant(session.tenantId!, async (tx) => {
     const found = await tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
-    if (!found) return null;
+    if (!found) return { kind: "not_found" as const };
+    const reason = permanentlyUnreachableReason(found);
+    if (reason) return { kind: "unreachable" as const, reason };
     await tx.outreachMessage.update({
       where: { id: messageId },
       data: { approvalStatus: "approved", approvedById: session.id, approvedAt: new Date() },
     });
     await maybeAdvanceLead(tx, session.tenantId!, found.leadId, session.name ?? session.id);
-    return found;
+    return { kind: "ok" as const, message: found };
   });
-  if (!message) return { ok: false as const, error: "Message not found." };
+  if (result.kind === "not_found") return { ok: false as const, error: "Message not found." };
+  if (result.kind === "unreachable") {
+    return {
+      ok: false as const,
+      error: `This lead can't be reached on this channel -- ${result.reason} This can never succeed on retry. Delete this message or contact them on a different channel instead.`,
+    };
+  }
 
   // Outside the transaction above on purpose -- it makes a real SES network
   // call and opens its own withTenant scope (see sendIfEmailChannel).
-  await sendIfEmailChannel(session.tenantId!, message);
+  await sendIfEmailChannel(session.tenantId!, result.message);
 
   return { ok: true as const };
 }
@@ -546,12 +589,20 @@ export async function approveAllMessagesAction(messageIds: string[]) {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
   if (!permCheck.ok) return permCheck;
 
-  const messages = await withTenant(session.tenantId!, async (tx) => {
-    const found = await tx.outreachMessage.findMany({
+  const { approvable, skippedUnreachable } = await withTenant(session.tenantId!, async (tx) => {
+    const candidates = await tx.outreachMessage.findMany({
       where: { id: { in: messageIds }, tenantId: session.tenantId!, approvalStatus: { not: "held" } },
-      select: { id: true, leadId: true, channel: true, body: true, editedBody: true },
+      select: { id: true, leadId: true, channel: true, body: true, editedBody: true, sendStatus: true, sendFailureReason: true },
     });
-    if (found.length === 0) return found;
+    // Same permanently-unreachable guard as approveMessageAction -- Approve
+    // All must not sweep up a message whose LinkedIn/Instagram channel has
+    // no Message button just because it was included in the batch. It's
+    // silently skipped here (not an error for the whole batch) since the
+    // rest of the selection is still legitimately approvable; the message
+    // stays visible in the queue afterward as the same failed-retry card.
+    const found = candidates.filter((m) => !permanentlyUnreachableReason(m));
+    const skippedUnreachable = candidates.length - found.length;
+    if (found.length === 0) return { approvable: found, skippedUnreachable };
 
     await tx.outreachMessage.updateMany({
       where: { id: { in: found.map((m) => m.id) } },
@@ -565,9 +616,12 @@ export async function approveAllMessagesAction(messageIds: string[]) {
     for (const leadId of leadIds) {
       await maybeAdvanceLead(tx, session.tenantId!, leadId, session.name ?? session.id);
     }
-    return found;
+    return { approvable: found, skippedUnreachable };
   });
-  if (messages.length === 0) return { ok: true as const, approvedCount: 0 };
+  const messages = approvable;
+  if (messages.length === 0) {
+    return { ok: true as const, approvedCount: 0, skippedUnreachable };
+  }
 
   // Outside the transaction -- real SES sends, each opening its own scope.
   //
@@ -591,5 +645,5 @@ export async function approveAllMessagesAction(messageIds: string[]) {
     await sendIfEmailChannel(session.tenantId!, message);
   }
 
-  return { ok: true as const, approvedCount: messages.length };
+  return { ok: true as const, approvedCount: messages.length, skippedUnreachable };
 }

@@ -128,7 +128,12 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
     startTransition(async () => {
       const result = await approveMessageAction(message.id);
       if (!result.ok) {
+        // The row was already optimistically removed above -- a blocked
+        // approval (e.g. this message just became permanently unreachable
+        // on its channel, see approveMessageAction's guard) must bring it
+        // back into view rather than let it silently vanish looking approved.
         showToast({ title: "Approve failed", description: result.error, variant: "error" });
+        reload();
         return;
       }
       showToast({
@@ -221,11 +226,16 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
         showToast({ title: "Approve all failed", description: result.error, variant: "error" });
         return;
       }
+      const skipped = "skippedUnreachable" in result ? result.skippedUnreachable : 0;
       showToast({
         title: "Approved",
-        description: `${toApprove.length} message${toApprove.length === 1 ? "" : "s"} cleared to send.`,
+        description:
+          skipped > 0
+            ? `${result.approvedCount} message${result.approvedCount === 1 ? "" : "s"} cleared to send. ${skipped} skipped -- can't be reached on that channel.`
+            : `${toApprove.length} message${toApprove.length === 1 ? "" : "s"} cleared to send.`,
         variant: "success",
       });
+      reload();
     });
   };
 
@@ -295,8 +305,22 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                   >
                     {message.lead.businessName || "Unknown business"}
                   </Link>
-                  <span className="rounded-full bg-[var(--text-5)]/15 px-2 py-0.5 text-xs font-medium text-[var(--text-3)]">
-                    On hold
+                  {/* A held message that's ALSO permanently unreachable (e.g.
+                      held via the failed-retry card's "Hold (unreachable)"
+                      button after a no-Message-button failure) must keep
+                      showing that fact here -- this used to be a generic
+                      "On hold" card with a plain Approve button that quietly
+                      let the same dead send through again. See
+                      approveMessageAction's permanentlyUnreachableReason()
+                      for the server-side guard this now backs up. */}
+                  <span
+                    className={
+                      message.sendFailureReason
+                        ? "rounded-full bg-[var(--status-hot)]/10 px-2 py-0.5 text-xs font-medium text-[var(--status-hot)]"
+                        : "rounded-full bg-[var(--text-5)]/15 px-2 py-0.5 text-xs font-medium text-[var(--text-3)]"
+                    }
+                  >
+                    {message.sendFailureReason ? "Can't be reached" : "On hold"}
                   </span>
                 </div>
                 <p className="mt-2 line-clamp-2 text-xs text-[var(--text-4)]">{message.editedBody || message.body}</p>
@@ -304,13 +328,19 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                   {message.holdReason || message.sendFailureReason || "No reason recorded."}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <motion.button
-                    whileTap={{ scale: 0.96 }}
-                    onClick={() => approve(message)}
-                    className="rounded-lg bg-[#4fd293]/15 px-3 py-1.5 text-xs font-semibold text-[#3fb87e] ring-1 ring-[#4fd293]/30 transition-colors hover:bg-[#4fd293]/25"
-                  >
-                    Approve
-                  </motion.button>
+                  {!message.sendFailureReason && (
+                    // No Approve option once this is permanently unreachable
+                    // on this channel -- re-approving can never succeed, so
+                    // Delete (or contacting the lead on a different channel)
+                    // is the only real next step.
+                    <motion.button
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => approve(message)}
+                      className="rounded-lg bg-[#4fd293]/15 px-3 py-1.5 text-xs font-semibold text-[#3fb87e] ring-1 ring-[#4fd293]/30 transition-colors hover:bg-[#4fd293]/25"
+                    >
+                      Approve
+                    </motion.button>
+                  )}
                   <motion.button
                     whileTap={{ scale: 0.96 }}
                     onClick={() => deleteHeld(message)}
