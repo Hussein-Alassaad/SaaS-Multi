@@ -6,6 +6,13 @@ import { getTenantSession } from "@/lib/auth";
 import { outreachGuardResult } from "@/lib/outreach-permissions";
 import { sendOutreachEmail } from "@/lib/outreach/resend-email";
 import { logError } from "@/lib/error-log";
+import {
+  EMAIL_FAILURE_DO_NOT_CONTACT,
+  EMAIL_FAILURE_NO_CONTACT_EMAIL,
+  EMAIL_FAILURE_NO_ACCOUNT,
+  isPermanentEmailFailureReason,
+  sendFailureIsPermanent,
+} from "@/lib/outreach/email-failure-reasons";
 
 function serializeApprovalMessage(
   message: Awaited<ReturnType<typeof db.outreachMessage.findMany>>[number] & {
@@ -36,6 +43,14 @@ function serializeApprovalMessage(
     // discovery-time pre-check for this exact case was removed (it had a
     // ~25% false-reject rate on real, reachable companies).
     sendFailureReason: message.sendFailureReason,
+    // Derived, not stored: for email, only a recognized permanent reason
+    // (see email-failure-reasons.ts) hides "Retry send" -- for every other
+    // channel, any non-null sendFailureReason is already permanent (matches
+    // permanentlyUnreachableReason's existing LinkedIn/Instagram semantics),
+    // so the UI can key its retry-button visibility off this single field
+    // for every channel instead of re-deriving channel-specific logic
+    // itself.
+    sendFailurePermanent: sendFailureIsPermanent(message.channel, message.sendStatus, message.sendFailureReason),
     holdReason: message.holdReason,
     isFollowup: message.isFollowup,
     lead: {
@@ -181,6 +196,15 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       select: { businessName: true, contactEmail: true, accountId: true, doNotContact: true },
     });
     if (!lead?.contactEmail) {
+      // Previously left the message exactly as it was (still "approved"/
+      // "pending") and only logged internally -- the tenant never saw any
+      // failure at all, the message simply never sent and never appeared in
+      // the failed-retry card. Permanent: no amount of retrying adds a
+      // contact email; the lead record itself has to be fixed first.
+      await tx.outreachMessage.update({
+        where: { id: message.id },
+        data: { sendStatus: "failed", sendFailureReason: EMAIL_FAILURE_NO_CONTACT_EMAIL },
+      });
       return { kind: "error" as const, message: "Lead has no contact email on file", context: {} };
     }
     if (lead.doNotContact) {
@@ -189,8 +213,12 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       // message reached "approved" (human click or the auto-approve path in
       // scheduler.py). Mark the message failed rather than leaving it stuck
       // "approved"/"pending" forever, so it's visibly resolved, not silently
-      // dropped.
-      await tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
+      // dropped. Permanent: this lead will never be re-contactable on this
+      // channel until doNotContact is manually cleared, so retry is hidden.
+      await tx.outreachMessage.update({
+        where: { id: message.id },
+        data: { sendStatus: "failed", sendFailureReason: EMAIL_FAILURE_DO_NOT_CONTACT },
+      });
       return { kind: "stop" as const };
     }
 
@@ -198,6 +226,14 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       ? await tx.outreachAccount.findUnique({ where: { id: lead.accountId } })
       : await tx.outreachAccount.findFirst({ where: { tenantId, platform: "email", status: "active" } });
     if (!account?.sesFromEmail) {
+      // Same silent-stall gap as the missing-contact-email case above -- a
+      // tenant with no configured sending account (or one missing its From
+      // address) previously had messages that just sat there forever with
+      // zero visible signal. Permanent until a human configures an account.
+      await tx.outreachMessage.update({
+        where: { id: message.id },
+        data: { sendStatus: "failed", sendFailureReason: EMAIL_FAILURE_NO_ACCOUNT },
+      });
       return { kind: "error" as const, message: "No email-sending account configured for this tenant", context: {} };
     }
 
@@ -206,7 +242,17 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       // same "paused accounts never self-resume" rule the Python agent's
       // account_pool.py already enforces for LinkedIn/Instagram (core rule R9
       // in the original spec: redistribution/resuming is always a human call).
-      await tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } });
+      // Permanent from the retry button's point of view: retrying right now
+      // will fail identically every time until a human resumes the account
+      // from Account Health, so hide "Retry send" until then.
+      const reason =
+        account.status === "warned" && account.warningReason
+          ? `Account paused: ${account.warningReason}`
+          : `Email account is ${account.status} -- send blocked until manually resumed from Account Health.`;
+      await tx.outreachMessage.update({
+        where: { id: message.id },
+        data: { sendStatus: "failed", sendFailureReason: reason },
+      });
       return {
         kind: "error" as const,
         message: `Email account is ${account.status} -- send blocked until manually resumed`,
@@ -242,13 +288,25 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
     if (sentToday >= account.emailDailyLimit) {
       // Approved, just not dispatched yet -- distinct from "failed" so the
       // dashboard/tenant can tell "this needs a fix" apart from "this is
-      // fine, just waiting its turn" at a glance.
-      await tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "queued_for_pacing" } });
+      // fine, just waiting its turn" at a glance. Also clears any stale
+      // sendFailureReason from a PRIOR failed attempt on this same message
+      // (e.g. a manual retry that lands here because the cap filled up in
+      // the meantime) -- otherwise the old reason lingers in the row
+      // forever even though this attempt didn't fail for that reason at
+      // all, or for any reason.
+      await tx.outreachMessage.update({
+        where: { id: message.id },
+        data: { sendStatus: "queued_for_pacing", sendFailureReason: null },
+      });
       return { kind: "stop" as const };
     }
     await tx.outreachMessage.update({
       where: { id: message.id },
-      data: { sendStatus: "sent", sentAt: new Date(), sentViaAccountId: account.id },
+      // Clear any stale sendFailureReason from a prior failed attempt --
+      // this claim is provisional (corrected back to "failed" below if the
+      // real Resend call fails), but on the success path this message must
+      // not keep showing an old failure reason that no longer applies.
+      data: { sendStatus: "sent", sentAt: new Date(), sentViaAccountId: account.id, sendFailureReason: null },
     });
 
     // Threading: a reply should land in the SAME inbox conversation as the
@@ -301,9 +359,17 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
 
   if (!result.ok) {
     // Correct the provisional claim -- this send never actually happened,
-    // so it must not count toward the cap or show as delivered.
+    // so it must not count toward the cap or show as delivered. Persist the
+    // REAL reason Resend gave (or the network-error message from the catch
+    // block in sendOutreachEmail) rather than discarding it -- this is the
+    // fix for the long-standing gap where every email failure showed only a
+    // generic "Failed to send" with no way for the owner to know why
+    // (see isPermanentEmailFailureReason below for how retry-eligibility is
+    // decided from this text; a transient reason like a rate limit or a
+    // one-off network blip still leaves "Retry send" available).
+    const reason = result.code ? `Resend error (${result.code}): ${result.error}` : `Resend error: ${result.error}`;
     await withTenant(tenantId, (tx) =>
-      tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed" } })
+      tx.outreachMessage.update({ where: { id: message.id }, data: { sendStatus: "failed", sendFailureReason: reason } })
     );
   }
 
@@ -420,24 +486,31 @@ export async function dispatchPacingQueueAction(): Promise<{ ok: true; processed
  * failure-awareness at all), silently re-queuing a send that is guaranteed
  * to fail again identically.
  *
- * The signal reused here (sendFailureReason set on a channel === "email"
- * message is NEVER written for a permanent failure) -- checked across every
- * write site in the repo: the Python agent's linkedin_send.py/
- * instagram_send.py only ever set BOTH sendStatus "failed" AND
- * sendFailureReason together for exactly this NoMessageButtonAvailable
- * case (see each file's `except NoMessageButtonAvailable` handler). Every
- * OTHER "failed" write in this file (sendIfEmailChannel's three call
- * sites) is email-only and never sets sendFailureReason. So
- * `sendStatus === "failed" && sendFailureReason` is already a clean,
- * unambiguous "permanently unreachable on this channel" marker -- reusing
- * it here rather than adding a new column/migration for a same-day fix.
+ * The signal originally reused here was "sendFailureReason set at all",
+ * back when the Python agent's linkedin_send.py/instagram_send.py were the
+ * ONLY writers of that column (both only ever set it together with
+ * sendStatus "failed" for exactly the NoMessageButtonAvailable case -- see
+ * each file's `except NoMessageButtonAvailable` handler) and
+ * sendIfEmailChannel's own "failed" writes never set a reason at all.
+ *
+ * UPDATED 2026-09-17: email failures now also persist a real
+ * sendFailureReason (fixing a separate, older gap where email sends that
+ * failed for real recorded no reason at all -- see sendIfEmailChannel).
+ * Most email failure reasons are transient (a rate limit, a one-off Resend/
+ * network error) and SHOULD stay retryable, unlike LinkedIn's no-Message-
+ * button case which can never succeed -- so "any reason set" is no longer a
+ * safe permanence signal for email. This now defers to
+ * isPermanentEmailFailureReason for channel === "email", and keeps the
+ * original "any reason set" rule for every other channel (LinkedIn/
+ * Instagram still only ever set a reason for the genuinely permanent case).
  * lead-level doNotContact was considered and rejected: these leads can
  * still be valid on OTHER channels (e.g. email), so a lead-wide block
  * would incorrectly kill a still-reachable channel too. This guard is
  * scoped to the one message/channel that's actually dead.
  */
-function permanentlyUnreachableReason(message: { sendStatus: string; sendFailureReason: string | null }): string | null {
+function permanentlyUnreachableReason(message: { channel: string; sendStatus: string; sendFailureReason: string | null }): string | null {
   if (message.sendStatus !== "failed" || !message.sendFailureReason) return null;
+  if (message.channel === "email" && !isPermanentEmailFailureReason(message.sendFailureReason)) return null;
   return message.sendFailureReason;
 }
 

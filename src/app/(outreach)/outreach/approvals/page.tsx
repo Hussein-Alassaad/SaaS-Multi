@@ -1,5 +1,6 @@
 import { getTenantSession } from "@/lib/auth";
 import { withTenant } from "@/lib/db";
+import { sendFailureIsPermanent } from "@/lib/outreach/email-failure-reasons";
 import { ApprovalQueueClient } from "./ApprovalQueueClient";
 
 export default async function OutreachApprovalsPage() {
@@ -37,6 +38,10 @@ export default async function OutreachApprovalsPage() {
     approvalStatus: m.approvalStatus,
     sendStatus: m.sendStatus,
     sendFailureReason: m.sendFailureReason,
+    // See email-failure-reasons.ts / outreach-approvals.ts's
+    // serializeApprovalMessage for why this isn't simply "reason is set" --
+    // most email failures are transient and should keep offering retry.
+    sendFailurePermanent: sendFailureIsPermanent(m.channel, m.sendStatus, m.sendFailureReason),
     holdReason: m.holdReason,
     isFollowup: m.isFollowup,
     lead: {

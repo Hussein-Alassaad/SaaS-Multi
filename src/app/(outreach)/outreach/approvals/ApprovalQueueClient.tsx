@@ -25,6 +25,7 @@ export interface ApprovalMessage {
   approvalStatus: string;
   sendStatus: string;
   sendFailureReason: string | null;
+  sendFailurePermanent: boolean;
   holdReason: string | null;
   isFollowup: boolean;
   lead: {
@@ -371,14 +372,15 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                   </Link>
                   <span className="rounded-full bg-[var(--status-hot)]/10 px-2 py-0.5 text-xs font-medium text-[var(--status-hot)]">
                     {/* Owner-requested 2026-09-13: distinguish a PERMANENT
-                        failure (sendFailureReason set -- e.g. no Message
-                        button, will never succeed on retry) from a generic
-                        transient one. The specific reason text itself
-                        renders just below, not hardcoded here, since
-                        sendFailureReason can hold any permanent-failure
-                        message linkedin_send.py/instagram_send.py raise,
-                        not only the no-button case. */}
-                    {message.sendFailureReason ? "Can't be reached" : "Failed to send"}
+                        failure (sendFailurePermanent -- e.g. no Message
+                        button on LinkedIn/Instagram, or a recognized
+                        permanent email reason like an invalid recipient or
+                        a paused account) from a generic transient one
+                        (most email failures: rate limits, one-off Resend/
+                        network errors -- see isPermanentEmailFailureReason
+                        in outreach-approvals.ts). The specific reason text
+                        itself renders just below, not hardcoded here. */}
+                    {message.sendFailurePermanent ? "Can't be reached" : "Failed to send"}
                   </span>
                 </div>
                 <p className="mt-2 line-clamp-2 text-xs text-[var(--text-4)]">{message.editedBody || message.body}</p>
@@ -386,15 +388,16 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                   <p className="mt-1.5 text-[11px] text-[var(--text-5)]">{message.sendFailureReason}</p>
                 )}
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {message.sendFailureReason ? (
-                    // A PERMANENT failure (e.g. no Message button) will
-                    // never succeed no matter how many times it's retried
-                    // -- offering "Retry send" here would be misleading.
-                    // Owner's own call 2026-09-13: "when it appears... as
-                    // no message button I will press hold and ignore
-                    // sending it" -- Hold removes it from the sending
-                    // queue for good (approvalStatus -> "held"), same
-                    // action already used elsewhere in this file.
+                  {message.sendFailurePermanent ? (
+                    // A PERMANENT failure (e.g. no Message button, invalid
+                    // recipient, paused account) will never succeed no
+                    // matter how many times it's retried -- offering
+                    // "Retry send" here would be misleading. Owner's own
+                    // call 2026-09-13: "when it appears... as no message
+                    // button I will press hold and ignore sending it" --
+                    // Hold removes it from the sending queue for good
+                    // (approvalStatus -> "held"), same action already used
+                    // elsewhere in this file.
                     <motion.button
                       whileTap={{ scale: 0.96 }}
                       onClick={() => hold(message)}
@@ -403,13 +406,12 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                       Hold (unreachable)
                     </motion.button>
                   ) : (
-                    // No sendFailureReason means this was a TRANSIENT
-                    // failure (network blip, timeout) -- retrying is a
-                    // real, meaningful action here, unlike the permanent
-                    // case above. Email-only server-side today
-                    // (retryFailedEmailSendAction) -- a real LinkedIn/
-                    // Instagram retry path is a separate, not-yet-built
-                    // piece of work.
+                    // Not flagged permanent -- for email this covers most
+                    // real failures (rate limit, transient Resend/network
+                    // error) where retrying is a real, meaningful action.
+                    // Email-only server-side today (retryFailedEmailSendAction)
+                    // -- a real LinkedIn/Instagram retry path is a separate,
+                    // not-yet-built piece of work.
                     <motion.button
                       whileTap={{ scale: 0.96 }}
                       onClick={() => retry(message)}

@@ -44,7 +44,7 @@ export async function sendOutreachEmail(opts: {
   html: string;
   tenantId?: string;
   inReplyToResendMessageId?: string | null;
-}): Promise<{ ok: true; skipped?: true; messageId?: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; skipped?: true; messageId?: string } | { ok: false; error: string; code?: string }> {
   if (!resend) {
     console.log(`[resend:noop] RESEND_API_KEY unset — would send "${opts.subject}" from ${opts.fromEmail} to ${opts.to}`);
     return { ok: true, skipped: true };
@@ -85,12 +85,20 @@ export async function sendOutreachEmail(opts: {
         tenantId: opts.tenantId,
         context: { to: opts.to, subject: opts.subject, fromEmail: opts.fromEmail },
       });
-      return { ok: false, error: result.error.message };
+      // result.error.name is Resend's typed error code (e.g.
+      // "validation_error", "rate_limit_exceeded") -- passed through
+      // alongside the message so the caller can tell a permanent failure
+      // (bad input, will fail identically on retry) from a transient one
+      // (rate limit, internal error) without re-parsing the message text.
+      return { ok: false, error: result.error.message, code: result.error.name };
     }
     return { ok: true, messageId: result.data?.id };
   } catch (err) {
     console.error("Failed to send outreach email via Resend", err);
     await logError({ source: "outreach.resend.send", error: err, tenantId: opts.tenantId, context: { to: opts.to, subject: opts.subject } });
-    return { ok: false, error: "Failed to send email." };
+    // A thrown exception here (network failure, DNS, timeout reaching
+    // Resend) is inherently transient -- no error code to attach, but never
+    // classify it as permanent.
+    return { ok: false, error: err instanceof Error && err.message ? `Network error contacting Resend: ${err.message}` : "Failed to send email." };
   }
 }
