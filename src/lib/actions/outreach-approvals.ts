@@ -175,8 +175,17 @@ async function maybeAdvanceLead(tx: Prisma.TransactionClient, tenantId: string, 
  * warningReason fields, reused here rather than inventing a parallel
  * mechanism).
  */
-const BOUNCE_RATE_PAUSE_THRESHOLD = 0.02; // 2% -- SES's own recommended ceiling before deliverability degrades broadly
-const BOUNCE_RATE_MIN_SAMPLE = 20; // don't act on bounce rate until there's enough sends to be a real signal, not noise from 1-2 early bounces
+// Raised 2026-09-19 (owner instruction): the original 2%/20-send pair paused
+// BOTH Zimmar's and Insurance's email accounts within their first real batch
+// (Zimmar: 2 bounces in 20 sends = the threshold, exactly; Insurance: 1 in
+// 21). SES's textbook 2% is meant for large recurring campaigns -- at cold-
+// outreach-to-Lebanese-SMB volumes, a handful of dead/typo'd addresses in an
+// early small batch is normal noise, not a sign the whole list or domain is
+// bad. 8%/50 still catches a genuinely broken list (e.g. a scraped batch of
+// mostly-invalid addresses) while giving real small-batch variance room to
+// not trip a false alarm.
+const BOUNCE_RATE_PAUSE_THRESHOLD = 0.08; // 8% -- was 2%, too sensitive for small real batches (see comment above)
+const BOUNCE_RATE_MIN_SAMPLE = 50; // was 20 -- don't act on bounce rate until there's enough sends to be a real signal, not noise from a few early bounces
 
 export async function sendIfEmailChannel(tenantId: string, message: { id: string; leadId: string; channel: string; body: string; editedBody: string | null; isReply?: boolean }) {
   if (message.channel !== "email") return;
@@ -397,6 +406,29 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       await tx.outreachAccount.update({ where: { id: prepared.accountId }, data: { sentCount: { increment: 1 } } });
       await maybePauseForBounceRate(tx, tenantId, prepared.accountId);
     });
+
+    // ADDED 2026-09-19, real bug found live: the Python agent's LinkedIn/
+    // Instagram send paths both advance the lead to "contacted" right after
+    // a real send (instagram_send.py/linkedin_send.py's own
+    // pipeline.move_stage() calls) -- this email path never did, since it's
+    // a separate Next.js/Resend pipeline that never touches
+    // crm/pipeline.py. Real consequence: EVERY email lead stayed stuck at
+    // "approved" forever, even fully-sent ones, and getReplyThreadsAction's
+    // Not-Replied/Replied tabs only ever show leads whose status is one of
+    // "contacted"/"replied"/"interested"/"meeting_booked" -- so a full
+    // week of real sent emails were invisible on that page (confirmed live:
+    // 25+ sent email leads, all still "approved"). Same forward-only
+    // guard as instagram_queue.py's `is_reply` skip: only a genuine first
+    // cold send advances the lead -- a reply on an already-"replied"/
+    // "interested"/etc. lead must never regress it back to "contacted".
+    if (!message.isReply) {
+      await withTenant(tenantId, async (tx) => {
+        const lead = await tx.outreachLead.findFirst({ where: { id: message.leadId, tenantId }, select: { status: true } });
+        if (lead?.status === "approved") {
+          await tx.outreachLead.update({ where: { id: message.leadId }, data: { status: "contacted" } });
+        }
+      });
+    }
   }
 }
 
