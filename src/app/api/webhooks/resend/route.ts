@@ -44,15 +44,40 @@ interface ResendWebhookEvent {
   data: { email_id: string };
 }
 
-// Only these advance deliveryStatus -- opened/clicked are tracking-pixel/
-// link-click events Resend also emits, not delivery outcomes, and are
-// deliberately not modeled here (nothing in this app reads them yet).
+// ADDED 2026-09-20 (real owner request: "how can we make sure emails are
+// being sent and replied on"): "opened"/"clicked" now recorded too, not
+// discarded -- Resend already emits these (a tracking pixel is on by
+// default on this account, confirmed by these event types already
+// reaching this webhook before this change), this app just wasn't
+// reading them. This is real, direct proof a message reached and was
+// seen by a real inbox, distinct from "delivered" (accepted by the
+// receiving mail server, says nothing about whether a human ever opened
+// it). ORDERING MATTERS below: an "opened" arriving after "delivered" is
+// real forward progress and should overwrite it, but Resend can fire
+// duplicate/out-of-order events for the same message (a mail client that
+// pre-fetches images, or a retry) -- _rank() below stops a late-arriving
+// "delivered" from ever overwriting an already-recorded "opened"/
+// "clicked", so deliveryStatus always reflects the FURTHEST stage
+// actually reached, never regresses.
 const DELIVERY_STATUS_BY_EVENT: Record<string, string> = {
   "email.sent": "sent",
   "email.delivered": "delivered",
   "email.delivery_delayed": "delivery_delayed",
   "email.bounced": "bounced",
   "email.complained": "complained",
+  "email.opened": "opened",
+  "email.clicked": "clicked",
+};
+
+// Higher number = further along/more real engagement. A bounce or
+// complaint is its own terminal branch handled separately below (not
+// part of this "progress" ordering), so it isn't ranked here.
+const DELIVERY_STATUS_RANK: Record<string, number> = {
+  sent: 0,
+  delivery_delayed: 0,
+  delivered: 1,
+  opened: 2,
+  clicked: 3,
 };
 
 export async function POST(req: NextRequest) {
@@ -82,7 +107,7 @@ export async function POST(req: NextRequest) {
 
   const deliveryStatus = DELIVERY_STATUS_BY_EVENT[event.type];
   if (!deliveryStatus) {
-    return NextResponse.json({ ok: true }); // an event type we don't track (e.g. opened/clicked) -- not an error
+    return NextResponse.json({ ok: true }); // a real event type this app genuinely doesn't model -- not an error
   }
 
   const emailId = event.data?.email_id;
@@ -99,7 +124,7 @@ export async function POST(req: NextRequest) {
   const message = await withPlatformAccess((tx) =>
     tx.outreachMessage.findFirst({
       where: { resendMessageId: emailId },
-      select: { id: true, tenantId: true, sentViaAccountId: true },
+      select: { id: true, tenantId: true, sentViaAccountId: true, deliveryStatus: true },
     })
   );
 
@@ -107,6 +132,19 @@ export async function POST(req: NextRequest) {
     // A delivery event for an email this app has no record of sending --
     // Resend accounts can be shared infra-wide; not necessarily an error.
     return NextResponse.json({ ok: true });
+  }
+
+  // See DELIVERY_STATUS_RANK's own comment: a bounce/complaint is always
+  // written (it's a real terminal outcome regardless of what came before),
+  // but a "progress" event (sent/delivered/opened/clicked) only overwrites
+  // the stored status if it's a genuine forward step -- an out-of-order or
+  // duplicate "delivered" webhook arriving after "opened" was already
+  // recorded must not erase that real, more informative signal.
+  const isTerminal = deliveryStatus === "bounced" || deliveryStatus === "complained";
+  const currentRank = message.deliveryStatus ? DELIVERY_STATUS_RANK[message.deliveryStatus] ?? -1 : -1;
+  const newRank = DELIVERY_STATUS_RANK[deliveryStatus] ?? -1;
+  if (!isTerminal && newRank <= currentRank && message.deliveryStatus) {
+    return NextResponse.json({ ok: true }); // stale/duplicate event, already at or past this stage
   }
 
   try {

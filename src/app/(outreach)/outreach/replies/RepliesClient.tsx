@@ -18,6 +18,23 @@ const SEND_STATUS_LABEL: Record<string, { label: string; variant: "neutral" | "s
   failed: { label: "Failed to send", variant: "hot" },
 };
 
+// ADDED 2026-09-20 (real owner request: "how can we make sure emails are
+// being sent and replied on") -- email-only, real proof beyond "our own
+// send call succeeded": delivered = a mail server actually accepted it;
+// opened = a real person's mail client rendered it; clicked = a real
+// person interacted with a link in it. "sent"/"delivery_delayed" are
+// deliberately left out of this map -- SEND_STATUS_LABEL's own "Sent"
+// badge above already covers the plain "we sent it" case, so this only
+// ever shows a SECOND badge once there's genuinely new information beyond
+// that (delivery confirmed or better, or a real negative outcome).
+const DELIVERY_STATUS_LABEL: Record<string, { label: string; variant: "neutral" | "success" | "hot" }> = {
+  delivered: { label: "Delivered", variant: "success" },
+  opened: { label: "Opened", variant: "success" },
+  clicked: { label: "Clicked a link", variant: "success" },
+  bounced: { label: "Bounced", variant: "hot" },
+  complained: { label: "Marked as spam", variant: "hot" },
+};
+
 function EmptyState({ tab }: { tab: "replied" | "notReplied" }) {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-16 flex flex-col items-center px-4 text-center">
@@ -169,6 +186,7 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
         )}
         {thread.messages.map((m) => {
           const statusMeta = m.sendStatus ? SEND_STATUS_LABEL[m.sendStatus] : null;
+          const deliveryMeta = m.deliveryStatus ? DELIVERY_STATUS_LABEL[m.deliveryStatus] : null;
           return (
             <div key={m.id} className={`group flex items-start gap-1.5 ${m.from === "us" ? "justify-end" : "justify-start"}`}>
               {m.from === "us" && (
@@ -214,6 +232,11 @@ function Thread({ thread, onSent }: { thread: ReplyThreadLead; onSent: () => voi
                   {statusMeta && (
                     <Badge variant={statusMeta.variant} className="px-1.5 py-0.5 text-[9px]">
                       {statusMeta.label}
+                    </Badge>
+                  )}
+                  {deliveryMeta && (
+                    <Badge variant={deliveryMeta.variant} className="px-1.5 py-0.5 text-[9px]">
+                      {deliveryMeta.label}
                     </Badge>
                   )}
                 </div>

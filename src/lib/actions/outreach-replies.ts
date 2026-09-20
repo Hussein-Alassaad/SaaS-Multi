@@ -92,6 +92,19 @@ interface ThreadMessage {
   from: "us" | "lead";
   body: string;
   sendStatus: string | null; // only set for "us" messages: "pending" | "sent" | "failed"
+  // ADDED 2026-09-20 (real owner request: "how can we make sure emails are
+  // being sent and replied on") -- only ever set for "us" EMAIL messages;
+  // LinkedIn/Instagram sends have no Resend webhook feeding this at all.
+  // Real progression once Resend's own events arrive: "sent" ->
+  // "delivered" -> "opened" (a real person's mail client rendered it) ->
+  // "clicked" (a real person interacted with a link in it) -- see
+  // src/app/api/webhooks/resend/route.ts's DELIVERY_STATUS_RANK for the
+  // ordering guarantee that this never regresses to an earlier stage on a
+  // late/duplicate webhook. "bounced"/"complained" are terminal negative
+  // outcomes instead. Null until Resend's first webhook for this message
+  // arrives, which can lag the send itself by anywhere from seconds to
+  // (rarely) minutes.
+  deliveryStatus: string | null;
   sentAt: string | null;
   createdAt: string;
   attachmentUrl: string | null; // only ever set for "us" messages -- replies we sent
@@ -140,7 +153,7 @@ export async function getReplyThreadsAction() {
           where: { sendStatus: { in: ["sent", "pending", "sending", "failed"] } },
           select: {
             id: true, body: true, editedBody: true, isReply: true, sendStatus: true, sentAt: true, createdAt: true,
-            attachmentUrl: true, attachmentKind: true, attachmentName: true,
+            attachmentUrl: true, attachmentKind: true, attachmentName: true, deliveryStatus: true,
           },
           orderBy: { createdAt: "asc" },
         },
@@ -166,6 +179,7 @@ export async function getReplyThreadsAction() {
       from: "us" as const,
       body: m.editedBody ?? m.body,
       sendStatus: m.sendStatus,
+      deliveryStatus: m.deliveryStatus,
       sentAt: m.sentAt?.toISOString() ?? null,
       createdAt: m.createdAt.toISOString(),
       attachmentUrl: m.attachmentUrl,
@@ -177,6 +191,7 @@ export async function getReplyThreadsAction() {
       from: "lead" as const,
       body: r.body,
       sendStatus: null,
+      deliveryStatus: null,
       sentAt: null,
       createdAt: r.repliedAt.toISOString(),
       attachmentUrl: null,
