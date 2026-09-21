@@ -49,8 +49,13 @@ prisma/*.db-journal
 # vercel
 .vercel
 
-# separate client project (own repo/git history, not part of this codebase)
-/outreach/
+# outreach/ folded into this repo 2026-09-21 per owner's explicit decision
+# to consolidate everything into SaaS-Multi -- its own history was preserved
+# via `git subtree`, merged in from the AiOutreachAgent repo. That repo still
+# exists on GitHub as a historical record but is no longer where new
+# outreach/ work is pushed; see outreach/.gitignore for its own secrets/junk
+# exclusions (agent/.env, dashboard/.env, debug_captures/, etc.), which
+# still apply the normal way now that this is a real subdirectory.
 
 # real client login credentials (plaintext) -- never committed
 /credentials/
