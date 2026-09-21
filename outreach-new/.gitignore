@@ -1,0 +1,54 @@
+# ── SECRETS — never commit ──
+.env
+.env.local
+.env.*.local
+agent/.env
+dashboard/.env
+*.pem
+*.key
+
+# ── Python ──
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ── Playwright ──
+playwright-report/
+test-results/
+.playwright/
+browser_profiles/
+tools/captured_sessions/
+tools/dumps/
+
+# ── Node / Vite ──
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ── Claude Code personal overrides (model/effort per this project) ──
+.claude/settings.local.json
+
+# ── Editors / OS ──
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ──
+*.log
+npm-debug.log*
+logs/
+
+# ── Droplet-local forensic captures (agent/sending/linkedin_send.py) ──
+debug_captures/
+
+# ── one-off throwaway investigation/test scripts, never part of the product ──
+scratch_*.py

@@ -1,0 +1,89 @@
+"""
+Per-account warm-up ramp: start at 5/day, climb weekly to the full target.
+
+Steady state is 20 Instagram + 30 LinkedIn per account. Starting there on day
+one gets accounts banned. Timing is also varied between accounts so the three
+don't look like one operator.
+
+The ramp is computed from the account's `created_at` (when it joined the
+pool) rather than a separate "warmup started" column -- one week after
+creation is the same thing as one week of warm-up, since a pause is a manual
+redistribute decision (core rule R9), never a reason to restart the ramp.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+
+from agent.db import repositories as repo
+
+WARMUP_START = 5      # cap on day one
+WARMUP_STEP = 5        # cap increase per full week elapsed
+WARMUP_CEILING = 30    # LinkedIn's steady-state target, the higher of the two --
+                       # Instagram's own lower daily_limit still applies via effective_limit()
+
+
+def _weeks_since(created_at: str | dt.datetime, now: dt.datetime) -> int:
+    # LIVE-CONFIRMED 2026-09-01: this codebase's own repositories.py
+    # (get_account() et al) returns whatever psycopg2 gives back for a
+    # TIMESTAMP column -- a real datetime.datetime object, never a string
+    # -- unlike the JSON-encoded String "enum" fields this schema
+    # otherwise uses (see schema.prisma's own header comment on that
+    # convention). fromisoformat() only accepts str and raised "argument
+    # must be str" on the very first real discovery run this account type
+    # ever completed, for every single account across every tenant --
+    # confirmed this exact type via a direct droplet test. Accept either
+    # shape rather than assuming one, same defensive posture as the
+    # `if not created_at: return WARMUP_START` fallback already just
+    # above this function's only caller.
+    created = created_at if isinstance(created_at, dt.datetime) else dt.datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=dt.timezone.utc)
+    return max(0, (now - created).days // 7)
+
+
+def compute_warmup_cap(account: dict, now: dt.datetime | None = None) -> int:
+    """
+    This account's current warm-up cap: WARMUP_START on day one, climbing by
+    WARMUP_STEP for every full week since `created_at`, capped at
+    WARMUP_CEILING. Missing `created_at` (shouldn't happen -- the column
+    defaults to now() -- but the DB round-trip could theoretically omit it)
+    is treated as day one rather than raising.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    created_at = account.get("created_at")
+    if not created_at:
+        return WARMUP_START
+    weeks = _weeks_since(created_at, now)
+    return min(WARMUP_START + WARMUP_STEP * weeks, WARMUP_CEILING)
+
+
+def effective_limit(account: dict, platform: str) -> int:
+    """
+    The real per-run discovery cap for this account today: the smaller of the
+    platform's steady-state daily_limit and the account's current warm-up
+    cap. Persists the recomputed cap back to `accounts.warmup_current_limit`
+    so the dashboard's Account Health page reflects it, since that column
+    exists for display, not just internal use.
+    """
+    # Mapped explicitly per platform. The original two-way conditional sent
+    # EVERY non-Instagram platform down the LinkedIn branch, so an email
+    # account resolved to linkedin_daily_limit (30) and silently ignored its
+    # own email_daily_limit (5) -- caught 2026-09-13 while auditing the real
+    # configured limits. Harmless today only because this agent's two call
+    # sites pass "linkedin"/"instagram" literally and the Next.js app owns
+    # email sending entirely; fixed so it stays correct if that changes.
+    _LIMIT_KEYS = {
+        "instagram": ("ig_daily_limit", 20),
+        "linkedin": ("linkedin_daily_limit", 30),
+        "email": ("email_daily_limit", 5),
+    }
+    key, default = _LIMIT_KEYS.get(platform, ("linkedin_daily_limit", 30))
+    platform_limit = account.get(key) or default
+
+    cap = compute_warmup_cap(account)
+    if account.get("warmup_current_limit") != cap:
+        repo.update_account(account["id"], {"warmup_current_limit": cap})
+        account["warmup_current_limit"] = cap
+
+    return min(platform_limit, cap)

@@ -1,0 +1,143 @@
+"""
+Central configuration for the agent.
+
+Every secret and environment-specific value is read here and nowhere else, so there is
+exactly one place to look when something is misconfigured. Values come from agent/.env
+(never committed) — see .env.example in the repo root for the full list.
+"""
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# agent/.env sits next to this file. load_dotenv is a no-op if the file doesn't exist,
+# which is what we want on the server where real env vars are set by the OS instead.
+AGENT_DIR = Path(__file__).parent
+load_dotenv(AGENT_DIR / ".env")
+
+
+def _get(key: str, default: str | None = None) -> str | None:
+    """Read an env var, treating an empty string the same as missing."""
+    value = os.getenv(key, default)
+    return value if value else default
+
+
+# ── Database (Postgres, shared with the main SaaS app) ─────────────────────────
+# This agent no longer has its own Supabase project -- it reads/writes the same
+# multi-tenant Postgres database the Next.js app uses (Prisma-managed schema,
+# see prisma/schema.prisma's Outreach* models). Set this to the EXACT SAME
+# DATABASE_URL as the main app's own .env at the repo root, not a separate one.
+DATABASE_URL = _get("DATABASE_URL")
+
+# Same 32-byte base64 key the main app uses to encrypt OutreachAccount proxy
+# passwords (src/lib/outreach/crypto.ts) -- must match exactly, not be a
+# freshly generated key, or existing encrypted passwords become undecryptable.
+OUTREACH_ENCRYPTION_KEY = _get("OUTREACH_ENCRYPTION_KEY")
+
+# ── Claude API ────────────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY = _get("ANTHROPIC_API_KEY")
+
+# Model split per the spec: Haiku for the high-volume analysis work (cost-efficient),
+# Sonnet for message generation (better writing quality drives reply rates).
+MODEL_ANALYSIS = _get("MODEL_ANALYSIS", "claude-haiku-4-5-20251001")
+MODEL_MESSAGES = _get("MODEL_MESSAGES", "claude-sonnet-5")
+
+# ── WhatsApp (sending + the 5 notification types) ─────────────────────────────
+# Provider is not finalised yet (open decision Q1 in REQUIREMENTS_COVERAGE.md).
+# Phase 7 will build behind an interface so this can be swapped without code changes.
+WHATSAPP_PROVIDER = _get("WHATSAPP_PROVIDER", "twilio")
+WHATSAPP_API_KEY = _get("WHATSAPP_API_KEY")
+WHATSAPP_API_SECRET = _get("WHATSAPP_API_SECRET")
+WHATSAPP_FROM_NUMBER = _get("WHATSAPP_FROM_NUMBER")
+
+# ── Email lookup for LinkedIn-discovered companies ─────────────────────────────
+# Three providers, same job (name+domain -> email) -- see discovery/hunter.py,
+# discovery/findymail.py, and discovery/icypeas.py's own module docstrings
+# for what each does and why. Being trialed in this order: Hunter's 50 free
+# credits/month first: if results are good, move to Icypeas (cheaper
+# long-term, added 2026-09-20 -- 50 free/month + ~$19/month paid tier, and a
+# genuinely different data source than Hunter's own crawled database, unlike
+# every other tool compared that either cost more or duplicated Hunter's own
+# coverage); Findymail was built first but paused in favor of testing the
+# free option before paying for either. scheduler.py's _maybe_find_email()
+# picks which one is active.
+HUNTER_API_KEY = _get("HUNTER_API_KEY")
+FINDYMAIL_API_KEY = _get("FINDYMAIL_API_KEY")
+ICYPEAS_API_KEY = _get("ICYPEAS_API_KEY")
+
+# ── Live login (remote "Connect account" websocket service) ───────────────────
+# Same value as the main Next.js app's own AUTH_SECRET (src/lib/auth.ts) -- the
+# short-lived connect-account token minted by startConnectAccountAction() is
+# verified here with the identical HS256 secret, not a separately managed one.
+AUTH_SECRET = _get("AUTH_SECRET")
+
+# Port the live_login websocket server binds to, on localhost only -- a reverse
+# proxy (Caddy, see outreach/agent/DEPLOY.md) terminates TLS and forwards here.
+LIVE_LOGIN_PORT = int(_get("LIVE_LOGIN_PORT", "8765"))
+
+# Port the agent-control HTTP server (control/server.py) binds to, on
+# localhost only -- same Caddy instance reverse-proxies a second route to
+# this port, see DEPLOY.md's "Agent control service" section.
+AGENT_CONTROL_PORT = int(_get("AGENT_CONTROL_PORT", "8766"))
+
+# Port the session-import HTTP server (live_login/import_server.py) binds
+# to, on localhost only -- runs inside the SAME container/process as the
+# live_login websocket server (started as a background thread from
+# server.py's main(), not a separate deployable unit), same Caddy instance
+# reverse-proxies a third route to this port. Backs the Nexaris Connect
+# Chrome extension's session handoff -- see import_server.py's own
+# docstring.
+IMPORT_SESSION_PORT = int(_get("IMPORT_SESSION_PORT", "8767"))
+
+# ── Runtime ───────────────────────────────────────────────────────────────────
+# Timezone that per-account run times are interpreted in.
+TIMEZONE = _get("TIMEZONE", "Asia/Beirut")
+
+# When true, Playwright shows a visible browser window. Useful while building
+# discovery in Phase 3; must be false on the headless server.
+HEADLESS = _get("HEADLESS", "true").lower() == "true"
+
+# Safety brake for local testing — caps leads per account regardless of the dashboard
+# setting. Leave empty in production so the dashboard limits apply.
+DEV_MAX_LEADS_PER_ACCOUNT = _get("DEV_MAX_LEADS_PER_ACCOUNT")
+
+# Hard per-tenant, per-Claude-call-type ceiling for run_full_pipeline_cycle's
+# analysis/message-generation steps -- found uncapped in the 2026-09-09
+# platform review (scheduler.run_analysis_cycle/run_message_generation_cycle
+# both already accept a `limit`, but the once-daily scheduled call passed
+# none). Unlike DEV_MAX_LEADS_PER_ACCOUNT above, this is NOT dev-only: it's a
+# real production safety valve so a backlog spike (e.g. leads piling up
+# after an outage, or a burst of new discovery results) can't fire an
+# unbounded number of Claude API calls -- and rack up an unbounded bill -- in
+# a single run. Deliberately generous relative to any single tenant's normal
+# daily volume today; raise it if a real tenant's honest daily backlog ever
+# approaches it.
+MAX_LEADS_PER_CYCLE = int(_get("MAX_LEADS_PER_CYCLE", "300"))
+
+# Where each account's saved login session lives (see core/session.py).
+# Defaults to the in-repo agent/browser_profiles/ directory.
+#
+# MUST be set explicitly wherever more than one process drives these sessions.
+# Root cause of a real, long-running production bug (diagnosed 2026-09-07):
+# the scheduler runs in Docker with agent/browser_profiles/ backed by the
+# nexaris-browser-profiles volume, while the control service (which is what
+# "send from the platform" actually calls) runs on the HOST from a checkout
+# of the same repo -- so the identical hardcoded relative path resolved to
+# two completely different directories. The extension's reconnects landed in
+# the volume; the control service kept reading its own stale host copy, whose
+# files had no auth cookie at all. Every platform-triggered send therefore
+# failed with "SessionLoggedOut ... logged_out_chrome=False" (the page was
+# just bounced to /login) no matter how many times the account was
+# reconnected, on every tenant and both channels.
+BROWSER_PROFILES_DIR = _get("BROWSER_PROFILES_DIR")
+
+
+def missing_required(keys: list[str]) -> list[str]:
+    """
+    Return which of the given config keys are unset.
+
+    Each phase calls this with only the keys it actually needs, so Phase 0 can run
+    with an empty .env while Phase 4 can refuse to start without a Claude API key.
+    """
+    return [key for key in keys if not globals().get(key)]
