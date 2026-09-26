@@ -439,7 +439,22 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
                     </span>
                   )}
                   <span className="rounded-full border border-[var(--border-hairline-strong)] px-2 py-0.5 text-xs uppercase tracking-wide text-[var(--text-4)]">
+                    {/* Owner-requested 2026-09-26: show WHERE this company
+                        was actually found, not just which channel this
+                        message sends on -- an email lead can come from
+                        Instagram or LinkedIn discovery (see scheduler.py's
+                        _maybe_find_email(), which creates a separate
+                        email-channel OutreachLead linked from whichever
+                        platform's discovery found the company's website).
+                        message.lead.platform is that ORIGINAL discovery
+                        platform; only worth showing when it differs from
+                        the channel this message itself sends on, so a
+                        native Instagram/LinkedIn message doesn't get a
+                        redundant "instagram - instagram" badge. */}
                     {message.channel}
+                    {message.lead.platform && message.lead.platform !== message.channel
+                      ? ` - ${message.lead.platform}`
+                      : ""}
                   </span>
                 </div>
               </div>
