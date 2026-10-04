@@ -572,9 +572,13 @@ export async function approveMessageAction(messageId: string) {
     };
   }
 
-  // Outside the transaction above on purpose -- it makes a real SES network
-  // call and opens its own withTenant scope (see sendIfEmailChannel).
-  await sendIfEmailChannel(session.tenantId!, result.message);
+  // OWNER REQUEST 2026-10-04: email no longer sends immediately on approve --
+  // every approved email now waits for the 8 AM Beirut dispatch-pacing cron
+  // (same batch window Instagram already sends in), instead of going out at
+  // whatever time of day it happened to get approved. The message stays at
+  // its default sendStatus "pending"/approvalStatus "approved" here, which is
+  // exactly what dispatchPacingQueueAction() already queries for -- no new
+  // state needed, just not calling sendIfEmailChannel() instantly anymore.
 
   return { ok: true as const };
 }
@@ -728,27 +732,13 @@ export async function approveAllMessagesAction(messageIds: string[]) {
     return { ok: true as const, approvedCount: 0, skippedUnreachable };
   }
 
-  // Outside the transaction -- real SES sends, each opening its own scope.
-  //
-  // Sequential, NOT Promise.all. sendIfEmailChannel opens one to three
-  // withTenant() scopes per message (the locked cap-check-and-claim, then a
-  // correction and/or the sent-counter bump), so mapping it over N approved
-  // messages concurrently opened up to 3N real Postgres transactions at
-  // once, unbounded by how many messages the operator selected. That is the
-  // bug class that crashed the Pipeline page in production -- see
-  // src/lib/outreach/leads.ts's getPipelineBoard for the full writeup -- and
-  // Approve All is its worst case, since N is user-controlled rather than a
-  // fixed 7. Vercel serverless + Supabase's pgbouncer transaction pooler
-  // cannot absorb that; local dev could, which is why it never showed here.
-  //
-  // Concurrency bought nothing anyway: every message for a single account
-  // already serialized behind that account's SELECT ... FOR UPDATE row lock,
-  // so the sends queued up regardless -- they just each held a pooled
-  // connection open while waiting. Matches dispatchPacingQueueAction's
-  // existing sequential loop over the same function.
-  for (const message of messages) {
-    await sendIfEmailChannel(session.tenantId!, message);
-  }
+  // OWNER REQUEST 2026-10-04: same change as approveMessageAction's identical
+  // comment -- email no longer sends instantly on approval (single OR bulk).
+  // Every approved email (including everything Approve All just processed)
+  // waits for the 8 AM Beirut dispatch-pacing cron instead. No extra
+  // bookkeeping needed: these messages are already left at their default
+  // sendStatus "pending", which is exactly what dispatchPacingQueueAction()
+  // already queries for.
 
   return { ok: true as const, approvedCount: messages.length, skippedUnreachable };
 }
