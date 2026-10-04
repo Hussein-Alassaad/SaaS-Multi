@@ -2706,6 +2706,31 @@ def _run_message_generation_cycle_for_tenant(limit: int | None) -> list[dict]:
                         "approved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                     })
 
+            # REAL BUG FOUND AND FIXED 2026-10-04, live-confirmed: a LinkedIn
+            # lead with no bio-found email and no LinkedIn channel (disabled
+            # above) has an EMPTY channels list -- the for-loop above never
+            # runs, zero messages are ever created -- yet the code below
+            # unconditionally advanced it to "awaiting_approval" regardless.
+            # Result: 11 real LinkedIn leads tonight (Bank Audi, CSP
+            # Healthcare, Clemenceau Medical Center, etc.) sat in
+            # "awaiting_approval" with literally nothing to approve -- same
+            # failure shape as the 82-stuck-message incident referenced
+            # above, just the LEAD'S status instead of a dead message. Its
+            # own linked email lead (created by _maybe_find_email, a
+            # SEPARATE OutreachLead row) already carries the real outreach
+            # for this company when one exists -- this LinkedIn row itself
+            # genuinely has nothing left to do once channels is empty, so it
+            # gets its own terminal status instead of the misleading
+            # approval-pending one.
+            if not channels:
+                repo.update_lead(lead["id"], {"status": "no_message_needed"})
+                results.append({
+                    "lead": lead.get("business_name"), "ok": True,
+                    "channels": [], "style": active_style,
+                    "note": "no channels to message on -- covered by linked email lead if one exists",
+                })
+                continue
+
             new_lead_status = "approved" if not approval_required else "awaiting_approval"
             repo.update_lead(lead["id"], {
                 "generated_message": primary_body,
