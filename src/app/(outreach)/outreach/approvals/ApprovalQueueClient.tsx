@@ -113,7 +113,94 @@ function DraggableCard({
   );
 }
 
-export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: string; initialMessages: ApprovalMessage[] }) {
+export interface DailyTargets {
+  instagram: number;
+  email: number;
+}
+
+// OWNER REQUEST 2026-10-04: group the queue by the LEAD's discovery date
+// (not the message's own createdAt -- a message can be generated well after
+// discovery, e.g. once Icypeas finds an email) so each night's cycle shows
+// as its own section, with "X of TARGET found" / "Y approved" per channel.
+// Local calendar day (not UTC) since this is the owner's own day-boundary
+// intuition ("the day they are discovered"), not a server-time technicality.
+function discoveryDateKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateHeading(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+  if (sameDay(date, today)) return "Today";
+  if (sameDay(date, yesterday)) return "Yesterday";
+  return date.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+function groupByDiscoveryDate(messages: ApprovalMessage[]) {
+  const groups = new Map<string, ApprovalMessage[]>();
+  for (const m of messages) {
+    const key = discoveryDateKey(m.lead.discoveredAt);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(m);
+  }
+  // Newest date first -- tonight's cycle belongs at the top, not buried
+  // under everything still awaiting approval from earlier nights.
+  return Array.from(groups.entries()).sort(([a], [b]) => (a < b ? 1 : -1));
+}
+
+export interface DailyCounts {
+  igFound: number;
+  igApproved: number;
+  emailFound: number;
+  emailApproved: number;
+}
+
+function DateSectionHeader({ dateKey, dailyTargets, counts }: { dateKey: string; dailyTargets: DailyTargets; counts: DailyCounts | undefined }) {
+  // Falls back to all-zero if a date somehow has pending cards but no
+  // server-computed count (shouldn't happen -- dailyCounts is built from
+  // every message the pending list is itself a subset of -- but a missing
+  // key must render "0 of N", not crash the page).
+  const { igFound, igApproved, emailFound, emailApproved } = counts ?? { igFound: 0, igApproved: 0, emailFound: 0, emailApproved: 0 };
+
+  return (
+    <div className="sticky top-0 z-10 -mx-4 mb-3 bg-[var(--surface-0)]/90 px-4 py-2 backdrop-blur-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-[var(--border-hairline-strong)] pb-2">
+        <h2 className="text-sm font-semibold text-[var(--text-1)]">{formatDateHeading(dateKey)}</h2>
+        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-[var(--text-4)]">
+          {(igFound > 0 || dailyTargets.instagram > 0) && (
+            <span>
+              Instagram: <span className="font-medium text-[var(--text-2)]">{igFound}</span> of {dailyTargets.instagram} found
+              {igApproved > 0 && <span className="text-[var(--text-5)]"> · {igApproved} approved</span>}
+            </span>
+          )}
+          {(emailFound > 0 || dailyTargets.email > 0) && (
+            <span>
+              Email: <span className="font-medium text-[var(--text-2)]">{emailFound}</span> of {dailyTargets.email} found
+              {emailApproved > 0 && <span className="text-[var(--text-5)]"> · {emailApproved} approved</span>}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ApprovalQueueClient({
+  tenantId,
+  initialMessages,
+  dailyTargets,
+  dailyCounts,
+}: {
+  tenantId: string;
+  initialMessages: ApprovalMessage[];
+  dailyTargets: DailyTargets;
+  dailyCounts: Record<string, DailyCounts>;
+}) {
   const [messages, setMessages] = useState(initialMessages);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [holdReasons, setHoldReasons] = useState<Record<string, string>>({});
@@ -283,9 +370,13 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
 
       {messages.length === 0 && <EmptyState />}
 
-      <div className="mt-6 space-y-4">
+      <div className="mt-6 space-y-8">
+        {groupByDiscoveryDate(messages).map(([dateKey, dayMessages]) => (
+          <div key={dateKey}>
+            <DateSectionHeader dateKey={dateKey} dailyTargets={dailyTargets} counts={dailyCounts[dateKey]} />
+            <div className="space-y-4">
         <AnimatePresence mode="popLayout">
-          {messages.map((message) =>
+          {dayMessages.map((message) =>
             isHeld(message) ? (
               // Deliberate, already-made decision -- not swipeable, not
               // part of Approve All. Only actions here are un-holding it
@@ -510,6 +601,9 @@ export function ApprovalQueueClient({ tenantId, initialMessages }: { tenantId: s
             )
           )}
         </AnimatePresence>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
