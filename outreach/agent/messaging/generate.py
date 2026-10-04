@@ -49,8 +49,9 @@ back", "following up", "wanted to check back") -- don't pretend it's the first c
 - Bring something NEW: either a different angle on the business (a second weak point/opportunity \
 if one exists), a lower-friction ask ("even a quick no works"), or genuine curiosity about why they \
 haven't responded -- never just restate the original in different words.
-- Keep it SHORTER than a first message -- 2-3 sentences. A follow-up earns less of the reader's \
-attention than the first message did, not more.
+- Keep it VERY SHORT -- 1-2 sentences, ideally one. A follow-up earns less of the reader's \
+attention than the first message did, not more; a long second note reads as more desperate, not \
+more thorough.
 - No exclamation-point enthusiasm, no emojis, no guilt-tripping ("just following up again!!"), no \
 "just circling back" as the entire message with nothing else.
 - Never use the words "streamline", "leverage", "revolutionize", or "unlock" -- they read as AI-generated.

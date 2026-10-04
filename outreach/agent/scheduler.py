@@ -2512,7 +2512,21 @@ def _run_analysis_cycle_for_tenant(tenant_id: str, limit: int | None) -> list[di
         # write entirely, so the lead keeps its real analysis/score data for
         # visibility -- only its STATUS changes, taking it out of
         # leads_by_status("analyzed", ...)'s pool for message generation.
-        if lead.get("platform") == "linkedin" and not email_found:
+        #
+        # REAL BUG FOUND AND FIXED 2026-10-04, live-confirmed: `email_found`
+        # only reflects _maybe_find_email()'s own Hunter/Icypeas lookup --
+        # it says nothing about _email_from_bio() already having written a
+        # real contact_email directly onto THIS lead's own row at discovery
+        # time (see _save_if_qualified_with_reasons's own comment on that
+        # path, a few hundred lines up). Hikma Pharmaceuticals had
+        # contact_email="PV@hikma.com" (found in its LinkedIn bio at
+        # discovery) but email_found was still False, so this check wrongly
+        # rejected a lead that already had a real, working email -- both a
+        # lost lead and a status directly contradicting its own
+        # contact_email column. Re-fetching the lead's current contact_email
+        # (update_fields above never set it, so `lead`'s original dict is
+        # still accurate) before rejecting closes that gap.
+        if lead.get("platform") == "linkedin" and not email_found and not lead.get("contact_email"):
             repo.update_lead(lead["id"], {"status": "rejected_no_email"})
             results.append({"lead": lead.get("business_name"), "ok": False, "reason": "LinkedIn lead rejected: no email found"})
             continue
@@ -3444,10 +3458,10 @@ _SENDING_WINDOW_END_HOUR = 12
 # to 18:00-04:00 (10h total), split evenly in half between the two tenants
 # (5h each) so each tenant's 2 accounts (2.5h cap apiece) fit its half
 # exactly, with no change to the sequential-per-tenant design above.
-_ZIMMAR_DISCOVERY_WINDOW_START_MINUTES = 18 * 60  # 18:00 Beirut
-_ZIMMAR_DISCOVERY_WINDOW_END_MINUTES = 23 * 60  # 23:00 Beirut
-_INSURANCE_DISCOVERY_WINDOW_START_MINUTES = 23 * 60  # 23:00 Beirut
-_INSURANCE_DISCOVERY_WINDOW_END_MINUTES = 28 * 60  # 04:00 Beirut, next calendar day
+_ZIMMAR_DISCOVERY_WINDOW_START_MINUTES = 18 * 60 + 15  # 18:15 Beirut
+_ZIMMAR_DISCOVERY_WINDOW_END_MINUTES = 23 * 60 + 14  # 23:14 Beirut
+_INSURANCE_DISCOVERY_WINDOW_START_MINUTES = 23 * 60 + 14  # 23:14 Beirut
+_INSURANCE_DISCOVERY_WINDOW_END_MINUTES = 28 * 60 + 14  # 04:14 Beirut, next calendar day
 
 # ADDED 2026-10-04, owner's explicit request: the real fix for "the 4th
 # account never gets a turn" -- a hard wall-clock ceiling on how long ANY
@@ -3812,10 +3826,22 @@ def build_daily_schedule() -> BackgroundScheduler:
     _insurance_accounts = [e for e in scheduled_accounts if _is_insurance(e[0])]
     _discovery_schedule: list[tuple[str, str, dict, int, int]] = []
     for index, (tenant_id, tenant_tz, account) in enumerate(_zimmar_accounts):
-        hour, minute = _spread_within_window(
-            index, len(_zimmar_accounts),
-            _ZIMMAR_DISCOVERY_WINDOW_START_MINUTES, _ZIMMAR_DISCOVERY_WINDOW_END_MINUTES,
-        )
+        if index == 0:
+            # OWNER REQUEST 2026-10-04: Zimmar's first discovery job fires
+            # right at the window's own start (18:15), not centered in its
+            # slot like every other index -- a small +0..jitter so it never
+            # fires a few seconds BEFORE the window technically opens.
+            hour, minute = divmod(
+                _ZIMMAR_DISCOVERY_WINDOW_START_MINUTES
+                + random.randint(0, _RUN_TIME_JITTER_MINUTES),
+                60,
+            )
+            hour %= 24
+        else:
+            hour, minute = _spread_within_window(
+                index, len(_zimmar_accounts),
+                _ZIMMAR_DISCOVERY_WINDOW_START_MINUTES, _ZIMMAR_DISCOVERY_WINDOW_END_MINUTES,
+            )
         _discovery_schedule.append((tenant_id, tenant_tz, account, hour, minute))
     for index, (tenant_id, tenant_tz, account) in enumerate(_insurance_accounts):
         hour, minute = _spread_within_window(

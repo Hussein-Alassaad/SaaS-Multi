@@ -988,10 +988,10 @@ _INS_JITTER = 10  # must match scheduler._INSURANCE_JITTER_MINUTES
 # reasoning (real multi-day data showed a single account can take 2-4.5h,
 # risking the 4th of 4 real accounts never getting a turn in the old
 # 20:15-03:00 span).
-_ZIMMAR_DISC_START = 18 * 60          # 18:00, must match scheduler._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES
-_ZIMMAR_DISC_END = 23 * 60            # 23:00, must match scheduler._ZIMMAR_DISCOVERY_WINDOW_END_MINUTES
-_INS_DISC_START = 23 * 60             # 23:00, must match scheduler._INSURANCE_DISCOVERY_WINDOW_START_MINUTES
-_INS_DISC_END = 28 * 60               # 04:00 next day, must match scheduler._INSURANCE_DISCOVERY_WINDOW_END_MINUTES
+_ZIMMAR_DISC_START = 18 * 60 + 15     # 18:15, must match scheduler._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES
+_ZIMMAR_DISC_END = 23 * 60 + 14       # 23:14, must match scheduler._ZIMMAR_DISCOVERY_WINDOW_END_MINUTES
+_INS_DISC_START = 23 * 60 + 14        # 23:14, must match scheduler._INSURANCE_DISCOVERY_WINDOW_START_MINUTES
+_INS_DISC_END = 28 * 60 + 14          # 04:14 next day, must match scheduler._INSURANCE_DISCOVERY_WINDOW_END_MINUTES
 
 # Insurance's/Zimmar's LinkedIn accounts can legitimately be PAUSED (e.g.
 # 2026-09-17: both paused while diagnosing droplet resource contention) --
@@ -1001,7 +1001,7 @@ _INS_DISC_END = 28 * 60               # 04:00 next day, must match scheduler._IN
 # check. A paused account is not a regression; an ACTIVE account with
 # broken timing is -- these checks still catch that case fully.
 if _ins_disc_1:
-    check("Insurance's discovery job(s) land strictly inside its own 23:00-04:00 window on both rebuilds (OWNER REQUEST 2026-09-30/2026-10-04: sequential, non-overlapping per-tenant windows)",
+    check("Insurance's discovery job(s) land strictly inside its own 23:14-04:14 window on both rebuilds (OWNER REQUEST 2026-09-30/2026-10-04: sequential, non-overlapping per-tenant windows)",
           all(_INS_DISC_START <= _mins_after_midnight(v, _INS_DISC_START) <= _INS_DISC_END for v in _ins_disc_1.values())
           and all(_INS_DISC_START <= _mins_after_midnight(v, _INS_DISC_START) <= _INS_DISC_END for v in _ins_disc_2.values()))
     check("Insurance's discovery time VARIES across independent rebuilds (spread/jitter, checked across 8 rebuilds so one coincidental match isn't a false flake)",
@@ -1022,7 +1022,7 @@ else:
 if not _zim_disc_1:
     print("   OK   Zimmar's LinkedIn/Instagram/Email accounts are currently paused -- no discovery jobs to check, correctly")
 else:
-    check("Zimmar's discovery job(s) land strictly inside its own 18:00-23:00 window on both rebuilds (OWNER REQUEST 2026-09-30/2026-10-04: sequential, non-overlapping per-tenant windows)",
+    check("Zimmar's discovery job(s) land strictly inside its own 18:15-23:14 window on both rebuilds (OWNER REQUEST 2026-09-30/2026-10-04: sequential, non-overlapping per-tenant windows)",
           all(_ZIMMAR_DISC_START <= _mins(v) <= _ZIMMAR_DISC_END for v in _zim_disc_1.values())
           and all(_ZIMMAR_DISC_START <= _mins(v) <= _ZIMMAR_DISC_END for v in _zim_disc_2.values()))
     check("Zimmar's discovery time still RE-RANDOMIZES across independent rebuilds (spread/jitter unchanged, regression check)",

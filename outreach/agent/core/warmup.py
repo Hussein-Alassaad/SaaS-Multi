@@ -81,7 +81,20 @@ def effective_limit(account: dict, platform: str) -> int:
     key, default = _LIMIT_KEYS.get(platform, ("linkedin_daily_limit", 30))
     platform_limit = account.get(key) or default
 
-    cap = compute_warmup_cap(account)
+    # ADDED 2026-10-04, owner's explicit request: a manually-raised
+    # warmup_current_limit must never be silently lowered by the automatic
+    # age-based ramp. Real scenario this fixes: an account whose DB row was
+    # recreated (e.g. after a restore) gets a fresh created_at, so
+    # compute_warmup_cap() sees "day one" and wants to reset the cap to 5 --
+    # even though the account itself is an established one with months of
+    # real history, just a new row. The ramp only ever needs to prevent a
+    # GENUINELY new account from starting at full volume; it was never meant
+    # to override a value an admin/owner deliberately set higher than what
+    # created_at alone would produce. Only ever raises or leaves unchanged,
+    # never lowers below whatever is already stored.
+    computed_cap = compute_warmup_cap(account)
+    existing = account.get("warmup_current_limit")
+    cap = max(computed_cap, existing) if existing is not None else computed_cap
     if account.get("warmup_current_limit") != cap:
         repo.update_account(account["id"], {"warmup_current_limit": cap})
         account["warmup_current_limit"] = cap
