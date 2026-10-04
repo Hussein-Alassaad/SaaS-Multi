@@ -2854,9 +2854,35 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
             override = account.get("send_daily_limit_override")
             daily_limit = override if override is not None else warmup.effective_limit(account, platform)
             day_start = pool.today_start_iso(tenant_id)
-            already_sent = repo.cold_sends_today_for_account(account_id, day_start, tenant_id=tenant_id)
-            remaining = max(0, daily_limit - already_sent)
-            messages = messages[:remaining]
+
+            # ADDED 2026-10-04, owner's explicit request: follow-ups get
+            # their own separate daily cap on Instagram (5/day), on TOP of
+            # (not sharing) the existing first-contact cap above -- a
+            # follow-up backlog must never compete with fresh leads for the
+            # same 10 slots, and a day that already sent 10 first-contact
+            # messages should still send up to 5 follow-ups. Scoped to
+            # Instagram only: LinkedIn sending is permanently disabled, and
+            # email follow-ups go out immediately on approval via the
+            # Next.js/Resend pipeline, never through this cap at all.
+            if platform == "instagram":
+                first_contact = [m for m in messages if not m.get("is_followup")]
+                followups = [m for m in messages if m.get("is_followup")]
+
+                already_sent_first = repo.cold_sends_today_for_account_by_followup(
+                    account_id, day_start, is_followup=False, tenant_id=tenant_id
+                )
+                remaining_first = max(0, daily_limit - already_sent_first)
+
+                already_sent_followup = repo.cold_sends_today_for_account_by_followup(
+                    account_id, day_start, is_followup=True, tenant_id=tenant_id
+                )
+                remaining_followup = max(0, _INSTAGRAM_FOLLOWUP_DAILY_LIMIT - already_sent_followup)
+
+                messages = first_contact[:remaining_first] + followups[:remaining_followup]
+            else:
+                already_sent = repo.cold_sends_today_for_account(account_id, day_start, tenant_id=tenant_id)
+                remaining = max(0, daily_limit - already_sent)
+                messages = messages[:remaining]
 
     if limit is not None:
         messages = messages[:limit]
@@ -3403,6 +3429,13 @@ _ACCOUNT_HEALTH_CHECK_INTERVAL_HOURS = 4
 # landing on a fixed interval.
 _SEND_GAP_MIN_SECONDS = 6 * 60
 _SEND_GAP_MAX_SECONDS = 13 * 60
+
+# ADDED 2026-10-04, owner's explicit request: Instagram follow-ups get their
+# own separate daily cap, independent of (not sharing) the account's regular
+# first-contact daily limit (ig_daily_limit, currently 10) -- see
+# _run_sending_cycle_for_tenant's own comment on why they're split instead
+# of competing for one shared counter.
+_INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 5
 
 # Two non-overlapping daily windows, Beirut time. Sending 08:00-12:00
 # (owner's original 2026-09-16 design, unchanged). Discovery widened

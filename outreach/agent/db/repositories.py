@@ -868,6 +868,32 @@ def cold_sends_today_for_account(account_id: str, day_start_iso: str, tenant_id:
     return int(row["n"]) if row else 0
 
 
+def cold_sends_today_for_account_by_followup(
+    account_id: str, day_start_iso: str, is_followup: bool, tenant_id: str | None = None
+) -> int:
+    """
+    Same as cold_sends_today_for_account() above, but split by is_followup --
+    added 2026-10-04, owner's explicit request: follow-ups must have their
+    own separate daily cap (5/day on Instagram) from first-contact cold
+    sends (the existing 10/day), rather than both competing for one shared
+    counter. A day where 10 first-contact messages already went out must
+    still allow 5 more follow-ups, not silently hold them back because the
+    combined total already hit the old single cap.
+    """
+    tenant_id = _resolve_tenant(tenant_id)
+    with get_cursor(commit=False) as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS n FROM outreach_messages
+            WHERE tenant_id = %s AND sent_via_account_id = %s AND send_status = 'sent'
+              AND is_reply = false AND is_followup = %s AND sent_at >= %s
+            """,
+            (tenant_id, account_id, is_followup, day_start_iso),
+        )
+        row = cur.fetchone()
+    return int(row["n"]) if row else 0
+
+
 def messages_approved_pending(tenant_id: str | None = None) -> list[Row]:
     """
     Approved messages not yet sent -- what the sending dispatcher reads each
