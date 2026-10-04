@@ -75,6 +75,8 @@ from agent.sending import (
 )
 from agent.sending.instagram_send import NoExistingThread as InstagramNoExistingThread
 from agent.sending.instagram_send import NoMessageButtonAvailable as InstagramNoMessageButtonAvailable
+from agent.sending.instagram_send import SessionLoggedOut as InstagramSessionLoggedOut
+from agent.sending.instagram_send import _raise_if_logged_out as _raise_if_instagram_logged_out
 from agent.sending.linkedin_send import MessageLengthInvalid, NoMessageButtonAvailable, PageMessagingRateLimited
 from agent.sending.linkedin_send import NoExistingThread as LinkedInNoExistingThread
 from agent.sending.whatsapp_send import WhatsAppNotConfigured
@@ -519,11 +521,27 @@ def _save_if_qualified_with_reasons(
     if repo.lead_profile_url_exists(account["tenant_id"], profile_url):
         return False, []
 
+    # ADDED 2026-10-04, owner's explicit request: records this company as
+    # seen (saved or rejected) regardless of which way qualify_profile()
+    # comes out, so neither discovery loop re-spends a profile visit on it
+    # within the next 30 days -- see repositories.was_recently_seen's own
+    # docstring. Keyed the same way each platform's own discovery loop
+    # already keys its candidates: the full profile_url for LinkedIn
+    # (matching lead_profile_url_exists's own key just above), the bare
+    # @handle for Instagram (matching the EARLIER was_recently_seen check
+    # in _discover_instagram's own loop, which runs before the expensive
+    # profile visit this function is called after -- same key on both ends
+    # so that earlier check and this recording actually agree with each
+    # other).
+    profile_key = profile_url if platform == "linkedin" else profile_url.rstrip("/").rsplit("/", 1)[-1]
+
     normalised = {**raw_profile, "platform": platform}
     qualifies, reasons = qualify_profile(normalised, niche)
     if not qualifies:
+        repo.record_seen_profile(platform, profile_key, "rejected", tenant_id=account["tenant_id"])
         return False, reasons
 
+    repo.record_seen_profile(platform, profile_key, "saved", tenant_id=account["tenant_id"])
     repo.insert_lead(account["tenant_id"], {
         "account_id": account["id"],
         "platform": platform,
@@ -1186,8 +1204,20 @@ def _discover_linkedin(
     # attempts still on the table. Now one loop does search -> visit ->
     # qualify per round, and only starts another round if the SAVED count is
     # still short, which is what the owner's rule actually asks for.
+    _discovery_started_at = time.monotonic()
     for attempt in range(_MAX_SEARCH_ATTEMPTS):
         if counts["linkedin_saved"] >= limit:
+            break
+        # ADDED 2026-10-04, owner's explicit request: see
+        # _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS's own comment for the full
+        # reasoning -- this account has run long enough that it must yield
+        # the single shared browser slot to the next account in line,
+        # regardless of how many search rounds remain unused.
+        if time.monotonic() - _discovery_started_at >= _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS:
+            _progress_log.info(
+                "[%s] LinkedIn: time cap reached (%d saved so far) -- yielding to the next account",
+                account.get("label"), counts["linkedin_saved"],
+            )
             break
         if attempt > 0:
             next_terms = _next_search_terms(
@@ -1209,12 +1239,22 @@ def _discover_linkedin(
         tried_niches.add(search_niche)
         results: list[dict] = []
         counts["linkedin_search_terms"].append({"niche": search_niche, "location": search_location})
+        # ADDED 2026-10-04, owner's explicit request: resume from wherever
+        # this account last left off searching THIS EXACT term, instead of
+        # re-reading page 1 every time -- see repositories.get_search_page's
+        # own docstring and linkedin.build_search_url's `page` param for the
+        # full reasoning (LinkedIn's &page=N genuinely returns different
+        # companies, confirmed live). Keyed on search_niche alone, not
+        # location/industry/size too -- those stay constant for a whole
+        # tenant across every round, so the niche term is the only thing
+        # that actually varies call to call and needs its own counter.
+        search_page_num = repo.get_search_page(account["id"], search_niche, tenant_id=account["tenant_id"])
         _progress_log.info(
-            "[%s] LinkedIn round %d/%d: searching %r in %r",
-            account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS, search_niche, search_location,
+            "[%s] LinkedIn round %d/%d: searching %r in %r (page %d)",
+            account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS, search_niche, search_location, search_page_num,
         )
         page.goto(
-            linkedin.build_search_url(search_niche, search_location, industry, size_buckets),
+            linkedin.build_search_url(search_niche, search_location, industry, size_buckets, page=search_page_num),
             timeout=30_000, wait_until="domcontentloaded",
         )
         # LIVE-CONFIRMED 2026-09-12: no explicit wait existed here at all --
@@ -1229,11 +1269,32 @@ def _discover_linkedin(
         # Insurance's intermittent 0-result discovery runs -- not a search
         # or filter problem, a read-too-early problem.
         page.wait_for_timeout(5_000)
+        raw_result_count = 0
         for result in linkedin.extract_search_results(page):
+            raw_result_count += 1
             url = result.get("profile_url")
-            if url and url not in seen_urls:
+            if not url or url in seen_urls:
+                continue
+            # ADDED 2026-10-04, owner's explicit request: a company already
+            # recorded (saved OR rejected) within the last 30 days is
+            # skipped here, for free -- no page load, no re-qualify. This
+            # is what actually makes the page-jump above pay off: once a
+            # term's early pages are fully known, this filters them back
+            # out of the candidate list instantly even if the page-jump
+            # counter itself ever drifts (e.g. after a code change), so the
+            # two mechanisms reinforce each other rather than depending on
+            # perfect bookkeeping alone.
+            if repo.was_recently_seen("linkedin", url, tenant_id=account["tenant_id"]):
                 seen_urls.add(url)
-                results.append(result)
+                continue
+            seen_urls.add(url)
+            results.append(result)
+        # Recorded regardless of whether this page had anything NEW (a page
+        # that turned out to be all-known-candidates still means "page N is
+        # read", so the next call to get_search_page() must still resume at
+        # N+1, not re-read N again next time).
+        if raw_result_count > 0:
+            repo.record_search_page(account["id"], search_niche, search_page_num, tenant_id=account["tenant_id"])
 
         # A round that surfaced almost nothing means the KEYWORD was bad,
         # not that Lebanon has no companies. LIVE-CONFIRMED 2026-09-13: a
@@ -1321,18 +1382,29 @@ def _discover_linkedin(
                     # networkidle (not domcontentloaded) is the whole point of
                     # the retry: it waits for LinkedIn's SPA to actually stop
                     # fetching, which is exactly what the first load didn't do.
-                    # The explicit wait_for_selector mirrors
-                    # extract_company_profile()'s own anchor
-                    # (section.org-about-module__margin-bottom) so the retry
-                    # waits for the real content it's about to read, not just
-                    # that section's empty shell.
+                    # The explicit wait mirrors extract_company_profile()'s
+                    # own anchor -- REAL BUG FOUND AND FIXED 2026-10-04: this
+                    # was still waiting on
+                    # section.org-about-module__margin-bottom, the exact
+                    # selector that 2026-10-01's fix found completely dead
+                    # (LinkedIn moved to hashed class names; see
+                    # extract_company_profile's own docstring). This retry's
+                    # own wait has been silently timing out and doing
+                    # nothing useful since that date -- the try/except below
+                    # masked it as a harmless no-op rather than a real bug,
+                    # since extraction still fell through to the (also
+                    # fixed) heading-based read either way. Updated to
+                    # page.get_by_role (not a raw CSS tag guess) so this
+                    # uses the IDENTICAL, already-proven-live anchor
+                    # extract_company_profile()/_bio_paragraph() use for the
+                    # real read, not a second, unverified selector guess.
                     try:
                         page.goto(
                             profile_url.rstrip("/") + "/about/",
                             timeout=45_000, wait_until="networkidle",
                         )
-                        page.wait_for_selector(
-                            "section.org-about-module__margin-bottom p", timeout=10_000,
+                        page.get_by_role("heading", name="Overview").first.wait_for(
+                            state="attached", timeout=10_000,
                         )
                     except Exception:  # noqa: BLE001 -- extraction below tolerates a half-loaded page, and a still-empty result is handled as a scrape failure right after
                         pass
@@ -1677,6 +1749,74 @@ _BUSINESS_HASHTAG_TERMS = [
     "family business",
     "wholesale",
     "boutique",
+    # ADDED 2026-10-04, owner's explicit request for more variety in
+    # Instagram discovery results -- LIVE-VERIFIED every one of these
+    # (not guessed) via instagram.extract_hashtag_results() against this
+    # exact production code path, each returning 21 real raw posts per
+    # load, same as the original list above. Location/Lebanon-identity
+    # tags rather than business-phrase tags -- a genuinely different pool
+    # of real accounts than the phrase-based terms above tend to surface,
+    # which is the actual point: more distinct starting points for a
+    # search round, not just a longer list of similar terms.
+    "beirut",
+    "lebanon",
+    "beirutlebanon",
+    "lebanesebusinesses",
+    "lebanonstartup",
+    "lebanesebrands",
+    "lebanesedesigner",
+    "madeinlb",
+    "tripoli",
+    "jounieh",
+    "byblos",
+    # ADDED 2026-10-04 (second pass), owner's explicit request ("search for
+    # best 30-50 hashtags we find companies through them") -- same
+    # live-verification discipline as the first 11 above, all 30
+    # confirmed via instagram.extract_hashtag_results() against this exact
+    # production code path, each returning 21 real raw posts. Three
+    # distinct categories, each a genuinely different pool of real
+    # accounts: more Lebanese cities/neighborhoods (beyond the 3 above),
+    # business/commerce-identity tags, and sector-specific tags (food,
+    # fashion, real estate, etc. -- covers Zimmar/Insurance's broad "any
+    # industry" targeting better than the phrase-only tags at the top of
+    # this list ever could alone).
+    "saida",
+    "zahle",
+    "baalbek",
+    "nabatieh",
+    "achrafieh",
+    "hamra",
+    "jbeil",
+    "batroun",
+    "kaslik",
+    "dbayeh",
+    "zalka",
+    "antelias",
+    "bikfaya",
+    "lebanesebusiness",
+    "lebanonmarket",
+    "beirutmarket",
+    "lebanonshopping",
+    "beirutshopping",
+    "lebanonbrand",
+    "supportlebanesebusiness",
+    "smalllebanesebusiness",
+    "entrepreneurlebanon",
+    "startuplebanon",
+    "lebanonstore",
+    "lebanonshop",
+    "onlineshoplebanon",
+    "deliverylebanon",
+    "lebanesefood",
+    "lebanesefashion",
+    "lebanesedesign",
+    "lebanesejewelry",
+    "lebanesecosmetics",
+    "lebanesehandmade",
+    "lebaneseart",
+    "realestatelebanon",
+    "constructionlebanon",
+    "techlebanon",
 ]
 
 
@@ -1750,8 +1890,18 @@ def _discover_instagram(
     # rejected ended the run at 0 with search attempts still unused. One
     # loop now does search -> visit -> qualify per round and only starts
     # another round if the SAVED count is still short.
+    _discovery_started_at = time.monotonic()
     for attempt in range(_MAX_SEARCH_ATTEMPTS):
         if counts["instagram_saved"] >= limit:
+            break
+        # ADDED 2026-10-04, owner's explicit request: same time cap and
+        # same reasoning as _discover_linkedin's own copy -- see
+        # _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS's comment.
+        if time.monotonic() - _discovery_started_at >= _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS:
+            _progress_log.info(
+                "[%s] Instagram: time cap reached (%d saved so far) -- yielding to the next account",
+                account.get("label"), counts["instagram_saved"],
+            )
             break
         if attempt > 0:
             next_tag = _next_hashtag(search_niche, niche, tried_tags, tenant_terms)
@@ -1785,6 +1935,19 @@ def _discover_instagram(
         # 10s was chosen for more margin, but this remains network-dependent
         # and worth revisiting if 0-result runs keep happening.
         page.goto(instagram.build_hashtag_url(search_niche), timeout=30_000, wait_until="domcontentloaded")
+        # REAL BUG FOUND AND FIXED 2026-10-04: checked once per round, right
+        # after the navigation that would actually reveal it -- see
+        # instagram_send._raise_if_logged_out's own 2026-10-04 update for
+        # the full incident (Insurance Instagram hit a real Instagram
+        # security checkpoint and silently returned "0 raw posts" for 16
+        # different hashtags in a row, burning the whole round budget on an
+        # account that was never going to return real results that night).
+        # Raised here so the caller sees a clear, specific failure instead
+        # of a 0-found/0-saved result indistinguishable from an honest weak
+        # night -- propagates up through _discover_instagram and the
+        # per-account discovery loop the same way any other real discovery
+        # exception already does.
+        _raise_if_instagram_logged_out(page, account)
         page.wait_for_timeout(10_000)
         for post in instagram.extract_hashtag_results(page):
             url = post.get("post_url")
@@ -1818,6 +1981,21 @@ def _discover_instagram(
                 profile_url = instagram.resolve_post_to_profile_url(page, post["post_url"])
                 if not profile_url:
                     continue
+                # ADDED 2026-10-04, owner's explicit request, Instagram's
+                # version of the LinkedIn page-jump fix above: Instagram's
+                # hashtag feed has no page-number jump (LIVE-CONFIRMED --
+                # it's cursor-based GraphQL pagination, not a URL param),
+                # so the same underlying goal (don't re-spend a profile
+                # visit on an already-known company) is reached differently
+                # here -- skip BEFORE the expensive profile page load
+                # (extract_profile() + all the qualification checks after
+                # it), right after resolving WHO posted it, which is the
+                # earliest point this loop knows the real company identity.
+                # The post itself still counted toward this round's raw
+                # "found" tally above; only the costly re-visit is skipped.
+                handle = profile_url.rstrip("/").rsplit("/", 1)[-1]
+                if repo.was_recently_seen("instagram", handle, tenant_id=account["tenant_id"]):
+                    continue
                 engagement = instagram.extract_post_engagement(page)  # page is still on the post/reel here
                 page.goto(profile_url, timeout=30_000, wait_until="domcontentloaded")
                 profile = instagram.extract_profile(page)
@@ -1838,7 +2016,8 @@ def _discover_instagram(
                 # (fadeltradingcompany, titus.logistics) replies went
                 # undetected -- the handle this code used to save literally
                 # never appears anywhere in that list.
-                handle = profile_url.rstrip("/").rsplit("/", 1)[-1]
+                # `handle` already computed above for the skip-list check --
+                # same value, reused rather than recomputed a second time.
                 profile["display_name"] = profile.get("display_name") or handle
                 # Own competitors -- see _is_competitor()'s own comment. This
                 # check previously only existed on the LinkedIn side, so
@@ -2077,7 +2256,7 @@ def _bare_domain(website: str | None) -> str | None:
     return host or None
 
 
-def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> None:
+def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> bool:
     """
     Best-effort: if this (LinkedIn) lead has a real website, look up an
     email for it and -- if found -- create a SEPARATE, linked
@@ -2097,6 +2276,14 @@ def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> N
     detected founder still gets a real shot at an email lead instead of
     being a dead end. The saved lead's `notes` records which of the two
     actually found it.
+
+    Returns True if at least one email lead was actually saved for this
+    company, False otherwise (added 2026-09-27, owner's explicit request:
+    the caller uses this to decide whether a LINKEDIN-discovered lead with
+    no findable email gets rejected outright -- see
+    _run_analysis_cycle_for_tenant's own comment on why that check lives
+    there, not here, and why Instagram-discovered leads are deliberately
+    exempt).
 
     Silent no-op (not an error) when: no website, HUNTER_API_KEY isn't
     set, or Hunter genuinely has no match on either tier -- every one of
@@ -2118,7 +2305,7 @@ def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> N
     # ever changes, and costs nothing today since it stays empty either way).
     domain = _bare_domain(lead.get("website"))
     if not domain:
-        return
+        return False
 
     # Domain-sanity check (2026-09-17, real bad match this fixes): a
     # LinkedIn profile's "website" field is sometimes a bio-link/social
@@ -2134,7 +2321,7 @@ def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> N
             "[email-lookup] skipping lead=%s: website resolves to generic platform "
             "domain %s, not the company's own site", lead.get("id"), domain,
         )
-        return
+        return False
 
     # Hunter is the ACTIVE provider (trialing its 50 free credits/month
     # first, per the tenant's explicit choice -- see discovery/hunter.py's
@@ -2156,23 +2343,28 @@ def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> N
     # lookup itself came back with nothing.
     email = None
     found_via = None
-    if founder_name:
-        try:
-            email = hunter.find_email(founder_name, domain)
-        except hunter.HunterNotConfigured:
-            pass  # not configured is not fatal here -- Hunter's other tier or Icypeas may still be, see below
-        else:
-            if email:
-                found_via = f"Hunter Email Finder for {founder_name}"
+    # See config.HUNTER_PAUSED_FOR_ICYPEAS_TRIAL's own docstring: Hunter's
+    # API key and code stay fully intact (deploy.sh's regression tests still
+    # exercise it directly) -- this flag only skips CALLING it here, for a
+    # real, uncontaminated Icypeas-alone trial.
+    if not config.HUNTER_PAUSED_FOR_ICYPEAS_TRIAL:
+        if founder_name:
+            try:
+                email = hunter.find_email(founder_name, domain)
+            except hunter.HunterNotConfigured:
+                pass  # not configured is not fatal here -- Hunter's other tier or Icypeas may still be, see below
+            else:
+                if email:
+                    found_via = f"Hunter Email Finder for {founder_name}"
 
-    if not email:
-        try:
-            email = hunter.find_company_emails(domain)
-        except hunter.HunterNotConfigured:
-            pass  # not configured is not fatal here -- Icypeas may still be, see below
-        else:
-            if email:
-                found_via = "Hunter Domain Search (no founder name identified)"
+        if not email:
+            try:
+                email = hunter.find_company_emails(domain)
+            except hunter.HunterNotConfigured:
+                pass  # not configured is not fatal here -- Icypeas may still be, see below
+            else:
+                if email:
+                    found_via = "Hunter Domain Search (no founder name identified)"
 
     # ADDED 2026-09-20, real owner request: a SECOND, independent provider
     # tried only when Hunter found nothing on either of its own two tiers --
@@ -2186,48 +2378,76 @@ def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> N
     # results to compare against Hunter's own -- see icypeas.py's docstring
     # for what's confirmed-from-docs versus what still needs a real API
     # call to fully verify.
+    # ADDED 2026-09-27, owner's explicit request: unlike Hunter above
+    # (stops at the first tier that finds anything), Icypeas tries BOTH the
+    # founder lookup AND the domain-wide company lookup independently, and
+    # saves a SEPARATE email lead for each one that succeeds -- "if only
+    # founder okay send, so if both send both, if one send anyways." Only
+    # reached when Hunter (tried first, unconditionally, above) found
+    # nothing at all -- Icypeas stays the fallback provider, this dual-save
+    # behavior doesn't change when it's tried, only what happens once it
+    # runs. Both results (when both exist) still count as ONE company
+    # discovered toward the day's cap -- warmup.effective_limit() gates how
+    # many LinkedIn/Instagram leads get PROCESSED per day, not how many
+    # email leads come out the other end of this one call, so two emails
+    # for the same company costs nothing extra against that cap.
+    found_emails: list[tuple[str, str]] = []  # [(email, found_via), ...]
     if not email:
         if founder_name:
             try:
-                email = icypeas.find_email(founder_name, domain)
+                founder_email = icypeas.find_email(founder_name, domain)
             except icypeas.IcypeasNotConfigured:
                 pass
             else:
-                if email:
-                    found_via = f"Icypeas Email Finder for {founder_name}"
-        if not email:
-            try:
-                email = icypeas.find_company_emails(domain)
-            except icypeas.IcypeasNotConfigured:
-                pass
-            else:
-                if email:
-                    found_via = "Icypeas Domain Search (no founder name identified)"
+                if founder_email:
+                    found_emails.append((founder_email, f"Icypeas Email Finder for {founder_name}"))
+        try:
+            company_email = icypeas.find_company_emails(domain)
+        except icypeas.IcypeasNotConfigured:
+            pass
+        else:
+            if company_email and company_email not in {e for e, _ in found_emails}:
+                found_emails.append((company_email, "Icypeas Domain Search"))
+    elif found_via:
+        found_emails.append((email, found_via))
 
-    if not email:
-        return
-
-    # Dedup by the mailto: profile_url (same mechanism discovery already
-    # uses for LinkedIn/Instagram profile URLs, see _save_if_qualified) --
-    # a Findymail lookup that returns the same email a second time (e.g. a
-    # stray re-analysis pass) must not create a duplicate email lead.
-    profile_url = f"mailto:{email}"
-    if repo.lead_profile_url_exists(tenant_id, profile_url):
-        return
+    if not found_emails:
+        return False
 
     accounts = repo.list_accounts(tenant_id)
     email_account = next((a for a in accounts if a.get("platform") == "email" and a.get("status") == "active"), None)
 
-    repo.insert_lead(tenant_id, {
-        "account_id": email_account["id"] if email_account else None,
-        "platform": "email",
-        "business_name": lead.get("business_name"),
-        "profile_url": profile_url,  # no real "profile" for an email lead -- mailto: URI doubles as both display value and the dedup key
-        "website": lead.get("website"),
-        "contact_email": email,
-        "status": "discovered",
-        "notes": f"Email found via {found_via}, linked from LinkedIn lead {lead.get('id')}.",
-    })
+    # ADDED 2026-09-27: a real email being FOUND (found_emails non-empty)
+    # and a real email lead actually EXISTING for this company (either
+    # saved just now, or already saved by a prior run) are the two things
+    # that matter to the caller -- a fresh duplicate-dedup `continue` below
+    # is not a failure, since the earlier save already satisfies "this
+    # company has a real email lead." True the moment either happens.
+    any_email_lead_exists = False
+    for candidate_email, candidate_found_via in found_emails:
+        # Dedup by the mailto: profile_url (same mechanism discovery
+        # already uses for LinkedIn/Instagram profile URLs, see
+        # _save_if_qualified) -- a lookup that returns the same email a
+        # second time (e.g. a stray re-analysis pass) must not create a
+        # duplicate email lead.
+        profile_url = f"mailto:{candidate_email}"
+        if repo.lead_profile_url_exists(tenant_id, profile_url):
+            any_email_lead_exists = True
+            continue
+
+        repo.insert_lead(tenant_id, {
+            "account_id": email_account["id"] if email_account else None,
+            "platform": "email",
+            "business_name": lead.get("business_name"),
+            "profile_url": profile_url,  # no real "profile" for an email lead -- mailto: URI doubles as both display value and the dedup key
+            "website": lead.get("website"),
+            "contact_email": candidate_email,
+            "status": "discovered",
+            "notes": f"Email found via {candidate_found_via}, linked from LinkedIn lead {lead.get('id')}.",
+        })
+        any_email_lead_exists = True
+
+    return any_email_lead_exists
 
 
 def _run_analysis_cycle_for_tenant(tenant_id: str, limit: int | None) -> list[dict]:
@@ -2271,10 +2491,31 @@ def _run_analysis_cycle_for_tenant(tenant_id: str, limit: int | None) -> list[di
         # per-lead step here: an email-lookup problem for THIS lead must not
         # lose the analysis/scoring work already committed above for it,
         # or stop the rest of the batch.
+        email_found = False
         try:
-            _maybe_find_email(tenant_id, lead, founder_result.get("founder_name"))
+            email_found = _maybe_find_email(tenant_id, lead, founder_result.get("founder_name"))
         except Exception as exc:  # noqa: BLE001 -- e.g. HunterLookupFailed (bad key, no credits)
             log_error("email_lookup", exc, lead_id=lead.get("id"), account_id=lead.get("account_id"))
+
+        # ADDED 2026-09-27, owner's explicit request: a LinkedIn-discovered
+        # company with NO findable email is now a dead end, full stop --
+        # "we only need to send by email" -- so it's rejected outright
+        # rather than proceeding to message generation for a LinkedIn send
+        # (LinkedIn sending is separately disabled anyway, but this makes
+        # the rule real and explicit rather than relying on that). Deliberately
+        # scoped to platform == "linkedin" only: Instagram-discovered leads
+        # are EXEMPT per the same instruction ("however insta if not found
+        # the email it is okay") -- an Instagram lead with no email still
+        # proceeds normally to message generation for its own real,
+        # currently-active Instagram send. Overwrites update_fields["status"]
+        # (already committed as "analyzed" above) rather than skipping that
+        # write entirely, so the lead keeps its real analysis/score data for
+        # visibility -- only its STATUS changes, taking it out of
+        # leads_by_status("analyzed", ...)'s pool for message generation.
+        if lead.get("platform") == "linkedin" and not email_found:
+            repo.update_lead(lead["id"], {"status": "rejected_no_email"})
+            results.append({"lead": lead.get("business_name"), "ok": False, "reason": "LinkedIn lead rejected: no email found"})
+            continue
 
         repo.insert_client_history(tenant_id, {
             "lead_id": lead["id"],
@@ -2391,7 +2632,18 @@ def _run_message_generation_cycle_for_tenant(limit: int | None) -> list[dict]:
     results = []
 
     for lead in leads:
-        channels = [lead.get("platform")]
+        # OWNER DECISION 2026-10-02: LinkedIn sending is permanently disabled
+        # (real automation-fingerprint risk, not just a timing bug -- see
+        # linkedin_send.py's own history) and now excluded from message
+        # GENERATION entirely, not just skipped at send time. Before this,
+        # every LinkedIn-discovered lead still got a real channel="linkedin"
+        # message drafted and (if it had an email) a second channel="email"
+        # one alongside it -- the LinkedIn one could never send, just piled
+        # up in the approval queue forever (82 such messages found stuck
+        # this way, going back to September). LinkedIn stays fully active
+        # for DISCOVERY and email-lookup -- this only changes what channel
+        # a LinkedIn-discovered lead's message gets generated on.
+        channels = [] if lead.get("platform") == "linkedin" else [lead.get("platform")]
         if lead.get("whatsapp_found"):
             channels.append("whatsapp")
         # ADDED 2026-09-19, same additional-channel pattern as whatsapp_found
@@ -2608,9 +2860,20 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
         # Placed BEFORE each send except the first, so the cycle starts work
         # immediately at its scheduled run_time and no gap is wasted after
         # the final message.
-        if index > 0:
-            _sleep_between_sends()
+        #
+        # REAL BUG FOUND AND FIXED 2026-09-25: this pacing gap exists to
+        # avoid a detectable instant-burst pattern on the PLATFORM being
+        # sent to -- it protects nothing when the "send" is actually a
+        # no-op skip (see the LinkedIn branch below, disabled 2026-09-25).
+        # Before this fix, a batch of N pending LinkedIn messages still
+        # slept the full 6-13min gap N-1 times even though every single
+        # one just appends a "disabled" result and never touches a
+        # browser -- live-confirmed hanging a manual test for 4+ minutes
+        # with zero real work happening. Channel is read once, before the
+        # sleep decision, instead of after it.
         channel = message.get("channel")
+        if index > 0 and channel != "linkedin":
+            _sleep_between_sends()
         try:
             if channel == "instagram":
                 # DELIBERATE PRODUCT DECISION: Instagram cold sends used to
@@ -2633,11 +2896,23 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
                     "ok": True, "action": "sent",
                 })
             elif channel == "linkedin":
-                linkedin_send.send_message(message)
+                # ADDED 2026-09-25, owner's explicit decision: LinkedIn
+                # DISCOVERY (finding companies, looking up their real
+                # emails via _maybe_find_email) stays ACTIVE -- discovery
+                # is unaffected by the Page-messaging block and is a real,
+                # working source of email leads. Only the LinkedIn SEND
+                # itself is disabled here, so the account's own `status`
+                # can stay 'active' (needed for discovery to keep running
+                # -- see account_pool.get_due_accounts()'s status=='active'
+                # gate) while still never attempting a real LinkedIn
+                # message. Left pending (not marked failed) so a future
+                # re-enable can pick these messages straight back up.
                 results.append({
                     "message_id": message["id"], "channel": channel,
-                    "ok": True, "action": "sent",
+                    "ok": False,
+                    "reason": "LinkedIn sending is disabled (owner decision, 2026-09-25) -- message left pending.",
                 })
+                continue
             else:
                 # Unreachable in practice, not a missing feature: repo.messages_approved_pending()
                 # only ever queries channel IN ('linkedin', 'instagram', 'whatsapp') -- email is
@@ -3115,10 +3390,18 @@ _ACCOUNT_HEALTH_CHECK_INTERVAL_HOURS = 4
 _SEND_GAP_MIN_SECONDS = 6 * 60
 _SEND_GAP_MAX_SECONDS = 13 * 60
 
-# Two non-overlapping daily windows, Beirut time, owner's design
-# (2026-09-16): ALL sending happens 08:00-12:00, ALL discovery happens
-# 20:00-24:00. Accounts are spread evenly across their window rather than
-# all firing at one clock time.
+# Two non-overlapping daily windows, Beirut time. Sending 08:00-12:00
+# (owner's original 2026-09-16 design, unchanged). Discovery widened
+# 2026-09-27 (owner's explicit request) from 20:00-24:00 to 20:15-03:00 --
+# expressed here in MINUTES past midnight, not whole hours, both because
+# 20:15 isn't hour-aligned and because the window now crosses midnight
+# (03:00 the next day is minute 1620, past the 1440-per-day mark) --
+# _spread_within_window()'s own math already operates in this same linear
+# "minutes since midnight" space internally (see that function's own
+# 2026-09-27 comment on why hour*60 arithmetic keeps working unmodified
+# past 1440, and why only its FINAL returned hour needs `% 24`). Accounts
+# are spread evenly across their window rather than all firing at one
+# clock time.
 #
 # Why two separated windows at all: discovery and sending both open a real
 # browser session for the SAME account and contend for core/session.py's
@@ -3138,8 +3421,46 @@ _SEND_GAP_MAX_SECONDS = 13 * 60
 # next morning's sending window.
 _SENDING_WINDOW_START_HOUR = 8
 _SENDING_WINDOW_END_HOUR = 12
-_DISCOVERY_WINDOW_START_HOUR = 20
-_DISCOVERY_WINDOW_END_HOUR = 24
+
+# OWNER REQUEST 2026-09-30: discovery windows are now fully SEQUENTIAL per
+# tenant rather than interleaved across one shared span -- Zimmar gets the
+# first slice of the night entirely to itself, Insurance gets the rest.
+# Replaces the older _INSURANCE_DISCOVERY_HOUR anchored-jitter mechanism
+# below (kept as dead code history is not needed; the anchored jitter
+# existed specifically to dodge Zimmar's discovery times when both tenants
+# shared one window -- with tenants now in disjoint windows there is
+# nothing left to dodge, so both tenants use the same _spread_within_window
+# call, just against their own window).
+#
+# WIDENED 2026-10-04, owner's explicit request: real multi-day data showed
+# a single account's discovery can genuinely take 2-4.5 hours on a real
+# night (LinkedIn's qualify-reject cycle is slow; a rejected candidate
+# still costs a full page load + pacing delay). With 4 real accounts
+# (Zimmar LinkedIn/Instagram, Insurance LinkedIn/Instagram) sharing ONE
+# browser slot, the old 20:15-03:00 span (6h45m total) risked the 4th
+# account in line never getting a turn at all on a night where the first
+# few ran long -- see _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS below, the
+# companion fix that actually guarantees every account gets a turn. Widened
+# to 18:00-04:00 (10h total), split evenly in half between the two tenants
+# (5h each) so each tenant's 2 accounts (2.5h cap apiece) fit its half
+# exactly, with no change to the sequential-per-tenant design above.
+_ZIMMAR_DISCOVERY_WINDOW_START_MINUTES = 18 * 60  # 18:00 Beirut
+_ZIMMAR_DISCOVERY_WINDOW_END_MINUTES = 23 * 60  # 23:00 Beirut
+_INSURANCE_DISCOVERY_WINDOW_START_MINUTES = 23 * 60  # 23:00 Beirut
+_INSURANCE_DISCOVERY_WINDOW_END_MINUTES = 28 * 60  # 04:00 Beirut, next calendar day
+
+# ADDED 2026-10-04, owner's explicit request: the real fix for "the 4th
+# account never gets a turn" -- a hard wall-clock ceiling on how long ANY
+# single account's discovery loop (_discover_linkedin/_discover_instagram)
+# may keep searching, independent of _MAX_SEARCH_ATTEMPTS (20 rounds). A
+# slow night (lots of qualify-rejects, each still costing a real page load)
+# could previously burn all 20 rounds over 4+ real hours; this makes the
+# loop stop and move on well before that, even mid-round-budget, so a
+# slower-than-usual account never consumes another account's whole slice of
+# the night. Deliberately NOT a "nice to reach the target" soft goal --
+# once this elapses, the account keeps whatever it already found and quits,
+# the same way running out of _MAX_SEARCH_ATTEMPTS already does.
+_PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS = 2.5 * 60 * 60
 
 # End-of-day sending recovery, added 2026-09-20 -- see
 # build_daily_schedule()'s own "SECOND, DAILY safety net" comment for the
@@ -3166,12 +3487,13 @@ _SENDING_RECOVERY_MINUTE = 0
 _RESERVED_MINUTE_RANGES: list[tuple[int, int]] = []
 
 
-def _spread_within_window(index: int, total: int, start_hour: int, end_hour: int) -> tuple[int, int]:
+def _spread_within_window(index: int, total: int, start_minutes: int, end_minutes: int) -> tuple[int, int]:
     """
-    Place job `index` of `total` evenly inside [start_hour, end_hour), then
-    jitter it -- so N accounts fill the window instead of stacking on one
-    minute, and no account sits at the identical wall-clock minute forever
-    (see _RUN_TIME_JITTER_MINUTES).
+    Place job `index` of `total` evenly inside [start_minutes, end_minutes)
+    (both expressed as minutes since midnight), then jitter it -- so N
+    accounts fill the window instead of stacking on one minute, and no
+    account sits at the identical wall-clock minute forever (see
+    _RUN_TIME_JITTER_MINUTES).
 
     Clamped to stay strictly inside the window: the jitter must never push
     a job past the boundary, or a "sending" job could drift into the
@@ -3180,19 +3502,32 @@ def _spread_within_window(index: int, total: int, start_hour: int, end_hour: int
     a fresh random.randint() call, not a clamp) if it lands inside any
     range in _RESERVED_MINUTE_RANGES, so it can't collide with another
     tenant's own reserved/anchored slot -- see that constant's own comment.
+
+    CHANGED 2026-09-27, owner's explicit request: takes minutes-since-
+    midnight directly now (not whole hours multiplied by 60 internally),
+    both because discovery's new window starts at 20:15 (not hour-aligned)
+    and because it now crosses midnight -- `end_minutes` can be passed as
+    e.g. 1620 (03:00 the next day, past the 1440-per-day mark) and every
+    line below keeps working unmodified, since nothing here cares whether
+    the linear minute count exceeds 1440. Only the FINAL hour returned to
+    the CronTrigger needs to be a real 0-23 wall-clock hour, via % 24 --
+    APScheduler's CronTrigger has no concept of "hour 26," but "hour 2"
+    (26 % 24) means exactly the same instant for a job that fires once
+    every day regardless of which calendar day a human would call it.
     """
-    window_minutes = (end_hour - start_hour) * 60
+    window_minutes = end_minutes - start_minutes
     # Evenly spaced slots, offset by half a slot so the first job isn't at
     # the very edge of the window and the last isn't at the very end.
     slot = window_minutes // max(total, 1)
-    base = start_hour * 60 + slot * index + slot // 2
-    earliest = start_hour * 60
-    latest = end_hour * 60 - 1
+    base = start_minutes + slot * index + slot // 2
+    earliest = start_minutes
+    latest = end_minutes - 1
     for _attempt in range(20):  # bounded re-draw, never an infinite loop
         jittered = base + random.randint(-_RUN_TIME_JITTER_MINUTES, _RUN_TIME_JITTER_MINUTES)
         total_minutes = max(earliest, min(latest, jittered))
         if not any(lo <= total_minutes <= hi for lo, hi in _RESERVED_MINUTE_RANGES):
-            return divmod(total_minutes, 60)
+            hour, minute = divmod(total_minutes, 60)
+            return hour % 24, minute
     # Exhausted retries. LIVE-CAUGHT 2026-09-17: with `base` itself landing
     # inside a reserved range (e.g. 2 accounts split 20:00-24:00 puts one
     # slot's center at exactly 23:00, dead center of Insurance's reserved
@@ -3209,13 +3544,14 @@ def _spread_within_window(index: int, total: int, start_hour: int, end_hour: int
             if earliest <= candidate <= latest and not any(
                 lo <= candidate <= hi for lo, hi in _RESERVED_MINUTE_RANGES
             ):
-                return divmod(candidate, 60)
+                hour, minute = divmod(candidate, 60)
+                return hour % 24, minute
     # Every minute in the window is reserved (reserved ranges configured to
     # cover the whole window) -- nothing safe exists to return; this is a
     # misconfiguration, not a runtime fluke, so fail loudly rather than
     # silently schedule inside a reserved band.
     raise RuntimeError(
-        f"_spread_within_window({index}, {total}, {start_hour}, {end_hour}): "
+        f"_spread_within_window({index}, {total}, {start_minutes}, {end_minutes}): "
         f"every minute in this window is covered by _RESERVED_MINUTE_RANGES "
         f"({_RESERVED_MINUTE_RANGES}) -- no safe time exists to schedule."
     )
@@ -3261,31 +3597,11 @@ _RUN_TIME_JITTER_MINUTES = 15
 # the tenant is ever renamed/recreated.
 _INSURANCE_BUSINESS_NAME = "Partners Insurance Consultancy"
 
-# Insurance discovery (LinkedIn AND Email) -- owner: "Insurance discovering
-# at 11" (23:00 Beirut). Applied to BOTH of Insurance's discovery jobs for
-# consistency, since the owner's request didn't distinguish by channel.
-# Email is anchored 2 minutes after LinkedIn (23:02) so the two jobs don't
-# fire at the exact same instant as each other -- Insurance's Email account
-# has discovery-only wiring (no sending; see the "email" branch in
-# _run_discovery_cycle_for_tenant), but it still gets its own cron job here.
-# Each is jittered independently (see _INSURANCE_JITTER_MINUTES below), so
-# the 2-minute gap is a starting offset between anchors, not a guarantee --
-# the two jobs can end up a minute or so closer together on any given
-# rebuild, which is fine (this file's own _spread_within_window() jobs
-# already tolerate the same thing); they just won't land on the identical
-# minute as a rule the way pure fixed times would.
-#
-# 23:00 was chosen specifically because it does NOT match any of Zimmar's
-# own live-scheduled discovery times (verified against the actual running
-# schedule on the droplet before picking this: Zimmar's discovery jobs sat
-# at 20:35, 21:04, and 22:11 Beirut that night, spread+jittered inside the
-# same 20:00-24:00 window) -- 23:00/23:02 sits well clear of all three, and
-# with the new +/-10 min jitter the resulting 22:50-23:12 range still sits
-# well clear of Zimmar's live discovery times re-verified 2026-09-17
-# (20:39, 21:25, 21:59).
-_INSURANCE_DISCOVERY_HOUR = 23
-_INSURANCE_DISCOVERY_MINUTE = 0
-_INSURANCE_DISCOVERY_MINUTE_EMAIL = 2
+# Insurance discovery no longer uses an anchored time (OWNER REQUEST
+# 2026-09-30, superseded the old 23:00/23:02 anchors documented in git
+# history) -- Insurance's discovery jobs now use the same
+# _spread_within_window() mechanism as Zimmar, just against Insurance's own
+# disjoint 23:10-03:00 window (see _INSURANCE_DISCOVERY_WINDOW_* above).
 
 # Insurance sending (LinkedIn only) -- owner: anchored time BEFORE 11:00 AM
 # Beirut. 10:00 was chosen as a reasonable anchor for the morning slot that
@@ -3306,16 +3622,18 @@ _INSURANCE_SENDING_MINUTE = 0
 _INSURANCE_JITTER_MINUTES = 10
 
 # Populates _RESERVED_MINUTE_RANGES (declared up near _spread_within_window,
-# before these anchors existed) with Insurance's own anchored bands, widened
-# a couple minutes past its own +/-_INSURANCE_JITTER_MINUTES so another
-# tenant's spread draw can't land RIGHT next to Insurance's actual jittered
-# time either. Module-load-time, not per-build -- these bands are fixed
-# regardless of how Insurance's own time jitters run to run.
+# before these anchors existed) with Insurance's sending anchor band, widened
+# a couple minutes past its own +/-_INSURANCE_JITTER_MINUTES so Zimmar's
+# sending spread draw can't land RIGHT next to Insurance's actual jittered
+# sending time either (both tenants still share one 08:00-12:00 sending
+# window). Module-load-time, not per-build -- this band is fixed regardless
+# of how Insurance's own time jitters run to run.
+#
+# NO discovery entry here anymore (OWNER REQUEST 2026-09-30): Zimmar and
+# Insurance discovery now run in disjoint windows (20:00-23:00 vs
+# 23:10-03:00, see _ZIMMAR_DISCOVERY_WINDOW_*/_INSURANCE_DISCOVERY_WINDOW_*
+# above), so there is no shared window left for a reserved band to protect.
 _RESERVED_MINUTE_RANGES.extend([
-    (
-        _INSURANCE_DISCOVERY_HOUR * 60 + _INSURANCE_DISCOVERY_MINUTE - _INSURANCE_JITTER_MINUTES - 2,
-        _INSURANCE_DISCOVERY_HOUR * 60 + _INSURANCE_DISCOVERY_MINUTE_EMAIL + _INSURANCE_JITTER_MINUTES + 2,
-    ),
     (
         _INSURANCE_SENDING_HOUR * 60 + _INSURANCE_SENDING_MINUTE - _INSURANCE_JITTER_MINUTES - 2,
         _INSURANCE_SENDING_HOUR * 60 + _INSURANCE_SENDING_MINUTE + _INSURANCE_JITTER_MINUTES + 2,
@@ -3331,11 +3649,9 @@ def _insurance_jittered_minutes(hour: int, minute: int) -> tuple[int, int]:
     _spread_within_window() above, just centered on a fixed anchor instead
     of an evenly-spaced slot.
 
-    Each of Insurance's 3 jobs (LinkedIn discovery, Email discovery,
-    LinkedIn sending) calls this separately with its own anchor, so the
-    three draws are independent -- e.g. the two discovery jobs' 2-minute
-    anchor gap is not preserved exactly, only approximately (see
-    _INSURANCE_DISCOVERY_MINUTE_EMAIL's own comment).
+    Only Insurance's LinkedIn sending job still uses this (OWNER REQUEST
+    2026-09-30 moved discovery off anchored jitter entirely, see the comment
+    above _INSURANCE_SENDING_HOUR).
 
     No window-boundary clamping here unlike _spread_within_window(): the
     anchors themselves (23:00/23:02/10:00) already sit with enough margin
@@ -3461,9 +3777,15 @@ def build_daily_schedule() -> BackgroundScheduler:
             if account.get("status") == "active":
                 scheduled_accounts.append((tenant_id, tenant_tz, account))
 
+    # OWNER REQUEST 2026-09-30: LinkedIn sending is permanently disabled (see
+    # the "LinkedIn sending is disabled" check inside the sending cycle
+    # itself) and now excluded from the schedule entirely rather than
+    # scheduling a cron job that fires nightly/morning and does nothing --
+    # only Instagram has real work for this cycle (email is sent entirely by
+    # the Next.js/Resend pipeline, see the comment below).
     sending_accounts = [
         entry for entry in scheduled_accounts
-        if entry[2].get("platform") in ("linkedin", "instagram")
+        if entry[2].get("platform") == "instagram"
     ]
 
     # Resolved once per distinct tenant_id (not per account) so
@@ -3477,46 +3799,32 @@ def build_daily_schedule() -> BackgroundScheduler:
             _insurance_tenant_cache[tenant_id] = _is_insurance_tenant(tenant_id)
         return _insurance_tenant_cache[tenant_id]
 
-    # DISCOVERY -- night window (20:00-24:00 Beirut), every active account.
-    # Minutes already taken by an Insurance discovery job in THIS build, so
-    # its two anchored jobs can't jitter onto the same instant -- see the
-    # re-draw loop below.
-    _insurance_discovery_times: set[tuple[int, int]] = set()
-    for index, (tenant_id, tenant_tz, account) in enumerate(scheduled_accounts):
-        if _is_insurance(tenant_id):
-            # EXPLICIT OWNER REQUEST (2026-09-16), Insurance only -- see
-            # _INSURANCE_DISCOVERY_HOUR's own comment above for why 23:00/
-            # 23:02 and why Email is anchored 2 minutes after LinkedIn.
-            # FOLLOW-UP 2026-09-17: each anchor now gets its own independent
-            # +/-10 min jitter via _insurance_jittered_minutes() rather than
-            # firing at the byte-identical minute every day (see that
-            # function's own docstring and _INSURANCE_JITTER_MINUTES above).
-            # Every other tenant (Zimmar, mjivity1, future tenants) falls
-            # through to the unchanged _spread_within_window() call below.
-            anchor_minute = (
-                _INSURANCE_DISCOVERY_MINUTE_EMAIL
-                if account.get("platform") == "email"
-                else _INSURANCE_DISCOVERY_MINUTE
-            )
-            # Re-draw if this lands on a minute another Insurance discovery
-            # job already took. LIVE-CAUGHT 2026-09-19 by deploy.sh's own
-            # collision check: the LinkedIn/Email anchors sit only 2 minutes
-            # apart (23:00 / 23:02) and each gets its own independent +/-10
-            # min jitter, so landing on the identical minute is a real,
-            # non-trivial chance every rebuild -- and two discovery jobs
-            # firing at the same instant for the same tenant is exactly the
-            # session-lock contention the windows exist to prevent. Bounded
-            # retry, same pattern as _spread_within_window's own re-draw.
-            for _attempt in range(20):
-                hour, minute = _insurance_jittered_minutes(_INSURANCE_DISCOVERY_HOUR, anchor_minute)
-                if (hour, minute) not in _insurance_discovery_times:
-                    break
-            _insurance_discovery_times.add((hour, minute))
-        else:
-            hour, minute = _spread_within_window(
-                index, len(scheduled_accounts),
-                _DISCOVERY_WINDOW_START_HOUR, _DISCOVERY_WINDOW_END_HOUR,
-            )
+    # DISCOVERY -- OWNER REQUEST 2026-09-30: fully sequential per tenant.
+    # Zimmar's accounts spread across 20:00-23:00 Beirut; Insurance's spread
+    # across 23:10-03:00 Beirut. Each tenant is spread independently within
+    # its own window (index/count computed per-tenant, not across the full
+    # scheduled_accounts list), so Zimmar having e.g. 3 accounts and
+    # Insurance having 3 doesn't skew either tenant's spread. Built as two
+    # separate (tenant_id, tenant_tz, account, hour, minute) lists up front
+    # rather than computing hour/minute inline in a single mixed loop, so
+    # each tenant's own enumerate() index is unambiguous.
+    _zimmar_accounts = [e for e in scheduled_accounts if not _is_insurance(e[0])]
+    _insurance_accounts = [e for e in scheduled_accounts if _is_insurance(e[0])]
+    _discovery_schedule: list[tuple[str, str, dict, int, int]] = []
+    for index, (tenant_id, tenant_tz, account) in enumerate(_zimmar_accounts):
+        hour, minute = _spread_within_window(
+            index, len(_zimmar_accounts),
+            _ZIMMAR_DISCOVERY_WINDOW_START_MINUTES, _ZIMMAR_DISCOVERY_WINDOW_END_MINUTES,
+        )
+        _discovery_schedule.append((tenant_id, tenant_tz, account, hour, minute))
+    for index, (tenant_id, tenant_tz, account) in enumerate(_insurance_accounts):
+        hour, minute = _spread_within_window(
+            index, len(_insurance_accounts),
+            _INSURANCE_DISCOVERY_WINDOW_START_MINUTES, _INSURANCE_DISCOVERY_WINDOW_END_MINUTES,
+        )
+        _discovery_schedule.append((tenant_id, tenant_tz, account, hour, minute))
+
+    for tenant_id, tenant_tz, account, hour, minute in _discovery_schedule:
 
         def _run_discovery_for_this_account(tenant_id: str = tenant_id, account_id: str = account["id"]) -> None:
             # Runs the FULL tenant-wide discovery cycle (run_discovery_cycle
@@ -3556,7 +3864,7 @@ def build_daily_schedule() -> BackgroundScheduler:
         else:
             send_hour, send_minute = _spread_within_window(
                 index, len(sending_accounts),
-                _SENDING_WINDOW_START_HOUR, _SENDING_WINDOW_END_HOUR,
+                _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_HOUR * 60,
             )
 
         def _run_sending_for_this_account(tenant_id: str = tenant_id, account_id: str = account["id"]) -> None:

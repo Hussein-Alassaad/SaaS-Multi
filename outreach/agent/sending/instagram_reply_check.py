@@ -27,6 +27,7 @@ silently drift out of sync on how a thread is located.
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from playwright.sync_api import Page
 
@@ -53,16 +54,25 @@ from agent.sending.instagram_send import (
 # up 1:1 with the visible message bubbles in chronological order.
 #
 # The one real wrinkle: the FIRST role='presentation' match on the page is
-# sometimes unrelated sidebar chrome ("What's new... Your note"), not a
-# message -- present only when that inbox-wide prompt hasn't been
-# dismissed. Since there's no clean container to scope into instead, this
-# is filtered by content instead of position: an element whose direct text
-# is exactly that sidebar prompt's own copy is excluded, everything else
-# role='presentation' on the page is treated as a message bubble. Scoped
-# to whatever the caller navigated to (a specific /direct/t/<id>/ thread
-# URL), not the inbox list page, so this never picks up unrelated
-# role='presentation' elements from a different part of the app.
-_SIDEBAR_PROMPT_TEXT = "What's new"
+# sometimes unrelated sidebar chrome (the account's own "Your note" bubble,
+# sitting above the conversation list), not a message -- present on every
+# load, not just when some inbox-wide prompt hasn't been dismissed. Since
+# there's no clean container to scope into instead, this is filtered by
+# content instead of position.
+#
+# REAL BUG FOUND AND FIXED 2026-10-01: the original filter matched the exact
+# string "What's new" -- Instagram's own rotating prompt text ABOVE "Your
+# note" changes periodically (confirmed live: it had silently become "Friday
+# feeling..." by this date), so an exact match on one specific day's prompt
+# stopped catching the bubble the moment Instagram rotated the copy. This
+# silently broke reply-detection for an entire day: LIVE-CONFIRMED 15 real
+# Zimmar leads all got marked as having replied with the identical fabricated
+# text "Friday feeling...Your note" (the note bubble's own two lines,
+# concatenated) -- none of them had actually replied. Fixed by matching on
+# "Your note" instead, which both the "What's new" and "Friday feeling"
+# cases confirm is the STABLE second line, not the rotating prompt text
+# above it -- this should survive future prompt-copy changes the same way.
+_SIDEBAR_PROMPT_TEXT = "Your note"
 _THREAD_MESSAGE_SELECTOR = "div[role='presentation']"
 _THREAD_MESSAGE_BODY_SELECTOR = "div[dir='auto']"
 
@@ -228,7 +238,11 @@ def _read_thread_messages(page: Page) -> list[dict]:
     for i in range(count):
         el = messages.nth(i)
         text = (el.text_content(timeout=2_000) or "").strip()
-        if not text or text.startswith(_SIDEBAR_PROMPT_TEXT):
+        # `in`, not `startswith()`: the bubble's own text is
+        # "<rotating prompt text>Your note" -- "Your note" is the stable
+        # SECOND line, not a prefix, so a prefix check would never match
+        # regardless of which specific prompt copy Instagram shows that day.
+        if not text or _SIDEBAR_PROMPT_TEXT in text:
             continue
         box = el.bounding_box()
         if box:
@@ -452,15 +466,51 @@ def _sync_thread_messages(lead: dict, account: dict, live_messages: list[dict]) 
 
     Returns (new_replies_recorded, new_outgoing_backfilled).
     """
-    def _normalized(text: str) -> str:
-        return "".join((text or "").split())
+    # REAL BUG FOUND AND FIXED 2026-10-01, second half of the same
+    # al_mosbah_ incident: the stored paragraph "Hi al_mosbah_ 👋" (with a
+    # trailing emoji) failed to match its own live DOM bubble, which
+    # rendered as plain "Hi al_mosbah_" -- Instagram's DM panel does not
+    # reliably render every emoji character in this view (confirmed live,
+    # the emoji was simply absent from the bubble's text_content()). Emoji
+    # are stripped from both sides before comparing so a rendering quirk on
+    # Instagram's end can't by itself make a real stored message look new.
+    _EMOJI_RE = re.compile(
+        "["
+        "\U0001F300-\U0001FAFF"  # symbols & pictographs, supplemental symbols, emoticons
+        "\U00002600-\U000027BF"  # misc symbols, dingbats (covers common hand/wave emoji)
+        "\U0001F1E6-\U0001F1FF"  # regional indicators (flag emoji)
+        "]+"
+    )
 
+    def _normalized(text: str) -> str:
+        return "".join(_EMOJI_RE.sub("", text or "").split())
+
+    # REAL BUG FOUND AND FIXED 2026-10-01: known_outgoing used to hold only
+    # the FULL stored body as one normalized string. LIVE-CONFIRMED (18 real
+    # Zimmar leads, e.g. al_mosbah_) that Instagram's actual DM panel renders
+    # one multi-paragraph message (stored here with "\n\n" between
+    # paragraphs) as SEVERAL separate visual bubbles, one per paragraph --
+    # not one bubble containing the line breaks. Every one of those
+    # per-paragraph bubbles then failed to match the single full-body
+    # entry, got misclassified as a genuinely new "us" message (direction
+    # guessed from bubble position, since content didn't match), and got
+    # backfilled as its own OutreachMessage row -- a single real send
+    # fragmented into up to 5 duplicate-looking DB rows every time this poll
+    # ran, even though nothing extra was actually sent on Instagram (this
+    # function only records sends as already-"sent", it never sends).
+    # Fixed by also indexing each stored message's own paragraphs
+    # individually, so a lone-paragraph bubble matches the paragraph it came
+    # from instead of only ever matching a full multi-paragraph body.
     known_incoming = {_normalized(r.get("body")) for r in repo.replies_for_lead(lead["id"])}
-    known_outgoing = {
-        _normalized(m.get("edited_body") or m.get("body"))
-        for m in repo.messages_for_lead(lead["id"])
-        if m.get("channel") == "instagram"
-    }
+    known_outgoing: set[str] = set()
+    for m in repo.messages_for_lead(lead["id"]):
+        if m.get("channel") != "instagram":
+            continue
+        full_body = m.get("edited_body") or m.get("body") or ""
+        known_outgoing.add(_normalized(full_body))
+        for paragraph in full_body.split("\n\n"):
+            if paragraph.strip():
+                known_outgoing.add(_normalized(paragraph))
     # "us" lefts among bubbles THIS READ can already attribute by content --
     # the calibration anchor for step 2 above, computed fresh each call
     # since it only ever needs bubbles from the current live read. This

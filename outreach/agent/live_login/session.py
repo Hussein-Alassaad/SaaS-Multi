@@ -363,7 +363,20 @@ async def _verify_proxy_ip_async(account: dict, page: Page) -> None:
     that function is written against the sync Page API and this module
     runs entirely on the async one.
     """
-    response = await page.goto(_IP_CHECK_URL, timeout=15000)
+    # Same bounded retry as core/session.py's sync verify_proxy_ip() (added
+    # 2026-09-25 after this exact request accounted for 42% of unresolved
+    # error_logs over 3 days -- genuine residential-proxy latency, not a
+    # code defect). Matters here too: this runs during a real user's live
+    # Connect-Account flow, and a single flaky attempt shouldn't fail that
+    # interactive connection outright.
+    response = None
+    for attempt in range(2):
+        try:
+            response = await page.goto(_IP_CHECK_URL, timeout=15000)
+            if response is not None and response.ok:
+                break
+        except Exception:  # noqa: BLE001 -- Playwright's own navigation timeout/network error, retried once below
+            response = None
     if response is None or not response.ok:
         raise LiveLoginError("Could not verify this account's proxy IP before starting login.")
     body = await response.json()

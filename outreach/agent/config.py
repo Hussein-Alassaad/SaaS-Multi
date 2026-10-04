@@ -66,6 +66,19 @@ HUNTER_API_KEY = _get("HUNTER_API_KEY")
 FINDYMAIL_API_KEY = _get("FINDYMAIL_API_KEY")
 ICYPEAS_API_KEY = _get("ICYPEAS_API_KEY")
 
+# ADDED 2026-09-27, owner's explicit request: pause Hunter in the real
+# discovery pipeline (scheduler.py's _maybe_find_email()) so every lead's
+# email lookup goes to Icypeas alone for a real, uncontaminated trial --
+# Icypeas was live-verified working (2026-09-27) but has never yet been
+# compared against Hunter's own real hit rate on real leads. Deliberately
+# NOT done by unsetting HUNTER_API_KEY: deploy.sh's own verification suite
+# calls hunter.find_company_emails() directly as a regression test and
+# needs a real key present to run that check at all -- clearing the key
+# breaks deploys, not just the live fallback chain. This flag is checked
+# only in the one real call site; Hunter's key, its tests, and its code all
+# stay fully intact and instantly reversible by flipping this back.
+HUNTER_PAUSED_FOR_ICYPEAS_TRIAL = True
+
 # ── Live login (remote "Connect account" websocket service) ───────────────────
 # Same value as the main Next.js app's own AUTH_SECRET (src/lib/auth.ts) -- the
 # short-lived connect-account token minted by startConnectAccountAction() is

@@ -148,6 +148,8 @@ model Tenant {
   outreachNotifications   OutreachNotificationLog[]
   outreachRuns            OutreachRun[]
   outreachReplies         OutreachReply[]
+  outreachSearchProgress  OutreachSearchProgress[]
+  outreachSeenProfiles    OutreachSeenProfile[]
 
   // Marketing (tenant-facing) settings features
   companySettings      CompanySettings?
@@ -1151,10 +1153,11 @@ model OutreachAccount {
   lastActiveAt            DateTime? @map("last_active_at")
   createdAt               DateTime  @default(now()) @map("created_at")
 
-  tenant       Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  leads        OutreachLead[]
-  runs         OutreachRun[]
-  sentMessages OutreachMessage[] @relation("OutreachSentViaAccount")
+  tenant         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  leads          OutreachLead[]
+  runs           OutreachRun[]
+  sentMessages   OutreachMessage[]         @relation("OutreachSentViaAccount")
+  searchProgress OutreachSearchProgress[]
 
   @@index([tenantId])
   @@index([tenantId, status])
@@ -1478,4 +1481,61 @@ model OutreachReply {
   @@index([tenantId])
   @@index([leadId, repliedAt])
   @@map("outreach_replies")
+}
+
+// ADDED 2026-10-04, owner's explicit request: LinkedIn discovery was
+// re-searching the same ~10-20 companies for a given search term every time
+// that term came up again (random.choice() over a fixed term list has no
+// memory of where a PRIOR run already looked), because LinkedIn's search
+// results only ever started from page 1. LinkedIn's own search genuinely
+// supports jumping straight to a page number (LIVE-CONFIRMED 2026-10-04:
+// &page=2 returned 10 entirely different companies than &page=1, zero
+// overlap), so this just remembers "we already read up through page N for
+// this term" and resumes from page N+1 next time -- reaches hundreds of
+// real companies over many nights instead of hitting the same first page
+// forever. One row per (tenant, account, searchTerm); accountId is the
+// LinkedIn account doing the searching, not a company being searched.
+model OutreachSearchProgress {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  accountId    String   @map("account_id")
+  searchTerm   String   @map("search_term") // the exact niche/keyword string passed to build_search_url
+  lastPage     Int      @default(1) @map("last_page") // the highest page number already read for this term
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  account OutreachAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, searchTerm])
+  @@index([tenantId])
+  @@map("outreach_search_progress")
+}
+
+// ADDED 2026-10-04, owner's explicit request, companion to
+// OutreachSearchProgress above: records every real company profile this
+// tenant's discovery has actually VISITED and judged -- saved as a real
+// lead or rejected by qualify_profile() -- regardless of platform.
+// Discovery checks this before spending a page load on a candidate it's
+// already seen; a match within the last 30 days is skipped outright
+// (scrolled/paged past for free, no re-visit, no re-qualify) so the SAME
+// already-rejected company doesn't eat round budget a second time. After
+// 30 days a company becomes checkable again -- long enough that a real
+// company's situation (new website, started posting) could genuinely have
+// changed, short enough that it's not a permanent blacklist. Keyed by the
+// company's own profile URL (LinkedIn) or username (Instagram), not by
+// lead id, since a REJECTED candidate never gets an OutreachLead row at
+// all today -- this is the only place that history is recorded.
+model OutreachSeenProfile {
+  id         String   @id @default(cuid())
+  tenantId   String   @map("tenant_id")
+  platform   String // "linkedin" | "instagram"
+  profileKey String   @map("profile_key") // LinkedIn: the /company/<slug>/ profile_url. Instagram: the @username.
+  outcome    String // "saved" | "rejected" -- recorded for visibility only, does not change skip behavior
+  seenAt     DateTime @default(now()) @map("seen_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, platform, profileKey])
+  @@index([tenantId, platform, seenAt])
+  @@map("outreach_seen_profiles")
 }

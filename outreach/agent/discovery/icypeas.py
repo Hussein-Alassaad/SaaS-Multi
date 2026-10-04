@@ -169,7 +169,23 @@ def _poll_for_result(search_id: str, api_key: str) -> dict:
         except ValueError as exc:
             raise IcypeasLookupFailed(f"Icypeas poll returned a non-JSON response: {response.text[:300]}") from exc
 
-        item = body.get("item") or {}
+        # REAL BUG FOUND AND FIXED 2026-09-27, live-verified against
+        # api.icypeas.com/api/bulk-single-searchs/read: this endpoint's real
+        # response shape is {"items": [...]} (a LIST, plural), never
+        # {"item": {...}} (singular) -- that was an unverified guess from
+        # docs alone (see this module's own docstring on what was and
+        # wasn't confirmed). Reading the wrong key silently returned {}
+        # every time, so `status` was always None -- never matched any
+        # _PENDING_STATUSES, so the poll loop exited on its FIRST check
+        # believing the search was already terminal, then
+        # _best_email_from_item() got an empty item and correctly found
+        # nothing to read. Net effect: every single Icypeas lookup silently
+        # returned None regardless of whether Icypeas actually found a real
+        # email -- confirmed live against stripe.com, which Icypeas's raw
+        # API answered with multiple "ultra_sure" emails that this bug
+        # discarded entirely before this fix.
+        items = body.get("items") or []
+        item = items[0] if items else {}
         status = item.get("status")
         if status not in _PENDING_STATUSES:
             return item
@@ -181,10 +197,20 @@ def _poll_for_result(search_id: str, api_key: str) -> dict:
 
 
 def _best_email_from_item(item: dict, *, context: str) -> str | None:
-    """Picks the first email in `item["emails"]` whose certainty clears
-    _ACCEPTABLE_CERTAINTIES, or None. Defensive against every field being
-    absent -- see this module's own docstring for why the exact response
-    shape isn't 100% confirmed from docs alone yet."""
+    """Picks the first email in `item["results"]["emails"]` whose certainty
+    clears _ACCEPTABLE_CERTAINTIES, or None.
+
+    REAL BUG FOUND AND FIXED 2026-09-27, live-verified: the emails array
+    sits one level deeper than originally guessed from docs alone -- under
+    `item["results"]["emails"]`, not `item["emails"]` directly. Confirmed
+    against a real stripe.com search: item["results"]["emails"] held 7
+    "ultra_sure" candidates while item["emails"] (the old, wrong path) was
+    always absent, so this always silently returned None even on a
+    genuinely successful Icypeas match -- see _poll_for_result's own
+    matching fix (the {"items": [...]} vs {"item": {...}} bug) for the
+    other half of why this returned nothing for every single real lookup
+    until now.
+    """
     status = item.get("status")
     if status in _TERMINAL_FAILURE_STATUSES:
         # BAD_INPUT / INSUFFICIENT_FUNDS / ABORTED are real problems, not a
@@ -195,7 +221,8 @@ def _best_email_from_item(item: dict, *, context: str) -> str | None:
     if status in _NOT_FOUND_STATUSES:
         return None
 
-    emails = item.get("emails") or []
+    results = item.get("results") or {}
+    emails = results.get("emails") or []
     for candidate in emails:
         value = candidate.get("email")
         certainty = candidate.get("certainty")

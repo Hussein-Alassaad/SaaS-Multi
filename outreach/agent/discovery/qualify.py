@@ -578,7 +578,25 @@ def qualify_profile(profile: dict, niche: str = "") -> tuple[bool, list[str]]:
     #
     # Unknown post_count is not punished (the scrape genuinely fails to read
     # it on some pages) -- same reasoning as the unknown-follower case above.
-    if qualifies and post_count is not None and post_count < MIN_POSTS_FOR_REAL_PRESENCE:
+    #
+    # OWNER DECISION 2026-10-04: scoped to Instagram ONLY as of this date --
+    # real complaint after two consecutive weak nights (Zimmar: 0/96 saved,
+    # Insurance: 1 saved) where the single most common rejection reason
+    # across both runs was exactly this hard reject ("Zero posts -- likely
+    # inactive"). A LinkedIn company page is routinely maintained by someone
+    # who never posts on it -- real, operating Lebanese SMBs often have a
+    # LinkedIn presence that's just a static profile, unlike Instagram where
+    # zero posts is a much stronger signal of an abandoned/placeholder page.
+    # LinkedIn keeps the existing -2 SOFT score penalty a few lines up
+    # ("Zero posts -- likely inactive or a placeholder account") -- a
+    # LinkedIn company can still fail to qualify on score alone, it just
+    # isn't thrown out outright for this one signal anymore.
+    if (
+        qualifies
+        and platform == "instagram"
+        and post_count is not None
+        and post_count < MIN_POSTS_FOR_REAL_PRESENCE
+    ):
         reasons.append(
             f"Hard reject: {post_count} posts -- no real presence, reaching out here reaches nobody."
         )

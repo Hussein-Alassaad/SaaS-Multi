@@ -654,11 +654,34 @@ def verify_proxy_ip(account: dict, page: "Page") -> str:  # noqa: F821
     discovery/ already keeps from db/repositories.py, per that module's own
     docstring).
     """
-    response = page.goto(_IP_CHECK_URL, timeout=_IP_CHECK_TIMEOUT_MS)
+    # REAL BUG FOUND AND FIXED 2026-09-25: this single request accounted for
+    # 151 of 359 (42%) of all unresolved error_logs rows across a 3-day
+    # window -- confirmed live, not a code defect (a direct, no-proxy
+    # request to the same URL from this droplet resolves in ~0.2s), but
+    # genuine residential-proxy latency/flakiness under the load these
+    # accounts run at. A real client-facing symptom: this populated the
+    # tenant-visible Errors page with hundreds of "real problems" that were
+    # actually transient network blips, not anything a client should ever
+    # need to see or act on. One bounded retry absorbs a single flaky
+    # attempt without masking a genuinely broken proxy (verify_proxy_ip's
+    # own real safety check -- the IP-mismatch comparison below -- still
+    # runs exactly as before on whichever attempt succeeds).
+    last_exc: Exception | None = None
+    response = None
+    for attempt in range(2):
+        try:
+            response = page.goto(_IP_CHECK_URL, timeout=_IP_CHECK_TIMEOUT_MS)
+            if response is not None and response.ok:
+                break
+        except Exception as exc:  # noqa: BLE001 -- Playwright's own navigation timeout/network error, retried once below
+            last_exc = exc
+            response = None
     if response is None or not response.ok:
         raise RuntimeError(
             f"Could not verify proxy IP for account {account.get('id')} -- "
-            f"IP-check request failed (status {response.status if response else 'no response'})."
+            f"IP-check request failed after 2 attempts "
+            f"(status {response.status if response else 'no response'}"
+            f"{f', last error: {last_exc}' if last_exc else ''})."
         )
     body = response.json()
     current_ip = body.get("ip")

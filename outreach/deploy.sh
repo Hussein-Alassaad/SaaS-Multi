@@ -103,8 +103,19 @@ check("Instagram follower floor cuts exactly at 300",
       (not ig(90)) and (not ig(299)) and ig(300) and ig(1200))
 
 # Quality gates the owner asked for: no posts / no presence / dormant.
-check("zero-post page rejected",
-      not qualify.qualify_profile(profile(post_count=0, recent_activity=False), "")[0])
+#
+# OWNER DECISION 2026-10-04: the zero-post hard reject is now Instagram-ONLY
+# (see qualify.py's own 2026-10-04 comment at this exact check) -- a real
+# LinkedIn company page is routinely maintained by someone who never posts
+# on it, and two consecutive weak discovery nights (Zimmar 0/96, Insurance
+# 1 saved) had this hard reject as the single most common rejection reason
+# on BOTH. A LinkedIn zero-post page still carries the existing -2 SOFT
+# score penalty, it just no longer gets thrown out outright for that one
+# signal alone.
+check("zero-post Instagram page still hard-rejected (regression check -- must NOT be weakened for Instagram)",
+      not qualify.qualify_profile(profile(platform="instagram", post_count=0, recent_activity=False, follower_or_headcount=1000), "")[0])
+check("zero-post LinkedIn page no longer carries the hard-reject reason (2026-10-04 owner decision)",
+      not any("Hard reject: 0 posts" in r for r in qualify.qualify_profile(profile(platform="linkedin", post_count=0, recent_activity=False), "")[1]))
 check("page with no website and no real bio rejected",
       not qualify.qualify_profile(profile(bio="", has_website=False), "")[0])
 check("page with posts but dormant rejected",
@@ -830,6 +841,21 @@ class _FakeDeliveryRepo:
 _orig_update_message = _delivery.repo.update_message
 _fake_repo = _FakeDeliveryRepo()
 _delivery.repo.update_message = _fake_repo.update_message
+# REAL BUG FOUND AND FIXED 2026-09-25: settle_after_failure() ALSO calls
+# scheduler.log_error() (imported lazily inside the function, so it can't
+# be patched via _delivery's own module reference) on the delivered-but-
+# teardown-failed path -- that's a REAL write to the production error_logs
+# table via repo.insert_error(), completely bypassing the _fake_repo mock
+# above, which only covers repo.update_message. Confirmed live: 53 rows
+# with tenantId=NULL and message "...RuntimeError: teardown blew up..." --
+# a synthetic string that exists ONLY in this test, one per deploy.sh run
+# -- had been silently accumulating in the real table this whole time,
+# indistinguishable from a genuine unresolved incident to anyone (including
+# a health-check agent) reading that table. Mocked the same way as
+# repo.update_message: swap it out for the duration of this block, restore
+# in the same finally.
+_orig_log_error = sch.log_error
+sch.log_error = lambda *a, **k: None
 try:
     _d = _delivery.Delivery()
     _d.mark()  # simulates: the send click already succeeded
@@ -845,6 +871,7 @@ try:
           any(c.get("send_status") == "pending" for c in _fake_repo.calls))
 finally:
     _delivery.repo.update_message = _orig_update_message
+    sch.log_error = _orig_log_error
 
 for _mod, _fn_name, _label in (
     (linkedin_send, "send_message", "linkedin_send.send_message"),
@@ -858,28 +885,26 @@ for _mod, _fn_name, _label in (
     check("%s uses the shared Delivery/settle_after_failure invariant, not a bare except-Exception reset (regression check)" % _label,
           "settle_after_failure(" in _src and "Delivery(" in _src)
 
-# Owner-requested 2026-09-16, REVISED 2026-09-17: Insurance runs at times
-# ANCHORED near a fixed hour (discovery ~23:00/23:02, sending ~10:00), not
-# spread across the whole window the way every other tenant (Zimmar,
-# mjivity1, future tenants) is via _spread_within_window(). The 2026-09-16
-# version made these times perfectly fixed/byte-identical every rebuild;
-# the owner then flagged that as its own bot-detection fingerprint (the
-# same "same wall-clock minute forever" pattern that got Zimmar's LinkedIn
-# account checkpointed), so as of 2026-09-17 each anchor gets its own
-# independent +/-_INSURANCE_JITTER_MINUTES (10) jitter, re-drawn every
-# build_daily_schedule() call -- see _insurance_jittered_minutes() in
-# scheduler.py. Verified three ways: (1) _is_insurance_tenant() correctly
-# identifies Insurance by business_name (the same identifier
-# messaging/generate.py already keys its own fixed templates on) and
-# nothing else; (2) BEHAVIORALLY, by actually calling build_daily_schedule()
-# against the real live DB and reading back the real APScheduler jobs it
-# produced -- Insurance's discovery/sending jobs must land WITHIN the
-# tight +/-10 min band around their anchors on every rebuild, and must
-# VARY across independent rebuilds (bounded randomness, no longer a fixed
-# minute), while Zimmar's must keep re-randomizing across its own much
-# wider spread window; (3) Insurance's per-rebuild range stays tightly
-# clustered near its anchor rather than spread across the full 4-hour
-# window the way Zimmar's spread mechanism is.
+# Owner-requested 2026-09-16, REVISED 2026-09-17, REVISED AGAIN 2026-09-30:
+# Insurance's SENDING job still runs at a time ANCHORED near a fixed hour
+# (~10:00 Beirut, jittered +/-10 min), not spread across the whole window the
+# way every other tenant is via _spread_within_window(). Insurance's
+# DISCOVERY jobs, however, no longer use an anchor at all as of 2026-09-30 --
+# the owner asked for Zimmar and Insurance discovery to run in fully
+# SEQUENTIAL, non-overlapping windows instead of one shared 20:15-03:00 span
+# (Zimmar 20:00-23:00, Insurance 23:10-03:00), so there is nothing left for
+# an anchor to dodge -- both tenants' discovery now uses the same
+# _spread_within_window() mechanism, just against their own disjoint window.
+# Verified: (1) _is_insurance_tenant() correctly identifies Insurance by
+# business_name (the same identifier messaging/generate.py already keys its
+# own fixed templates on) and nothing else; (2) BEHAVIORALLY, by actually
+# calling build_daily_schedule() against the real live DB and reading back
+# the real APScheduler jobs it produced -- Insurance's discovery jobs must
+# land strictly inside 23:10-03:00 and Zimmar's strictly inside 20:00-23:00,
+# on every rebuild, with neither ever crossing into the other's window; (3)
+# Insurance's sending job must still land within the tight +/-10 min band
+# around its 10:00 anchor and VARY across independent rebuilds (bounded
+# randomness, not a fixed minute).
 check("_is_insurance_tenant() identifies Insurance by business_name (same identifier generate.py's fixed templates use)",
       sch._INSURANCE_BUSINESS_NAME == _gen._INSURANCE_BUSINESS_NAME)
 
@@ -939,10 +964,34 @@ def _mins(pair):
     h, m = pair
     return int(h) * 60 + int(m)
 
-_INS_DISC_LI_ANCHOR = 23 * 60 + 0     # 23:00
-_INS_DISC_EMAIL_ANCHOR = 23 * 60 + 2  # 23:02
+# Insurance's discovery window (23:10-03:00) crosses midnight, but the real
+# CronTrigger hour stored on a job is always a plain 0-23 wall-clock hour
+# (_spread_within_window's own % 24, since APScheduler has no "hour 26"
+# concept -- see that function's docstring in scheduler.py). A job that
+# actually fires at 01:30 (linearly 25:30 within the window) therefore comes
+# back from _job_times() as the raw pair ("1", "30"), and plain _mins() on
+# that gives 90 -- nowhere near the window's 1390-1620 linear-minute range.
+# This wraps any hour that could only mean "after midnight, inside this
+# window" (i.e. less than the window's own start-of-day hour) back into the
+# same linear timeline _spread_within_window built the window in, so the
+# comparison below is apples-to-apples.
+def _mins_after_midnight(pair, window_start_minutes):
+    total = _mins(pair)
+    if total < window_start_minutes % (24 * 60):
+        total += 24 * 60
+    return total
+
 _INS_SEND_ANCHOR = 10 * 60 + 0        # 10:00
 _INS_JITTER = 10  # must match scheduler._INSURANCE_JITTER_MINUTES
+# WIDENED 2026-10-04, owner's explicit request -- see scheduler.py's own
+# comment above _ZIMMAR_DISCOVERY_WINDOW_START_MINUTES for the full
+# reasoning (real multi-day data showed a single account can take 2-4.5h,
+# risking the 4th of 4 real accounts never getting a turn in the old
+# 20:15-03:00 span).
+_ZIMMAR_DISC_START = 18 * 60          # 18:00, must match scheduler._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES
+_ZIMMAR_DISC_END = 23 * 60            # 23:00, must match scheduler._ZIMMAR_DISCOVERY_WINDOW_END_MINUTES
+_INS_DISC_START = 23 * 60             # 23:00, must match scheduler._INSURANCE_DISCOVERY_WINDOW_START_MINUTES
+_INS_DISC_END = 28 * 60               # 04:00 next day, must match scheduler._INSURANCE_DISCOVERY_WINDOW_END_MINUTES
 
 # Insurance's/Zimmar's LinkedIn accounts can legitimately be PAUSED (e.g.
 # 2026-09-17: both paused while diagnosing droplet resource contention) --
@@ -952,23 +1001,13 @@ _INS_JITTER = 10  # must match scheduler._INSURANCE_JITTER_MINUTES
 # check. A paused account is not a regression; an ACTIVE account with
 # broken timing is -- these checks still catch that case fully.
 if _ins_disc_1:
-    check("Insurance's discovery job(s) land within +/-10 min of their 23:00/23:02 anchors on both rebuilds (bounded jitter, not the full 20:00-24:00 window)",
-          all(
-              abs(_mins(v) - _INS_DISC_LI_ANCHOR) <= _INS_JITTER
-              or abs(_mins(v) - _INS_DISC_EMAIL_ANCHOR) <= _INS_JITTER
-              for v in _ins_disc_1.values()
-          )
-          and all(
-              abs(_mins(v) - _INS_DISC_LI_ANCHOR) <= _INS_JITTER
-              or abs(_mins(v) - _INS_DISC_EMAIL_ANCHOR) <= _INS_JITTER
-              for v in _ins_disc_2.values()
-          ))
-    check("Insurance's discovery time VARIES across independent rebuilds (owner's 2026-09-17 fix -- no longer byte-identical every day; checked across 8 rebuilds so one coincidental match isn't a false flake)",
+    check("Insurance's discovery job(s) land strictly inside its own 23:00-04:00 window on both rebuilds (OWNER REQUEST 2026-09-30/2026-10-04: sequential, non-overlapping per-tenant windows)",
+          all(_INS_DISC_START <= _mins_after_midnight(v, _INS_DISC_START) <= _INS_DISC_END for v in _ins_disc_1.values())
+          and all(_INS_DISC_START <= _mins_after_midnight(v, _INS_DISC_START) <= _INS_DISC_END for v in _ins_disc_2.values()))
+    check("Insurance's discovery time VARIES across independent rebuilds (spread/jitter, checked across 8 rebuilds so one coincidental match isn't a false flake)",
           any(x != _ins_disc_all[0] for x in _ins_disc_all[1:]))
-    check("Insurance's discovery times stay tightly clustered near its anchor (span <= 2x jitter), unlike Zimmar's full-window spread",
-          (max(_mins(v) for v in _ins_disc_1.values()) - min(_mins(v) for v in _ins_disc_1.values())) <= 2 * _INS_JITTER + 2)
 else:
-    print("   OK   Insurance's LinkedIn/Email accounts are currently paused -- no discovery jobs to check, correctly")
+    print("   OK   Insurance's LinkedIn/Instagram/Email accounts are currently paused -- no discovery jobs to check, correctly")
 
 if _ins_send_1:
     check("Insurance's sending job lands within +/-10 min of its 10:00 Beirut anchor on both rebuilds, and stays before 11:00",
@@ -983,51 +1022,46 @@ else:
 if not _zim_disc_1:
     print("   OK   Zimmar's LinkedIn/Instagram/Email accounts are currently paused -- no discovery jobs to check, correctly")
 else:
-    # REAL BUG FOUND AND FIXED 2026-09-17: with only 2 active Zimmar
-    # accounts, _spread_within_window()'s slot-center for one of them lands
-    # at EXACTLY 23:00 -- dead center of Insurance's reserved band -- and a
-    # live check across 4 separate rebuilds that same day caught Zimmar's
-    # discovery landing at 22:51/23:05/23:07/23:11, squarely inside
-    # Insurance's 22:48-23:14 zone. Checking only _sched1/_sched2 (2
-    # rebuilds) missed this reliably; sampling many more rebuilds here
-    # catches the systematic collision this specific 2-account slot-center
-    # produces, not just an unlucky one-off jitter draw.
-    _zim_disc_many = [_zim_disc_1, _zim_disc_2]
-    for _ in range(18):
-        _extra_sched = sch.build_daily_schedule()
-        _zim_disc_many.append(_job_times(_extra_sched.get_jobs(), "discovery", _ZIMMAR_TENANT_ID))
-    check("Zimmar's discovery time is NOT pinned near Insurance's anchor hour/minute, across 20 independent rebuilds (regression check for the 2026-09-17 reserved-range collision)",
-          all(
-              not any(abs(_mins(v) - _INS_DISC_LI_ANCHOR) <= _INS_JITTER
-                      or abs(_mins(v) - _INS_DISC_EMAIL_ANCHOR) <= _INS_JITTER
-                      for v in _times.values())
-              for _times in _zim_disc_many
-          ))
+    check("Zimmar's discovery job(s) land strictly inside its own 18:00-23:00 window on both rebuilds (OWNER REQUEST 2026-09-30/2026-10-04: sequential, non-overlapping per-tenant windows)",
+          all(_ZIMMAR_DISC_START <= _mins(v) <= _ZIMMAR_DISC_END for v in _zim_disc_1.values())
+          and all(_ZIMMAR_DISC_START <= _mins(v) <= _ZIMMAR_DISC_END for v in _zim_disc_2.values()))
     check("Zimmar's discovery time still RE-RANDOMIZES across independent rebuilds (spread/jitter unchanged, regression check)",
           _zim_disc_1 != _zim_disc_2)
 
-# No literal collision: Insurance's jittered times must not exactly match
-# any of Zimmar's own currently-scheduled job times (the owner's own
-# explicit constraint, re-affirmed 2026-09-17 when fixed times became
-# jittered), checked across BOTH independent rebuilds since Insurance's
-# times now move -- and Insurance's own two discovery jobs (LinkedIn +
-# Email) must not fire at the identical instant as each other.
-_zim_all_times = (
-    set(_zim_disc_1.values()) | set(_zim_disc_2.values())
-    | set(_job_times(_sched1.get_jobs(), "sending", _ZIMMAR_TENANT_ID).values())
+# With Zimmar confined to 20:00-23:00 and Insurance confined to 23:10-03:00
+# (disjoint, non-overlapping windows -- OWNER REQUEST 2026-09-30), the two
+# tenants' DISCOVERY times can never literally collide by construction, so
+# there is nothing left to check there. Sending still shares one
+# 08:00-12:00 window across both tenants (Instagram only, LinkedIn sending
+# jobs no longer scheduled at all -- see the check below), so a literal
+# collision there is still worth checking directly.
+_zim_send_times = (
+    set(_job_times(_sched1.get_jobs(), "sending", _ZIMMAR_TENANT_ID).values())
     | set(_job_times(_sched2.get_jobs(), "sending", _ZIMMAR_TENANT_ID).values())
 )
-if _ins_disc_1 or _ins_send_1 or _zim_all_times:
-    check("Insurance's jittered discovery/sending times do not exactly match any of Zimmar's own live-scheduled job times (either rebuild)",
-          not (set(_ins_disc_1.values()) & _zim_all_times)
-          and not (set(_ins_disc_2.values()) & _zim_all_times)
-          and not (set(_ins_send_1.values()) & _zim_all_times)
-          and not (set(_ins_send_2.values()) & _zim_all_times))
+if _ins_send_1 or _zim_send_times:
+    check("Insurance's jittered sending time does not exactly match any of Zimmar's own live-scheduled sending job times (either rebuild)",
+          not (set(_ins_send_1.values()) & _zim_send_times)
+          and not (set(_ins_send_2.values()) & _zim_send_times))
 else:
-    print("   OK   Both tenants' LinkedIn accounts are currently paused -- no collision to check, correctly")
+    print("   OK   Both tenants' Instagram sending accounts are currently paused -- no collision to check, correctly")
 if _ins_disc_1:
-    check("Insurance's own discovery jobs (LinkedIn + Email) don't collide with each other at the identical instant",
+    check("Insurance's own discovery jobs don't collide with each other at the identical instant",
           len(set(_ins_disc_1.values())) == len(_ins_disc_1) or len(_ins_disc_1) == 1)
+
+# OWNER REQUEST 2026-09-30: LinkedIn sending is permanently disabled and no
+# longer scheduled at all -- only Instagram accounts should ever produce a
+# "sending-*" job. A LinkedIn account showing up here would mean the
+# sending_accounts filter in build_daily_schedule() regressed back to
+# scheduling a job that does nothing when it fires.
+_all_sending_jobs = [j for j in _sched1.get_jobs() if j.id.startswith("sending-") and not j.id.startswith("sending-recovery-") and not j.id.startswith("sending-catchup-")]
+_sending_job_account_ids = {j.id.rsplit("-", 1)[-1] for j in _all_sending_jobs}
+_linkedin_account_ids = {
+    a["id"] for tid in (_ZIMMAR_TENANT_ID, _INSURANCE_TENANT_ID)
+    for a in sch.pool.load_accounts(tid) if a.get("platform") == "linkedin"
+}
+check("No LinkedIn account has a sending job scheduled (LinkedIn sending permanently disabled, removed from the schedule entirely 2026-09-30)",
+      not (_sending_job_account_ids & _linkedin_account_ids))
 
 # ---------------------------------------------------------------------------
 # Real resource-contention incident, 2026-09-17: Zimmar LinkedIn's scheduled
@@ -1377,9 +1411,17 @@ check("a partial scrape with ONLY a headquarters does not trigger the retry",
 # scrape-failure log, and must NOT reach qualification as a normal rejection.
 check("_discover_linkedin gates a retry on the all-empty signature (not on every candidate)",
       "_linkedin_scrape_looks_empty(profile)" in _lk_src)
+# REAL BUG FOUND AND FIXED 2026-10-04: this check's own string literal
+# ("section.org-about-module__margin-bottom p") was the exact dead
+# selector 2026-10-01's fix removed from the real retry code -- this test
+# was checking scheduler.py still contained its OWN bug. Updated to check
+# for the replacement anchor instead: the same get_by_role("heading",
+# name="Overview") locator extract_company_profile()'s own real read
+# already uses, reused here rather than introducing a second, separately-
+# unverified selector.
 check("the retry re-loads /about with a stronger wait than domcontentloaded (networkidle) plus an explicit about-panel selector wait",
       'wait_until="networkidle"' in _lk_src
-      and "section.org-about-module__margin-bottom p" in _lk_src)
+      and 'get_by_role("heading", name="Overview")' in _lk_src)
 check("a still-empty retry is logged DISTINCTLY as a scrape failure, not as a qualify rejection (this is what masked the bug in the logs)",
       "scrape failed (empty /about after retry)" in _lk_src)
 check("a still-empty retry skips the candidate instead of passing empty data to qualification",

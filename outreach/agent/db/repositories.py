@@ -1485,3 +1485,107 @@ def has_run_today(tenant_id: str, account_id: str, day_start_iso: str) -> bool:
         )
         row = cur.fetchone()
     return row is not None
+
+
+# ADDED 2026-10-04, owner's explicit request: LinkedIn discovery was
+# re-searching the same first page of results for a search term every time
+# that term came up again, since LinkedIn search always started at page 1
+# with no memory of a prior run. See OutreachSearchProgress's own schema
+# comment (prisma/schema.prisma) for the full reasoning and the live test
+# that confirmed LinkedIn's &page=N param actually works (zero overlap
+# between page 1 and page 2 results).
+def get_search_page(account_id: str, search_term: str, tenant_id: str | None = None) -> int:
+    """
+    The next LinkedIn search results page to read for this account+term --
+    1 if this exact (account, term) pair has never been searched before.
+    Scoped to account_id (not tenant_id alone) since two accounts on the
+    same tenant independently searching the same term should each track
+    their own progress, not share one counter.
+    """
+    tenant_id = _resolve_tenant(tenant_id)
+    with get_cursor(commit=False) as cur:
+        cur.execute(
+            """
+            SELECT last_page FROM outreach_search_progress
+            WHERE tenant_id = %s AND account_id = %s AND search_term = %s
+            LIMIT 1
+            """,
+            (tenant_id, account_id, search_term),
+        )
+        row = cur.fetchone()
+    return row["last_page"] + 1 if row else 1
+
+
+def record_search_page(account_id: str, search_term: str, page: int, tenant_id: str | None = None) -> None:
+    """
+    Records that `page` has now been read for this account+term, so the
+    NEXT call to get_search_page() for the same pair resumes at page+1.
+    Upsert on the (account_id, search_term) unique constraint -- a term
+    searched again just advances the same row, it never creates a second
+    one for the same pair.
+    """
+    tenant_id = _resolve_tenant(tenant_id)
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO outreach_search_progress (id, tenant_id, account_id, search_term, last_page, updated_at)
+            VALUES (%s, %s, %s, %s, %s, now())
+            ON CONFLICT (account_id, search_term)
+            DO UPDATE SET last_page = EXCLUDED.last_page, updated_at = now()
+            """,
+            (_new_id(), tenant_id, account_id, search_term, page),
+        )
+
+
+# ADDED 2026-10-04, owner's explicit request, companion to the search-page
+# functions above: tracks every company profile this tenant's discovery has
+# actually visited and judged (saved OR rejected), so a round can skip a
+# recently-seen candidate instantly instead of spending a page load and a
+# full re-qualify on a company already known to be a dead end (or already
+# saved). See OutreachSeenProfile's own schema comment for the full
+# reasoning on the 30-day window.
+_SEEN_PROFILE_WINDOW_DAYS = 30
+
+
+def was_recently_seen(platform: str, profile_key: str, tenant_id: str | None = None) -> bool:
+    """
+    True if this exact company (by LinkedIn profile_url or Instagram
+    @username) was recorded as seen -- saved or rejected -- within the
+    last _SEEN_PROFILE_WINDOW_DAYS. After that window, a company is fair
+    game again (its situation may genuinely have changed).
+    """
+    tenant_id = _resolve_tenant(tenant_id)
+    with get_cursor(commit=False) as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM outreach_seen_profiles
+            WHERE tenant_id = %s AND platform = %s AND profile_key = %s
+              AND seen_at >= now() - make_interval(days => %s)
+            LIMIT 1
+            """,
+            (tenant_id, platform, profile_key, _SEEN_PROFILE_WINDOW_DAYS),
+        )
+        row = cur.fetchone()
+    return row is not None
+
+
+def record_seen_profile(platform: str, profile_key: str, outcome: str, tenant_id: str | None = None) -> None:
+    """
+    Records that this company was just visited and judged. `outcome` is
+    "saved" or "rejected" -- stored for visibility only (e.g. a future
+    dashboard view of discovery history), does not itself change
+    was_recently_seen()'s behavior. Upsert on the (tenant_id, platform,
+    profile_key) unique constraint -- re-seeing the same company just
+    refreshes seen_at and outcome, it never creates a duplicate row.
+    """
+    tenant_id = _resolve_tenant(tenant_id)
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO outreach_seen_profiles (id, tenant_id, platform, profile_key, outcome, seen_at)
+            VALUES (%s, %s, %s, %s, %s, now())
+            ON CONFLICT (tenant_id, platform, profile_key)
+            DO UPDATE SET outcome = EXCLUDED.outcome, seen_at = now()
+            """,
+            (_new_id(), tenant_id, platform, profile_key, outcome),
+        )

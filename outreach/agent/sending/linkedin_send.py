@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import random
 from pathlib import Path
 
 from playwright.sync_api import Page
@@ -268,32 +269,43 @@ _VIEWING_SETTING_MODAL_SELECTOR = "[data-test-modal-id='org-page-viewing-setting
 _DEBUG_CAPTURE_DIR = Path(__file__).resolve().parents[2] / "debug_captures"
 
 
-def _capture_topic_dropdown_failure(page: Page, lead: dict) -> None:
+def _capture_topic_dropdown_failure(page: Page, lead: dict, reason: str = "topic-dropdown-timeout") -> None:
     """
-    Best-effort forensic snapshot for the Conversation-topic <select>
-    timeout specifically -- see the module comment above. Saves a timestamped
-    .html (page.content()) and .png (page.screenshot()) pair to
-    _DEBUG_CAPTURE_DIR so the NEXT natural (unattended, scheduled) failure
-    leaves real evidence instead of another unexplained log line. Never
-    raises: a capture failure must never prevent or alter the real
-    NoMessageButtonAvailable/timeout handling that already follows this
+    Best-effort forensic snapshot for a Company-modal failure -- see the
+    module comment above. Saves a timestamped .html (page.content()) and
+    .png (page.screenshot()) pair to _DEBUG_CAPTURE_DIR so the NEXT natural
+    (unattended, scheduled) failure leaves real evidence instead of another
+    unexplained log line. Never raises: a capture failure must never
+    prevent or alter the real exception handling that already follows this
     call.
+
+    `reason` names the failure this capture is FOR (the filename prefix) --
+    ADDED 2026-09-23: previously hardcoded to "topic-dropdown-timeout" even
+    when called from the PageMessagingRateLimited path, so a rate-limit
+    capture and a genuine dropdown-timeout capture were indistinguishable
+    by filename alone. Real, live investigation this fixes: the owner's
+    clients report messaging the SAME company Pages manually, by hand, on
+    these SAME accounts works normally -- meaning the "reached the limit"
+    banner this bot sees might not be a real LinkedIn account restriction
+    at all, and could instead be a stale/misread DOM state specific to the
+    automated session. This capture is the evidence needed to tell those
+    two possibilities apart on the next real occurrence.
     """
     try:
         _DEBUG_CAPTURE_DIR.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         lead_id = lead.get("id") or "unknown-lead"
-        base = _DEBUG_CAPTURE_DIR / f"topic-dropdown-timeout_{stamp}_{lead_id}"
+        base = _DEBUG_CAPTURE_DIR / f"{reason}_{stamp}_{lead_id}"
         base.with_suffix(".html").write_text(page.content(), encoding="utf-8")
         page.screenshot(path=str(base.with_suffix(".png")), full_page=True)
         logging.getLogger("agent.discovery.progress").warning(
-            "[sending] lead=%s: captured topic-dropdown-timeout debug evidence to %s.{html,png}",
-            lead_id, base,
+            "[sending] lead=%s: captured %s debug evidence to %s.{html,png}",
+            lead_id, reason, base,
         )
     except Exception:  # noqa: BLE001 -- a failed capture must never mask the real send failure
         logging.getLogger("agent.discovery.progress").warning(
-            "[sending] lead=%s: failed to capture topic-dropdown-timeout debug evidence",
-            lead.get("id") or "unknown-lead", exc_info=True,
+            "[sending] lead=%s: failed to capture %s debug evidence",
+            lead.get("id") or "unknown-lead", reason, exc_info=True,
         )
 
 
@@ -303,6 +315,29 @@ def _send_to_company(page: Page, lead: dict, body: str, delivery: Delivery) -> N
             f"Message is {len(body)} characters; LinkedIn's Page inbox requires "
             f"{_COMPANY_MESSAGE_MIN_LENGTH}-{_COMPANY_MESSAGE_MAX_LENGTH}."
         )
+
+    # ADDED 2026-09-23, real live investigation: the owner's clients report
+    # messaging these SAME company Pages manually, by hand, on these SAME
+    # accounts works normally -- meaning "reached the limit for starting
+    # new conversations with pages" is very unlikely to be a genuine
+    # account-wide LinkedIn restriction (a manual test on the actual
+    # account would hit it too if it were). The most likely real
+    # difference: page.goto() above lands cold on the company URL with
+    # zero browsing activity, and the only pause before this point is
+    # human_delay()'s 0.8-2.4s -- a real visitor who found this Page via
+    # search/feed reads it for several seconds and usually scrolls before
+    # deciding to message, not click within ~1-3s of the page loading with
+    # no scroll at all. This simulates that: a longer human-scale read
+    # pause plus a real scroll (not just a wait), giving LinkedIn's client
+    # genuine page-interaction signals before Message is ever clicked.
+    # Purely additive -- changes no selectors, no control flow, and every
+    # existing check below still runs exactly as before.
+    human_delay(2.5, 5.0)
+    try:
+        page.mouse.wheel(0, random.randint(300, 900))
+        human_delay(0.6, 1.6)
+    except Exception:  # noqa: BLE001 -- a failed scroll must never block the real send attempt
+        pass
 
     # LIVE-CONFIRMED 2026-09-07: a genuinely unrelated LinkedIn-native
     # popup ("Choose what others see when you've viewed their profile" --
@@ -390,6 +425,14 @@ def _send_to_company(page: Page, lead: dict, body: str, delivery: Delivery) -> N
     except Exception:  # noqa: BLE001 -- Playwright's TimeoutError means the banner isn't there, the common case
         pass
     else:
+        # ADDED 2026-09-23, real live investigation: capture evidence on
+        # EVERY occurrence going forward (previously this path raised with
+        # no forensic capture at all -- only the unrelated topic-dropdown
+        # timeout ever saved a screenshot). Needed to settle whether this
+        # banner is a genuine LinkedIn restriction or a stale/misread DOM
+        # state, since the owner's clients report messaging these same
+        # Pages manually, by hand, on these same accounts works fine.
+        _capture_topic_dropdown_failure(page, lead, reason="page-rate-limit-banner")
         raise PageMessagingRateLimited(
             "LinkedIn: you have reached the limit for starting new conversations "
             "with Pages. Try again later."
@@ -440,11 +483,48 @@ def _send_to_company(page: Page, lead: dict, body: str, delivery: Delivery) -> N
 
 
 def _send_to_person(page: Page, lead: dict, body: str, delivery: Delivery) -> None:
-    message_button = page.locator(_PERSON_MESSAGE_BUTTON_SELECTOR).first
-    if message_button.count() == 0:
+    # REAL BUG FOUND AND FIXED 2026-09-24, live-confirmed against Hussein's
+    # own test profile: `.locator(...).first` is a live QUERY, re-resolved
+    # fresh every time Playwright touches it (.wait_for(), .scroll_into_view
+    # _if_needed(), .bounding_box()), not a fixed reference to one element.
+    # A profile page with multiple real Message links present (this test
+    # page had 3 identical copies of the CORRECT link at indices 0-2, plus
+    # 5 more for "More profiles for you" sidebar suggestions) can have its
+    # DOM order shift between those calls as sidebar content lazy-loads --
+    # so `.first` genuinely resolved to a DIFFERENT actual element between
+    # steps. Live-reproduced result: the coordinate click (see the mouse-
+    # down/up block below) landed on a Premium/Company-Pages-SKU upsell
+    # link instead of opening the message composer, twice, consistently.
+    # Fix: resolve to ONE concrete ElementHandle up front via
+    # element_handle(), then do every later operation (scroll, bounding
+    # box, click) against that same handle -- Playwright element handles
+    # are a fixed reference to the actual DOM node, immune to the page
+    # re-ordering matches around them afterward.
+    message_locator = page.locator(_PERSON_MESSAGE_BUTTON_SELECTOR).first
+    if message_locator.count() == 0:
         raise NoMessageButtonAvailable(
             f"{lead.get('business_name') or lead['profile_url']} has no "
             "reachable Message button (not connected, no open profile/InMail)."
+        )
+    message_locator.wait_for(state="attached", timeout=10_000)
+    # REAL BUG FOUND AND FIXED 2026-09-24, live-confirmed same test run as
+    # the element_handle() fix above: resolving the handle the INSTANT
+    # "attached" becomes true isn't enough -- LinkedIn's React app appears
+    # to re-render/replace this exact node shortly after its first
+    # attachment (a common initial-skeleton-then-hydrate pattern), so a
+    # handle grabbed too early goes stale within the same synchronous
+    # block: "Element is not attached to the DOM" on the very next
+    # operation (scroll_into_view_if_needed), before any deliberate
+    # human_delay() even ran. A short settle wait here (state="visible" on
+    # the LOCATOR, which re-queries live rather than trusting one snapshot)
+    # gives that re-render a chance to finish before the handle is taken.
+    message_locator.wait_for(state="visible", timeout=10_000)
+    page.wait_for_timeout(800)
+    message_button = message_locator.element_handle()
+    if message_button is None:
+        raise NoMessageButtonAvailable(
+            f"{lead.get('business_name') or lead['profile_url']}'s Message "
+            "element could not be resolved to a stable DOM node."
         )
 
     human_delay()
@@ -486,9 +566,22 @@ def _send_to_person(page: Page, lead: dict, body: str, delivery: Delivery) -> No
     #     wait_for(state="attached") first (not "visible", which re-enters
     #     the same actionability checking this is deliberately avoiding)
     #     confirms the element genuinely exists before reading its
-    #     position.
-    message_button.wait_for(state="attached", timeout=10_000)
-    message_button.scroll_into_view_if_needed()
+    #     position. Now done via message_locator above, before resolving
+    #     the stable element_handle() -- ElementHandle itself has no
+    #     .wait_for(), unlike Locator, so this must happen before the
+    #     conversion, not after.
+    try:
+        message_button.scroll_into_view_if_needed()
+    except Exception:  # noqa: BLE001 -- the handle went stale despite the settle wait above; re-resolve once and retry
+        message_locator.wait_for(state="visible", timeout=10_000)
+        page.wait_for_timeout(800)
+        message_button = message_locator.element_handle()
+        if message_button is None:
+            raise NoMessageButtonAvailable(
+                f"{lead.get('business_name') or lead['profile_url']}'s Message "
+                "element kept going stale before it could be scrolled into view."
+            )
+        message_button.scroll_into_view_if_needed()
     page.wait_for_timeout(1_500)
     box_rect = message_button.bounding_box()
     if not box_rect:

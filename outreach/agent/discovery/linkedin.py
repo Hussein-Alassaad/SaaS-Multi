@@ -107,6 +107,7 @@ _MAX_LOCATION_KEYWORD_LENGTH = 30
 
 def build_search_url(
     niche: str, location: str, industry: str = "", size_buckets: list[str] | None = None,
+    page: int = 1,
 ) -> str:
     """
     Build a LinkedIn company-search URL from the dashboard's niche/location/
@@ -124,6 +125,16 @@ def build_search_url(
     of letter codes), not as several separate exact-match filters. Pass
     None/empty to search every size (no facet added at all), which is
     exactly what an unfiltered "any size" tenant like Zimmar needs.
+
+    `page` (ADDED 2026-10-04, owner's explicit request): LinkedIn's company
+    search genuinely supports jumping straight to a results page via
+    `&page=N` -- LIVE-CONFIRMED (same niche/location, page=1 vs page=2
+    returned 10 entirely different companies, zero overlap). Defaults to 1
+    (omitted from the URL entirely at that value, matching every existing
+    caller/test that built a URL before this parameter existed) so
+    discovery can resume from wherever repositories.get_search_page() says
+    this (account, search_term) pair last left off, instead of re-reading
+    the same first page every time the same term comes up again.
     """
     keyword_parts = [niche]
     facet_params: dict[str, str] = {}
@@ -181,6 +192,8 @@ def build_search_url(
     url = f"{SEARCH_URL}?keywords={quote(query)}&origin={origin}"
     for key, value in facet_params.items():
         url += f"&{key}={quote(value)}"
+    if page and page > 1:
+        url += f"&page={page}"
     return url
 
 
@@ -260,58 +273,51 @@ def extract_company_profile(page: Page) -> dict:
     discovery/qualify.py's qualify_profile() expects.
 
     ============================================================================
-    RE-VERIFIED live 2026-09-01 -- `p.org-top-card-summary__tagline` (below,
-    fixed 2026-08-03 after the SAME class of break happened once already) had
-    itself silently broken again: LinkedIn moved the bio out of the top-card
-    tagline entirely, into the about-module's own body as a plain
-    `<p class="break-words white-space-pre-wrap t-black--light
-    text-body-medium">` -- confirmed via a real supervised discovery run
-    against two real companies (COMPUTEL S.A.L, AQLON Systems), both scoring
-    "bio missing" for a description that genuinely was right there on the
-    page (`page.locator("p", has_text=...)` found it instantly; the tagline
-    selector matched zero elements). That utility-class combination is itself
-    too generic/fragile to select on directly (no guarantee LinkedIn doesn't
-    reuse those same four classes elsewhere on the page) -- instead scoped to
-    the FIRST `<p>` inside `section.org-about-module__margin-bottom` (the
-    same stable container Website/Industry/size below already anchor to),
-    confirmed live to be exactly one `<p>` in that section, and it's the bio.
+    REAL BUG FOUND AND FIXED 2026-09-30: `section.org-about-module__margin-
+    bottom` (below, the container every extraction here used to anchor on)
+    now matches ZERO elements -- confirmed live against a real, fully-loaded,
+    authenticated `/about` page (Ogilvy's; screenshot showed the real Overview
+    text, Website/Industry/Headquarters/Company-size fields, all visibly
+    present and correct) where the selector still returned nothing. This is
+    what silently turned 3 full discovery rounds (~25 real candidates) into
+    100% "empty /about scrape" failures that same night -- not a proxy issue,
+    not a LinkedIn block (the page loaded perfectly, status 200, real title,
+    real content), purely this selector going stale. LinkedIn has moved to
+    fully hashed/atomic-CSS class names throughout this page (`auymff`,
+    `auyio3`, etc. -- confirmed via live DOM inspection, clearly auto-
+    generated and NOT the kind of name a human would write or LinkedIn would
+    keep stable across a deploy), so `section.org-about-module__margin-bottom`
+    and every per-field `<dt>/<dd>` pair the old code anchored on are both
+    gone completely: the about-page fields no longer use `<dl>/<dt>/<dd>` at
+    all, just a `<p>Label</p>` followed by a sibling `<div>` holding the
+    value.
 
-    Current real structure (`/about`, authenticated):
-      - the bio is the first `<p>` inside `section.org-about-module__margin-bottom`.
-      - `/about` no longer redirects anonymous/logged-out visits to login for
-        at least this account's authenticated session (the original docstring's
-        claim was specifically about *anonymous* visits, which was never
-        exercised via a real login before) -- every real call site here is
-        always authenticated anyway (agent/core/session.py), so this is moot
-        in practice.
-      - Website/Industry/Company size render as a plain `<dl>` with `<h3>`
-        label text (no data-test-id, no stable class per field) inside the
-        same `section.org-about-module__margin-bottom` -- matched here by
-        finding the `<dt>` whose text is the label, then reading its
-        following `<dd>`.
+    Current real structure (`/about`, authenticated, confirmed live
+    2026-09-30 against Ogilvy's real page):
+      - the bio is the first `<p>` that follows the "Overview" heading
+        (`page.get_by_role("heading", name="Overview")`, itself stable since
+        it's matched on the heading's accessible name/role, not any class).
+      - Website/Industry/Company size/Headquarters each render as a bare
+        `<p>` containing the exact label text, whose PARENT's next sibling
+        `<div>` holds the value (a link for Website, plain text for the
+        others) -- matched here by finding the `<p>` with that exact text,
+        then reading its parent's following-sibling. No `<dt>/<dd>` anywhere
+        on the current page.
     ============================================================================
     """
-    about_section = page.locator("section.org-about-module__margin-bottom").first
-    # LIVE-CONFIRMED 2026-09-01: a real distinct bug from the selector break
-    # above -- scheduler.py's caller only waits for wait_until="domcontentloaded"
-    # before calling this function, which fires once the raw HTML document
-    # parses, well before LinkedIn's client-side JS has actually populated
-    # the about-module's content (this page is a heavy SPA). Confirmed via a
-    # direct A/B: extracting immediately after goto() got an empty bio for a
-    # real company that unambiguously has one; extracting again after a
-    # couple seconds' wait got the real text. _safe_text() below
-    # deliberately does NOT wait for visibility (text_content(), not
-    # inner_text() -- see its own docstring, tuned for the SEARCH page's
-    # different problem: too many off-screen matches, not too-early
-    # extraction), so that's not where this belongs -- wait once, here,
-    # specifically for this section's own real content to exist, not just
-    # the section element's own empty shell.
+    # LIVE-CONFIRMED 2026-09-01 (still true after the 2026-09-30 selector
+    # rewrite above): scheduler.py's caller only waits for
+    # wait_until="domcontentloaded" before calling this function, which fires
+    # once the raw HTML document parses, well before LinkedIn's client-side
+    # JS has actually populated the page's real content (this page is a
+    # heavy SPA). Wait once, here, for the Overview heading specifically to
+    # exist, not just the document shell.
     try:
-        about_section.locator("p").first.wait_for(state="attached", timeout=8_000)
+        page.get_by_role("heading", name="Overview").first.wait_for(state="attached", timeout=8_000)
     except Exception:  # noqa: BLE001 -- fall through to extraction below regardless; _safe_text tolerates missing text
         pass
 
-    description = _safe_text(about_section.locator("p").first)
+    description = _safe_text(_bio_paragraph(page))
 
     # Was `about_section.locator("dd a").first` -- blindly grabbed whichever
     # <a> happened to render FIRST anywhere in the whole About <dl>, with no
@@ -321,11 +327,12 @@ def extract_company_profile(page: Page) -> dict:
     # confirmed live for 2 real Zimmar leads (FOOD RETAIL SAL, FRC -
     # Franchise Retail Concept), silently poisoning every downstream Hunter
     # email lookup for them (a phone number obviously has no domain to
-    # search). Same _dd_after_label() helper Headquarters/Industry already
-    # use below, scoped to the actual "Website" label so a Phone/other field
-    # rendering first can never be mistaken for it again.
-    website = _unwrap_redirect(_safe_attr(_dd_after_label(about_section, "Website").locator("a").first, "href"))
-    size_text = _safe_text(_dd_after_label(about_section, "Company size"))
+    # search). _field_value_after_label() (2026-09-30 replacement for the
+    # old _dd_after_label(), same reasoning) is scoped to the actual
+    # "Website" label so a Phone/other field rendering first can never be
+    # mistaken for it again.
+    website = _unwrap_redirect(_safe_attr(_field_value_after_label(page, "Website").locator("a").first, "href"))
+    size_text = _safe_text(_field_value_after_label(page, "Company size"))
     # LIVE-ADDED 2026-09-01: LinkedIn's own companyHqGeo search facet
     # (build_search_url above) let a UK company (ZAM FM LTD) through a
     # Lebanon-filtered search -- real, confirmed via the exact search URL
@@ -336,12 +343,12 @@ def extract_company_profile(page: Page) -> dict:
     # configured target_location before saving a lead, catching exactly
     # this class of mismatch instead of trusting LinkedIn's search filter
     # alone.
-    headquarters = _safe_text(_dd_after_label(about_section, "Headquarters"))
-    # 2026-09-02: added alongside headquarters, same _dd_after_label
-    # pattern -- scheduler.py's _discover_linkedin() checks this (and the
-    # bio) to skip a lead that's actually an insurance company (Insurance's
-    # own explicit exclusion: never target other insurance companies).
-    industry = _safe_text(_dd_after_label(about_section, "Industry"))
+    headquarters = _safe_text(_field_value_after_label(page, "Headquarters"))
+    # 2026-09-02: added alongside headquarters, same field-label pattern --
+    # scheduler.py's _discover_linkedin() checks this (and the bio) to skip
+    # a lead that's actually an insurance company (Insurance's own explicit
+    # exclusion: never target other insurance companies).
+    industry = _safe_text(_field_value_after_label(page, "Industry"))
 
     return {
         "platform": "linkedin",
@@ -356,17 +363,34 @@ def extract_company_profile(page: Page) -> dict:
     }
 
 
-def _dd_after_label(section_locator, label_text: str):
+def _bio_paragraph(page: Page):
     """
-    The About `<dl>`'s fields have no stable per-field selector (see
-    extract_company_profile's docstring) -- each is just a `<dt><h3>Label</h3>
-    </dt><dd>value</dd>` pair in sequence. XPath is the only way to say "the
-    <dd> immediately after the <dt> containing this exact label text" without
-    a stable class/attribute to anchor on.
+    2026-09-30: the bio's first stable anchor once `section.org-about-module
+    __margin-bottom` went dead (see extract_company_profile's docstring) --
+    the FIRST `<p>` that comes after the page's "Overview" heading, matched
+    by the heading's accessible role/name rather than any class (LinkedIn
+    has moved this whole page to hashed, auto-generated class names that are
+    useless and unstable to select on directly -- confirmed live 2026-09-30).
     """
-    return section_locator.locator(
-        f"xpath=.//dt[normalize-space(.)='{label_text}']/following-sibling::dd[1]"
-    ).first
+    return page.get_by_role("heading", name="Overview").first.locator("xpath=following::p[1]")
+
+
+def _field_value_after_label(page: Page, label_text: str):
+    """
+    2026-09-30 replacement for the old `_dd_after_label()`: the About page no
+    longer renders Website/Industry/Company size/Headquarters as `<dt>/<dd>`
+    pairs at all (confirmed live -- zero `<dt>` elements anywhere on the
+    page). Each field is now a bare `<p>` containing the exact label text,
+    followed by a SIBLING `<div>` (of the label `<p>`'s own parent `<div>`)
+    that holds the value -- confirmed live against Ogilvy's real page:
+    `<div><p>Website</p></div><div><a href="...">...</a></div>`. XPath is the
+    only way to say "the next sibling of this label's parent" without a
+    stable class/attribute to anchor on; `get_by_text(..., exact=True)`
+    avoids partial-text false matches (e.g. "Website" inside some unrelated
+    longer string elsewhere on the page).
+    """
+    label = page.get_by_text(label_text, exact=True).first
+    return label.locator("xpath=../following-sibling::*[1]")
 
 
 def extract_recent_posts(page: Page) -> dict:

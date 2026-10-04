@@ -139,14 +139,33 @@ def _raise_if_logged_out(page: Page, account: dict) -> None:
     is intentionally still a small, single-purpose check (not folded into
     a shared cross-platform helper) in case that turns out to differ by
     URL shape the same way LinkedIn's did.
+
+    REAL BUG FOUND AND FIXED 2026-10-04: a THIRD, distinct URL pattern --
+    /auth_platform/logged_in_redirect/...?...__coig_challenge_redirected=1
+    -- is Instagram's own account-level security checkpoint, not a plain
+    logout. LIVE-CONFIRMED on Insurance Instagram: every single page
+    (hashtag search, the bare homepage, even a random profile) redirected
+    through this exact pattern, and _discover_instagram's own loop had no
+    way to tell "this account is checkpointed" apart from "this hashtag
+    genuinely has zero posts" -- it burned all 16 search rounds (~30+
+    minutes) retrying different hashtags against a fully blocked account
+    before giving up with 0 found, 0 saved. Caught here the same way the
+    plain-logout case is, so callers (including discovery, once wired in)
+    get the same clear SessionLoggedOut signal instead of a silent
+    zero-results result that looks identical to an honest weak night.
     """
-    if "/accounts/login" not in page.url:
-        return
-    repo.update_account(account["id"], {"login_status": "failed", "login_error": "Session logged out on Instagram -- reconnect via the extension."})
-    raise SessionLoggedOut(
-        f"Account {account.get('label') or account['id']} is no longer logged in on Instagram "
-        f"(redirected to {page.url})."
-    )
+    if "/accounts/login" in page.url:
+        repo.update_account(account["id"], {"login_status": "failed", "login_error": "Session logged out on Instagram -- reconnect via the extension."})
+        raise SessionLoggedOut(
+            f"Account {account.get('label') or account['id']} is no longer logged in on Instagram "
+            f"(redirected to {page.url})."
+        )
+    if "coig_challenge_redirected" in page.url or "/auth_platform/" in page.url:
+        repo.update_account(account["id"], {"login_status": "failed", "login_error": "Instagram served a security checkpoint on this account -- clear it by logging in directly on a real device, then reconnect via the extension."})
+        raise SessionLoggedOut(
+            f"Account {account.get('label') or account['id']} hit an Instagram security checkpoint "
+            f"(redirected to {page.url})."
+        )
 
 
 def send_cold_message(message: dict) -> dict:
@@ -384,7 +403,29 @@ def _send_from_profile(page: Page, lead: dict, body: str, delivery: Delivery) ->
     human_delay()
     message_button.click()
     box = page.locator(_COMPOSER_SELECTOR).first
-    box.wait_for(state="visible", timeout=10_000)
+    # REAL BUG FOUND AND FIXED 2026-10-01: the original 10s timeout here had
+    # NO fallback at all (unlike the Message button's own 15s wait three
+    # lines up, which at least raises a clear domain exception) -- a raw
+    # Playwright TimeoutError propagated straight up and the whole send
+    # attempt died. LIVE-CONFIRMED this was genuinely marginal, not a broken
+    # selector: a direct live reproduction against a real profile (Nike)
+    # through this exact account's own proxy found the Message
+    # button/composer flow worked correctly end-to-end, just sometimes
+    # needing closer to 15s for the DM panel's open animation to finish
+    # rendering the composer -- this hit Insurance Instagram specifically
+    # twice in one morning (two different real leads, both over a slower
+    # residential-proxy connection than Zimmar's), while Zimmar's own sends
+    # that same morning had no composer failures at all on the identical
+    # code. Doubled the timeout to 20s (now the more generous of the two
+    # waits in this function, matching the message button's own margin) AND
+    # added one bounded retry -- a fresh click can nudge a panel that's
+    # stuck mid-animation, cheap and safe since clicking an already-open
+    # Message button a second time is a no-op on Instagram's real UI.
+    try:
+        box.wait_for(state="visible", timeout=20_000)
+    except Exception:  # noqa: BLE001 -- Playwright's own TimeoutError, retried once below
+        message_button.click()
+        box.wait_for(state="visible", timeout=20_000)
     human_delay()
     human_type(box, body)
     human_delay()
