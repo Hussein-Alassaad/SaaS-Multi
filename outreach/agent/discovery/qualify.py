@@ -546,6 +546,26 @@ def qualify_profile(profile: dict, niche: str = "") -> tuple[bool, list[str]]:
 
     qualifies = score >= 1
 
+    # ADDED 2026-10-06, owner's explicit request, INSTAGRAM ONLY: niche
+    # relevance was previously just a -2/+1 scoring factor, so an off-topic
+    # account (a financial advisor, a clothing boutique) could still clear
+    # the score >= 1 bar purely from generic "this is a real, active
+    # business" signals -- live-confirmed the night of 2026-10-05: 7 of 10
+    # qualified Instagram leads explicitly flagged "Bio does not mention the
+    # target niche" yet still passed (Sisiboutique, mavoi.lb, a financial
+    # advisor, several real-estate pages). Niche match is now a HARD
+    # requirement on Instagram: no niche mention, no qualify, regardless of
+    # how many other points the profile earned. Scoped to Instagram only --
+    # LinkedIn's own false positives that same night (the 3 "X follows this
+    # page" scraper-bug reads, 4 government/institutional pages) are a
+    # different problem (bad data / wrong audience type, not niche
+    # mismatch), so LinkedIn keeps the existing scoring-only behavior. Only
+    # applies when a real niche is actually configured (`niche` truthy) --
+    # same as the empty-niche skip this function's own docstring already
+    # documents for _mentions_niche.
+    if profile.get("platform") == "instagram" and niche and not bio_mentions_niche:
+        qualifies = False
+
     # HARD quality floor on real audience size, added 2026-09-13 (real
     # complaint: "one of them has no posts or presence or high followers,
     # those should not be selected"). INSTAGRAM ONLY -- see

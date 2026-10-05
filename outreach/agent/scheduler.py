@@ -868,6 +868,25 @@ _FOREIGN_LOCATION_MARKERS = [
     "kochi", "kerala", "bangalore", "bengaluru", "chennai", "hyderabad",
     "pune", "kolkata", "ahmedabad", "gujarat", "maharashtra", "bihar",
     "madhubani", "noida", "gurgaon", "gurugram",
+    # Added 2026-10-06, owner's explicit request ("some insta the agent
+    # found not in lebanon") after a real night's batch let through
+    # non-Lebanese accounts this list simply didn't cover -- deliberately
+    # NOT exhaustive (same reasoning as the rest of this list), just
+    # widening coverage of GCC/MENA and other common countries real
+    # Instagram bios actually state.
+    "qatar", "doha", "kuwait", "kuwait city", "bahrain", "manama", "oman",
+    "muscat", "yemen", "sanaa", "iraq", "baghdad", "syria", "damascus",
+    "turkey", "istanbul", "ankara", "iran", "tehran", "morocco", "rabat",
+    "casablanca", "tunisia", "tunis", "algeria", "algiers", "libya",
+    "tripoli libya", "sudan", "khartoum", "spain", "madrid", "barcelona",
+    "italy", "rome", "milan", "netherlands", "amsterdam", "sweden",
+    "stockholm", "switzerland", "zurich", "geneva", "belgium", "brussels",
+    "ghana", "accra", "ethiopia", "addis ababa", "bangladesh", "dhaka",
+    "sri lanka", "colombo", "nepal", "kathmandu", "philippines", "manila",
+    "indonesia", "jakarta", "malaysia", "kuala lumpur", "thailand",
+    "bangkok", "vietnam", "hanoi", "china", "beijing", "shanghai",
+    "japan", "tokyo", "south korea", "seoul", "brazil", "sao paulo",
+    "mexico", "mexico city", "argentina", "buenos aires",
 ]
 
 # LIVE-CONFIRMED 2026-09-02: the headquarters-field check below originally
