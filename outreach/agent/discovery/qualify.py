@@ -436,13 +436,18 @@ def _mentions_niche(bio: str, niche: str) -> bool:
     return any(word in bio_lower for word in words)
 
 
-def qualify_profile(profile: dict, niche: str = "") -> tuple[bool, list[str]]:
+def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = False) -> tuple[bool, list[str]]:
     """
     Decide whether a normalised profile dict is worth pursuing.
 
-    `niche` is the dashboard-configured target niche (settings.target_niche);
-    pass "" (the default) to skip the relevance check entirely, which is also
-    what happens automatically when no niche is configured yet.
+    `niche` is THIS ROUND's actual search term (see scheduler.py's own
+    "qualify-time niche must be THIS round's actual search_niche" comment at
+    its call sites) -- for a tenant with a real configured niche this is a
+    still-on-topic peel of it, but for an empty/service-shaped niche it's a
+    RANDOMLY ROTATED keyword used purely to vary the search, never a real
+    product-fit requirement. `niche_is_random` is what actually says which
+    case this is -- see `niche`'s own caller-side docstring
+    (scheduler.py's niche_is_random computation) for the exact rule.
 
     Returns (qualifies, reasons) -- reasons lists every signal that
     contributed to the decision, in the order they were checked, so a skipped
@@ -553,17 +558,29 @@ def qualify_profile(profile: dict, niche: str = "") -> tuple[bool, list[str]]:
     # business" signals -- live-confirmed the night of 2026-10-05: 7 of 10
     # qualified Instagram leads explicitly flagged "Bio does not mention the
     # target niche" yet still passed (Sisiboutique, mavoi.lb, a financial
-    # advisor, several real-estate pages). Niche match is now a HARD
-    # requirement on Instagram: no niche mention, no qualify, regardless of
-    # how many other points the profile earned. Scoped to Instagram only --
-    # LinkedIn's own false positives that same night (the 3 "X follows this
-    # page" scraper-bug reads, 4 government/institutional pages) are a
-    # different problem (bad data / wrong audience type, not niche
-    # mismatch), so LinkedIn keeps the existing scoring-only behavior. Only
-    # applies when a real niche is actually configured (`niche` truthy) --
-    # same as the empty-niche skip this function's own docstring already
-    # documents for _mentions_niche.
-    if profile.get("platform") == "instagram" and niche and not bio_mentions_niche:
+    # advisor, several real-estate pages).
+    #
+    # REAL BUG FOUND AND FIXED 2026-10-07, live-confirmed: this was gated on
+    # `niche` being truthy, but for an empty/service-shaped-niche tenant
+    # like Zimmar (targetNiche="" -- deliberately "accept all industries",
+    # confirmed owner decision), `niche` here is NEVER actually empty -- the
+    # caller always passes THIS ROUND's randomly-rotated search keyword
+    # (e.g. "solar", "CCTV"), never the real (empty) configured niche. So
+    # the hard-reject fired on nearly every candidate whose bio didn't
+    # happen to repeat that one round's random search word, even though
+    # Zimmar has no real niche restriction at all -- live-confirmed the
+    # night of 2026-10-06: 65 of 167 candidates hard-rejected this way
+    # alone, collapsing a normal ~10-save night to 6. Now gated on
+    # `niche_is_random` instead (the real "does this tenant even have a
+    # specific niche" signal, computed once per tenant in scheduler.py) --
+    # the hard reject only applies when there's an actual configured niche
+    # to be off-topic FROM. An empty/all-industries tenant falls back to the
+    # scoring-only behavior (the -2/+1 above still applies, just not a hard
+    # kill), exactly matching "we accept all niches" for Zimmar. LinkedIn
+    # keeps its existing scoring-only behavior regardless, for the separate
+    # reasons already noted (its false positives that night were bad data /
+    # wrong audience type, not niche mismatch).
+    if profile.get("platform") == "instagram" and not niche_is_random and niche and not bio_mentions_niche:
         qualifies = False
 
     # HARD quality floor on real audience size, added 2026-09-13 (real

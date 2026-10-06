@@ -499,7 +499,8 @@ def _save_if_qualified(
 
 
 def _save_if_qualified_with_reasons(
-    account: dict, platform: str, profile_url: str, raw_profile: dict, niche: str = ""
+    account: dict, platform: str, profile_url: str, raw_profile: dict, niche: str = "",
+    niche_is_random: bool = False,
 ) -> tuple[bool, list[str]]:
     """
     Same behavior as _save_if_qualified, but also returns qualify_profile's
@@ -536,7 +537,7 @@ def _save_if_qualified_with_reasons(
     profile_key = profile_url if platform == "linkedin" else profile_url.rstrip("/").rsplit("/", 1)[-1]
 
     normalised = {**raw_profile, "platform": platform}
-    qualifies, reasons = qualify_profile(normalised, niche)
+    qualifies, reasons = qualify_profile(normalised, niche, niche_is_random=niche_is_random)
     if not qualifies:
         repo.record_seen_profile(platform, profile_key, "rejected", tenant_id=account["tenant_id"])
         return False, reasons
@@ -756,7 +757,7 @@ def _run_discovery_cycle_for_tenant(tenant_id: str, force: bool) -> list[dict]:
                 elif account.get("platform") == "instagram":
                     _progress_log.info("[%s] starting Instagram discovery", account.get("label"))
                     try:
-                        _discover_instagram(account, page, niche, counts, tenant_terms, business_name, location)
+                        _discover_instagram(account, page, niche, counts, tenant_terms, business_name, location, niche_is_random)
                     except Exception as exc:  # noqa: BLE001
                         counts["errors"].append(f"instagram: {exc}")
                         log_error("discovery", exc, channel="instagram", account_id=account["id"])
@@ -1886,7 +1887,7 @@ def _next_hashtag(
 def _discover_instagram(
     account: dict, page, niche: str, counts: dict,
     tenant_terms: list[str] | None = None, business_name: str = "",
-    location: str = "",
+    location: str = "", niche_is_random: bool = False,
 ) -> None:
     # No min_company_size parameter here on purpose: Instagram's own
     # follower_or_headcount field (instagram.py) is a FOLLOWER count, not
@@ -2170,7 +2171,8 @@ def _discover_instagram(
                 # THIS round's actual search_niche, not the single fixed
                 # `niche` resolved once at the top of the whole cycle.
                 qualifies, reasons = _save_if_qualified_with_reasons(
-                    account, "instagram", profile_url, profile, search_niche
+                    account, "instagram", profile_url, profile, search_niche,
+                    niche_is_random=niche_is_random,
                 )
                 if qualifies:
                     counts["instagram_saved"] += 1
