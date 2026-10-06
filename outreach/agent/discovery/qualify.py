@@ -496,17 +496,26 @@ _NON_LATIN_NON_ARABIC_SCRIPT_RE = re.compile(
 )
 
 # A phone number with a real, explicit country code that is NOT Lebanon's
-# (+961) is itself positive foreign evidence -- OWNER CLARIFICATION
-# 2026-10-07: this fires even when a +961 number is ALSO present in the
-# same bio (a business listing both a Lebanese AND a foreign number is
-# still foreign evidence; the Lebanese number doesn't excuse the other
-# one) -- this is a plain substring search across the whole bio, not an
-# "only number" check, so it naturally already behaves that way. Short,
-# non-exhaustive list of the country codes most likely to actually appear
-# (GCC/MENA first, since that's where Instagram's real false positives have
-# come from, plus the other large codes already in _FOREIGN_PLACE_MARKERS).
+# (+961) is itself positive foreign evidence -- OWNER REVERSED 2026-10-07
+# (two rounds of clarification): a Lebanese (+961 or local-format) number
+# ANYWHERE in the bio is treated as proof of being a real Lebanese business
+# and OVERRIDES a foreign number also being present -- "if we have 2 numbers
+# one of them lebanese we should qualify." Checked in _has_foreign_evidence
+# itself (the Lebanese-number override short-circuits before the foreign-
+# code check ever runs), not here. Short, non-exhaustive list of the
+# country codes most likely to actually appear (GCC/MENA first, since
+# that's where Instagram's real false positives have come from, plus the
+# other large codes already in _FOREIGN_PLACE_MARKERS).
 _NON_LEBANON_COUNTRY_CODE_RE = re.compile(
     r"\+(?:971|966|974|973|968|962|20|90|98|212|216|213|218|249|1|44|33|49|91|92|86|81|82)[\s.\-]?\d{6,}"
+)
+
+# A Lebanese-looking phone number -- +961, or a bare local area/mobile-code
+# pattern (03/70/71/76/78/79/81 followed by 6 digits). Same shape as
+# scheduler.py's own _LEBANON_PHONE_RE (kept as its own copy here for the
+# same not-circular-import reason _FOREIGN_PLACE_MARKERS is its own copy).
+_LEBANON_PHONE_RE = re.compile(
+    r"(?:\+?961[\s.\-]?)(\d[\d\s.\-]{6,9}\d)|(?:\b0?(3|70|71|76|78|79|81)[\s.\-]?\d{3}[\s.\-]?\d{3}\b)"
 )
 
 
@@ -517,6 +526,14 @@ def _has_foreign_evidence(bio: str) -> str | None:
     rejection log), or None if nothing did. Deliberately does NOT reject on
     silence -- a bio that names no location/language/phone at all is NOT
     foreign evidence, only an explicit positive signal counts.
+
+    OWNER REQUEST 2026-10-07: a Lebanese phone number anywhere in the bio
+    is checked FIRST and, if present, short-circuits the whole phone check
+    -- a bio listing both a Lebanese and a foreign number still qualifies
+    (the Lebanese number is treated as the deciding evidence, not the
+    foreign one). This does NOT exempt the place-name or language checks
+    above it -- a Lebanese phone number next to an explicit "Dubai, UAE" in
+    the same bio is still foreign evidence from the place name.
     """
     if not bio:
         return None
@@ -524,7 +541,7 @@ def _has_foreign_evidence(bio: str) -> str | None:
     for marker in _FOREIGN_PLACE_MARKERS:
         if marker in bio_lower:
             return f"foreign place name ({marker!r})"
-    if _NON_LEBANON_COUNTRY_CODE_RE.search(bio):
+    if not _LEBANON_PHONE_RE.search(bio) and _NON_LEBANON_COUNTRY_CODE_RE.search(bio):
         return "non-Lebanese phone country code"
     if _NON_LATIN_NON_ARABIC_SCRIPT_RE.search(bio):
         return "bio written in a non-English/non-Arabic script"

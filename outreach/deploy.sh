@@ -366,6 +366,26 @@ check("Instagram's foreign-location hard reject moved into qualify_profile() (st
            "has_website": True, "post_count": 40, "recent_activity": True,
            "follower_or_headcount": 500},
       )[0])
+# OWNER REQUEST 2026-10-07 (two rounds of clarification, final answer): a
+# Lebanese phone number ANYWHERE in the bio overrides a foreign phone
+# number also being present -- "if we have 2 numbers one of them lebanese
+# we should qualify." A bio with BOTH a Lebanese and a foreign phone number
+# must still qualify (the Lebanese number is the deciding evidence); a bio
+# with ONLY a foreign number (no Lebanese one at all) must still reject.
+check("a bio listing BOTH a Lebanese (+961) and a foreign (+91) phone number still qualifies (Lebanese number overrides)",
+      qualify.qualify_profile(
+          {"platform": "instagram", "display_name": "Beirut Spice Traders",
+           "bio": "Call us: +961 3 123456 or our other branch at +91 98765 43210.",
+           "has_website": True, "post_count": 40, "recent_activity": True,
+           "follower_or_headcount": 500},
+      )[0])
+check("a bio with ONLY a foreign phone number (no Lebanese one) still rejects",
+      not qualify.qualify_profile(
+          {"platform": "instagram", "display_name": "Some Business",
+           "bio": "Call our office: +91 98765 43210.",
+           "has_website": True, "post_count": 40, "recent_activity": True,
+           "follower_or_headcount": 500},
+      )[0])
 # has_message_button() and its discovery-time wiring were REMOVED
 # 2026-09-13 (owner's own call after two rounds of render-wait tuning
 # still hit a ~25% false-reject rate on real, reachable companies): losing
