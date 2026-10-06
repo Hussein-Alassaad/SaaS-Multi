@@ -99,26 +99,33 @@ def ig(followers):
         bio="Furniture showroom in Beirut. Delivery across Lebanon. Shop now.",
         follower_or_headcount=followers, post_count=40), "furniture")[0]
 
-check("Instagram follower floor cuts exactly at 300",
-      (not ig(90)) and (not ig(299)) and ig(300) and ig(1200))
+# OWNER REQUEST 2026-10-07: Instagram qualification was stripped down to
+# two questions only -- foreign evidence, and personal-account -- so the
+# follower-count floor no longer applies there at all (see
+# discovery/qualify.py's own 2026-10-07 comment on qualify_profile's new
+# Instagram branch). A real Lebanese business's follower count, post
+# count, website, and bio content no longer disqualify it on Instagram.
+check("Instagram no longer has a follower-count floor (owner request 2026-10-07: simplified to foreign-evidence + personal-account only)",
+      ig(90) and ig(299) and ig(300) and ig(1200))
 
-# Quality gates the owner asked for: no posts / no presence / dormant.
+# Quality gates the owner asked for: no posts / no presence / dormant --
+# LINKEDIN ONLY as of 2026-10-07 (Instagram's own equivalents were removed
+# the same day as the follower-floor above, same reasoning).
 #
-# OWNER DECISION 2026-10-04: the zero-post hard reject is now Instagram-ONLY
-# (see qualify.py's own 2026-10-04 comment at this exact check) -- a real
-# LinkedIn company page is routinely maintained by someone who never posts
-# on it, and two consecutive weak discovery nights (Zimmar 0/96, Insurance
-# 1 saved) had this hard reject as the single most common rejection reason
-# on BOTH. A LinkedIn zero-post page still carries the existing -2 SOFT
-# score penalty, it just no longer gets thrown out outright for that one
-# signal alone.
-check("zero-post Instagram page still hard-rejected (regression check -- must NOT be weakened for Instagram)",
-      not qualify.qualify_profile(profile(platform="instagram", post_count=0, recent_activity=False, follower_or_headcount=1000), "")[0])
+# OWNER DECISION 2026-10-04: the zero-post hard reject is LinkedIn-ONLY of
+# the two original candidates -- a real LinkedIn company page is routinely
+# maintained by someone who never posts on it, and two consecutive weak
+# discovery nights (Zimmar 0/96, Insurance 1 saved) had this hard reject as
+# the single most common rejection reason on BOTH platforms. A LinkedIn
+# zero-post page still carries the existing -2 SOFT score penalty, it just
+# no longer gets thrown out outright for that one signal alone.
+check("zero-post Instagram page is NO LONGER hard-rejected (owner request 2026-10-07: simplified to foreign-evidence + personal-account only)",
+      qualify.qualify_profile(profile(platform="instagram", display_name="Beirut Home Decor", bio="Furniture showroom in Beirut. Delivery across Lebanon.", post_count=0, recent_activity=False, follower_or_headcount=1000), "")[0])
 check("zero-post LinkedIn page no longer carries the hard-reject reason (2026-10-04 owner decision)",
       not any("Hard reject: 0 posts" in r for r in qualify.qualify_profile(profile(platform="linkedin", post_count=0, recent_activity=False), "")[1]))
-check("page with no website and no real bio rejected",
+check("LinkedIn page with no website and no real bio still rejected (unchanged, LinkedIn-only now)",
       not qualify.qualify_profile(profile(bio="", has_website=False), "")[0])
-check("page with posts but dormant rejected",
+check("LinkedIn page with posts but dormant still rejected (unchanged, LinkedIn-only now)",
       not qualify.qualify_profile(profile(recent_activity=False), "")[0])
 
 # Instagram individuals vs real businesses. "co" used to match as a bare
@@ -346,8 +353,19 @@ check("max search rounds raised to 20 (was 10) to survive 6 stacked filters comp
       sch._MAX_SEARCH_ATTEMPTS == 20)
 check("Instagram's old hard 'no Lebanese signal in bio' reject is gone (relaxed to a soft qualify_profile signal)",
       "no positive signal this is a Lebanese account" not in _inspect.getsource(sch._discover_instagram))
-check("Instagram's foreign-location hard reject is UNCHANGED (still catches real Dubai/Australia leads)",
-      "rejected (foreign location:" in _inspect.getsource(sch._discover_instagram))
+# OWNER REQUEST 2026-10-07: Instagram's foreign-location decision moved
+# INTO qualify_profile() (see _has_foreign_evidence in discovery/qualify.py)
+# -- the standalone "rejected (foreign location: ...)" pre-check that used
+# to live directly in _discover_instagram is gone, replaced by
+# qualify_profile() owning the whole decision in one place. Checked via the
+# real function below instead of grepping _discover_instagram's source.
+check("Instagram's foreign-location hard reject moved into qualify_profile() (still catches real Dubai/Australia leads)",
+      not qualify.qualify_profile(
+          {"platform": "instagram", "display_name": "Some Business",
+           "bio": "Proudly serving customers in Dubai, UAE since 2015.",
+           "has_website": True, "post_count": 40, "recent_activity": True,
+           "follower_or_headcount": 500},
+      )[0])
 # has_message_button() and its discovery-time wiring were REMOVED
 # 2026-09-13 (owner's own call after two rounds of render-wait tuning
 # still hit a ~25% false-reject rate on real, reachable companies): losing

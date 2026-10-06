@@ -436,6 +436,101 @@ def _mentions_niche(bio: str, niche: str) -> bool:
     return any(word in bio_lower for word in words)
 
 
+# OWNER REQUEST 2026-10-07: Instagram's ENTIRE qualification rule,
+# simplified down to two questions -- (1) does the bio show POSITIVE
+# evidence of being a foreign (non-Lebanese) business, and (2) is this a
+# personal/individual account rather than a business. Everything else that
+# used to disqualify a candidate (niche mismatch, "no Lebanon signal"
+# silence, no website, vague bio, low follower count, zero posts) no longer
+# does, on Instagram specifically -- see qualify_profile's own comment at
+# its call site for the real numbers that drove this (65 of 167 candidates
+# hard-rejected by the niche check alone one night, collapsing a normal
+# ~10-save night to 6).
+#
+# Same real-place-name list scheduler.py's own _FOREIGN_LOCATION_MARKERS
+# uses (kept as its own copy here, not a cross-import, since scheduler.py
+# already imports FROM this module -- importing back the other way would be
+# circular). Deliberately not exhaustive, same posture as that list.
+_FOREIGN_PLACE_MARKERS = [
+    "manchester", "london", "united kingdom", " uk ", "u.k.",
+    "united states", "usa", "u.s.a.", "new york", "california",
+    "canada", "toronto", "australia", "sydney", "dubai", "abu dhabi",
+    "saudi arabia", "riyadh", "jeddah", "egypt", "cairo", "jordan", "amman",
+    "france", "paris", "germany", "berlin", "india", "mumbai", "delhi",
+    "pakistan", "nigeria", "kenya", "south africa", "singapore",
+    "kochi", "kerala", "bangalore", "bengaluru", "chennai", "hyderabad",
+    "pune", "kolkata", "ahmedabad", "gujarat", "maharashtra", "bihar",
+    "madhubani", "noida", "gurgaon", "gurugram",
+    "qatar", "doha", "kuwait", "kuwait city", "bahrain", "manama", "oman",
+    "muscat", "yemen", "sanaa", "iraq", "baghdad", "syria", "damascus",
+    "turkey", "istanbul", "ankara", "iran", "tehran", "morocco", "rabat",
+    "casablanca", "tunisia", "tunis", "algeria", "algiers", "libya",
+    "sudan", "khartoum", "spain", "madrid", "barcelona",
+    "italy", "rome", "milan", "netherlands", "amsterdam", "sweden",
+    "stockholm", "switzerland", "zurich", "geneva", "belgium", "brussels",
+    "ghana", "accra", "ethiopia", "addis ababa", "bangladesh", "dhaka",
+    "sri lanka", "colombo", "nepal", "kathmandu", "philippines", "manila",
+    "indonesia", "jakarta", "malaysia", "kuala lumpur", "thailand",
+    "bangkok", "vietnam", "hanoi", "china", "beijing", "shanghai",
+    "japan", "tokyo", "south korea", "seoul", "brazil", "sao paulo",
+    "mexico", "mexico city", "argentina", "buenos aires",
+]
+
+# A bio written in a script that is neither Latin (English/Franco-Arabic)
+# nor Arabic is itself real, positive evidence of a foreign business -- a
+# genuinely Lebanese small business's Instagram bio is always written in one
+# of those two. Each range is a common script a real foreign account
+# actually uses (Devanagari/Hindi, Cyrillic/Russian, CJK, Japanese kana,
+# Korean Hangul, Thai, Hebrew, Greek) -- deliberately not exhaustive.
+_NON_LATIN_NON_ARABIC_SCRIPT_RE = re.compile(
+    "["
+    "ऀ-ॿ"  # Devanagari (Hindi, Marathi, ...)
+    "Ѐ-ӿ"  # Cyrillic (Russian, ...)
+    "一-鿿"  # CJK unified ideographs (Chinese, Japanese Kanji)
+    "぀-ヿ"  # Hiragana/Katakana (Japanese)
+    "가-힯"  # Hangul (Korean)
+    "฀-๿"  # Thai
+    "֐-׿"  # Hebrew
+    "Ͱ-Ͽ"  # Greek
+    "]"
+)
+
+# A phone number with a real, explicit country code that is NOT Lebanon's
+# (+961) is itself positive foreign evidence -- OWNER CLARIFICATION
+# 2026-10-07: this fires even when a +961 number is ALSO present in the
+# same bio (a business listing both a Lebanese AND a foreign number is
+# still foreign evidence; the Lebanese number doesn't excuse the other
+# one) -- this is a plain substring search across the whole bio, not an
+# "only number" check, so it naturally already behaves that way. Short,
+# non-exhaustive list of the country codes most likely to actually appear
+# (GCC/MENA first, since that's where Instagram's real false positives have
+# come from, plus the other large codes already in _FOREIGN_PLACE_MARKERS).
+_NON_LEBANON_COUNTRY_CODE_RE = re.compile(
+    r"\+(?:971|966|974|973|968|962|20|90|98|212|216|213|218|249|1|44|33|49|91|92|86|81|82)[\s.\-]?\d{6,}"
+)
+
+
+def _has_foreign_evidence(bio: str) -> str | None:
+    """
+    The whole foreign-business check: does this bio show POSITIVE evidence
+    of being foreign? Returns a short description of what matched (for the
+    rejection log), or None if nothing did. Deliberately does NOT reject on
+    silence -- a bio that names no location/language/phone at all is NOT
+    foreign evidence, only an explicit positive signal counts.
+    """
+    if not bio:
+        return None
+    bio_lower = bio.lower()
+    for marker in _FOREIGN_PLACE_MARKERS:
+        if marker in bio_lower:
+            return f"foreign place name ({marker!r})"
+    if _NON_LEBANON_COUNTRY_CODE_RE.search(bio):
+        return "non-Lebanese phone country code"
+    if _NON_LATIN_NON_ARABIC_SCRIPT_RE.search(bio):
+        return "bio written in a non-English/non-Arabic script"
+    return None
+
+
 def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = False) -> tuple[bool, list[str]]:
     """
     Decide whether a normalised profile dict is worth pursuing.
@@ -453,6 +548,40 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
     contributed to the decision, in the order they were checked, so a skipped
     profile's record shows exactly why, not just a bare rejection.
     """
+    # OWNER REQUEST 2026-10-07: Instagram gets its own, completely separate,
+    # much simpler path -- see _has_foreign_evidence's own comment for the
+    # full reasoning (165 of 167 candidates one real night were killed by
+    # checks other than this; the owner's explicit instruction was to strip
+    # all of that back down to two questions). LinkedIn is UNCHANGED below --
+    # it hit its own full 30-lead target cleanly the same night, no
+    # complaint was ever raised about it, so none of its existing checks
+    # (website, bio content, headcount, niche scoring) are touched.
+    if profile.get("platform") == "instagram":
+        bio = profile.get("bio") or ""
+        display_name = profile.get("display_name") or ""
+        reasons: list[str] = []
+
+        foreign_marker = _has_foreign_evidence(bio)
+        if foreign_marker:
+            reasons.append(f"Hard reject: {foreign_marker} -- reads as a foreign (non-Lebanese) business.")
+            reasons.append("Final score: n/a -> SKIP")
+            return False, reasons
+        reasons.append("No foreign evidence found in bio")
+
+        if _looks_like_personal_name(display_name):
+            reasons.append(f"Hard reject: handle {display_name!r} reads as an individual's account, not a business page.")
+            reasons.append("Final score: n/a -> SKIP")
+            return False, reasons
+        if _bio_reads_personal(bio):
+            reasons.append(
+                f"Hard reject: bio reads as a personal/lifestyle account ({bio.strip()[:60]!r}), not a business page."
+            )
+            reasons.append("Final score: n/a -> SKIP")
+            return False, reasons
+        reasons.append("Does not read as a personal/individual account")
+        reasons.append("Final score: n/a -> QUALIFIES")
+        return True, reasons
+
     reasons: list[str] = []
     score = 0
 
@@ -551,94 +680,6 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
 
     qualifies = score >= 1
 
-    # ADDED 2026-10-06, owner's explicit request, INSTAGRAM ONLY: niche
-    # relevance was previously just a -2/+1 scoring factor, so an off-topic
-    # account (a financial advisor, a clothing boutique) could still clear
-    # the score >= 1 bar purely from generic "this is a real, active
-    # business" signals -- live-confirmed the night of 2026-10-05: 7 of 10
-    # qualified Instagram leads explicitly flagged "Bio does not mention the
-    # target niche" yet still passed (Sisiboutique, mavoi.lb, a financial
-    # advisor, several real-estate pages).
-    #
-    # REAL BUG FOUND AND FIXED 2026-10-07, live-confirmed: this was gated on
-    # `niche` being truthy, but for an empty/service-shaped-niche tenant
-    # like Zimmar (targetNiche="" -- deliberately "accept all industries",
-    # confirmed owner decision), `niche` here is NEVER actually empty -- the
-    # caller always passes THIS ROUND's randomly-rotated search keyword
-    # (e.g. "solar", "CCTV"), never the real (empty) configured niche. So
-    # the hard-reject fired on nearly every candidate whose bio didn't
-    # happen to repeat that one round's random search word, even though
-    # Zimmar has no real niche restriction at all -- live-confirmed the
-    # night of 2026-10-06: 65 of 167 candidates hard-rejected this way
-    # alone, collapsing a normal ~10-save night to 6. Now gated on
-    # `niche_is_random` instead (the real "does this tenant even have a
-    # specific niche" signal, computed once per tenant in scheduler.py) --
-    # the hard reject only applies when there's an actual configured niche
-    # to be off-topic FROM. An empty/all-industries tenant falls back to the
-    # scoring-only behavior (the -2/+1 above still applies, just not a hard
-    # kill), exactly matching "we accept all niches" for Zimmar. LinkedIn
-    # keeps its existing scoring-only behavior regardless, for the separate
-    # reasons already noted (its false positives that night were bad data /
-    # wrong audience type, not niche mismatch).
-    if profile.get("platform") == "instagram" and not niche_is_random and niche and not bio_mentions_niche:
-        qualifies = False
-
-    # HARD quality floor on real audience size, added 2026-09-13 (real
-    # complaint: "one of them has no posts or presence or high followers,
-    # those should not be selected"). INSTAGRAM ONLY -- see
-    # MIN_INSTAGRAM_FOLLOWERS_HARD's own comment for why there is
-    # deliberately no LinkedIn counterpart here. Unknown counts are NOT
-    # rejected: the scrape genuinely fails to read this field sometimes, and
-    # rejecting on missing data would silently drop real companies.
-    platform = profile.get("platform")
-    if (
-        qualifies
-        and platform == "instagram"
-        and follower_or_headcount is not None
-        and follower_or_headcount < MIN_INSTAGRAM_FOLLOWERS_HARD
-    ):
-        reasons.append(
-            f"Hard reject: only {follower_or_headcount} followers on Instagram "
-            f"(minimum {MIN_INSTAGRAM_FOLLOWERS_HARD}) -- too little real presence to be worth contacting."
-        )
-        qualifies = False
-
-    # HARD floor on REAL PRESENCE -- the owner's own priority ("presence is
-    # more important than the followers"). Two independent requirements:
-    #
-    #   (a) the page actually posts. Previously only a -2 score penalty,
-    #       which a bio + website (+4 combined) comfortably outweighed.
-    #   (b) the page is identifiable as a real business at all -- it has
-    #       EITHER a linked website OR a genuine description. A page with
-    #       neither is a placeholder someone registered and abandoned, no
-    #       matter how many followers it accumulated.
-    #
-    # Unknown post_count is not punished (the scrape genuinely fails to read
-    # it on some pages) -- same reasoning as the unknown-follower case above.
-    #
-    # OWNER DECISION 2026-10-04: scoped to Instagram ONLY as of this date --
-    # real complaint after two consecutive weak nights (Zimmar: 0/96 saved,
-    # Insurance: 1 saved) where the single most common rejection reason
-    # across both runs was exactly this hard reject ("Zero posts -- likely
-    # inactive"). A LinkedIn company page is routinely maintained by someone
-    # who never posts on it -- real, operating Lebanese SMBs often have a
-    # LinkedIn presence that's just a static profile, unlike Instagram where
-    # zero posts is a much stronger signal of an abandoned/placeholder page.
-    # LinkedIn keeps the existing -2 SOFT score penalty a few lines up
-    # ("Zero posts -- likely inactive or a placeholder account") -- a
-    # LinkedIn company can still fail to qualify on score alone, it just
-    # isn't thrown out outright for this one signal anymore.
-    if (
-        qualifies
-        and platform == "instagram"
-        and post_count is not None
-        and post_count < MIN_POSTS_FOR_REAL_PRESENCE
-    ):
-        reasons.append(
-            f"Hard reject: {post_count} posts -- no real presence, reaching out here reaches nobody."
-        )
-        qualifies = False
-
     has_real_description = len(bio.strip()) >= MIN_MEANINGFUL_BIO_LENGTH
     if qualifies and not has_website and not has_real_description:
         reasons.append(
@@ -682,53 +723,11 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
         )
         qualifies = False
 
-    # Instagram-only hard gate, found missing in the 2026-09-12 review:
-    # hashtag-based discovery (instagram.py) has no way to distinguish "a
-    # real business posted under this tag" from "a random individual did"
-    # -- unlike LinkedIn, whose company search only ever returns
-    # linkedin.com/company/ URLs in the first place. The soft score above
-    # let plenty of personal accounts through (a decent bio + a website
-    # alone was enough to clear score >= 1 despite the -2 personal-name
-    # penalty). This adds a genuine hard reject when SEVERAL "looks
-    # personal, not business" signals stack up at once, rather than
-    # raising the global threshold for every platform (which would also
-    # reject thin-but-real small businesses on LinkedIn). A real niche
-    # mention overrides this gate -- a business that explicitly talks about
-    # the target niche in its bio has already shown the one signal that
-    # matters most, regardless of how thin the rest of its profile is.
-    if profile.get("platform") == "instagram" and qualifies:
-        # TIGHTENED 2026-09-13. The previous version required personal-name
-        # AND thin-bio AND zero-posts all at once, which in practice never
-        # fired: a real individual posts plenty and writes a bio, so
-        # post_count == 0 was almost never true. Result was that
-        # anthony_elhachem, gpt.mike, jaafer_3d and moustaphachaaban all
-        # came through as "companies" in a real run. A handle that reads as
-        # a person is now decisive on its own -- Zimmar and MJivity both
-        # sell to BUSINESSES, so an individual's account is the wrong
-        # target no matter how active or well-written it is.
-        # _looks_like_personal_handle deliberately returns False the moment
-        # a business word appears in the handle, so this can't reject
-        # "anthony.security.systems".
-        if _looks_like_personal_name(display_name):
-            reasons.append(
-                f"Instagram hard reject: handle {display_name!r} reads as an individual's "
-                "account, not a business page."
-            )
-            qualifies = False
-        # SECOND, INDEPENDENT signal added 2026-09-13: handle-shape alone
-        # missed real individuals with no name-pattern in their @username at
-        # all -- meteorintheyks, c.big.moe, lets_travel_and_discover were all
-        # saved as "leads" in a real live run despite large real follower
-        # counts, precisely because nothing about the username itself looked
-        # personal. The owner's rule is "no individuals allowed, even if
-        # famous" -- a famous person's own account can have any handle, but
-        # their bio still talks about a PERSON. See _bio_reads_personal.
-        elif _bio_reads_personal(bio):
-            reasons.append(
-                f"Instagram hard reject: bio reads as a personal/lifestyle account "
-                f"({bio.strip()[:60]!r}), not a business page."
-            )
-            qualifies = False
+    # NOTE: the Instagram-specific personal-account hard gate that used to
+    # live here was moved to the top of this function (2026-10-07) -- see
+    # the early `if profile.get("platform") == "instagram"` branch, which
+    # now returns before any LinkedIn-oriented code below ever runs for an
+    # Instagram profile. This point in the function is LinkedIn-only now.
 
     reasons.append(f"Final score: {score} -> {'QUALIFIES' if qualifies else 'SKIP'}")
     return qualifies, reasons

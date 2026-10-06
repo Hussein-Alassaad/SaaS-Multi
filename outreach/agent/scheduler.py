@@ -2072,104 +2072,23 @@ def _discover_instagram(
                     )
                     continue
 
-                # Added 2026-09-13, real owner instruction ("very strict
-                # with location... outside lebanon... one in dubai and one
-                # in australia"). Instagram discovery had ZERO location
-                # checking of any kind before this -- unlike
-                # _discover_linkedin, which at least scans a Headquarters
-                # field and the bio, Instagram's extract_profile() has no
-                # location field at all (see that function's own docstring
-                # -- Instagram doesn't expose one on the profile page), so
-                # bio text is the only signal available.
-                #
-                # RELAXED the same day: originally also hard-rejected a bio
-                # that named NO Lebanese place at all -- removed after a
-                # live A-to-Z run visited 8 real candidates and saved 0,
-                # exposing that 6 stacked hard-reject checks compound far
-                # more aggressively than any one of them looks in isolation
-                # (owner: "loosen the weakest-justified filters first").
-                # Only a POSITIVE foreign signal is a hard reject now; a
-                # silent bio falls through to qualify_profile's own soft
-                # +1 _mentions_a_location() signal instead of an instant
-                # reject here.
-                bio_text = profile.get("bio") or ""
-                foreign_marker = _mentions_foreign_location(bio_text, location or "")
-                if foreign_marker:
-                    counts["skipped_leads"].append({
-                        "platform": "instagram",
-                        "identifier": profile.get("display_name") or profile_url,
-                        "reason": f"Location mismatch: configured for {location!r}, bio mentions {foreign_marker!r}.",
-                    })
-                    _progress_log.info(
-                        "[%s] Instagram round %d/%d: rejected (foreign location: %s) %s",
-                        account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS,
-                        foreign_marker, profile.get("display_name") or profile_url,
-                    )
-                    continue
-                # RELAXED 2026-09-13, real owner-approved fix (owner: "loosen
-                # the weakest-justified filters first... message-button,
-                # strict no-signal reject"). This hard "reject on total
-                # bio silence" rule was the LAST location check standing for
-                # Instagram after tonight's LinkedIn relaxation (LinkedIn's
-                # own geo facet now handles Lebanon verification -- see
-                # search_used_geo_facet's own comment above -- but Instagram
-                # has no geo facet at all, so this was the only signal). It
-                # is now a HARD REJECT only on a POSITIVE foreign signal
-                # (foreign_marker, checked above -- this is what actually
-                # caught the real Dubai/Australia leads the owner flagged).
-                #
-                # RE-TIGHTENED 2026-09-19, real owner audit of live results:
-                # Instagram hashtags (#construction, #security, etc.) have NO
-                # geography built in at all -- unlike LinkedIn's search, which
-                # applies a real companyHqGeo=Lebanon facet before this code
-                # ever sees a result. A hashtag search returns businesses from
-                # anywhere in the world, and most small-business Instagram
-                # bios simply never name a city/country either way (no
-                # "foreign_marker" to catch) -- so the relaxation above,
-                # meant to stop over-rejecting silent-bio LEBANESE companies,
-                # in practice let silent-bio FOREIGN companies through just
-                # as easily. Owner-confirmed live: under 10% of Zimmar's
-                # saved Instagram leads were actually Lebanese (India/Turkey/
-                # UAE accounts like jagmag.jaipur, bestwestern_amritsar,
-                # gurbuzplusinsaatt, horecastore.ae). Restored the same
-                # POSITIVE-signal requirement _discover_linkedin already
-                # enforces (see its own "has_lebanon_signal" block above),
-                # scoped the same way -- only for a tenant actually
-                # configured for "lebanon" specifically (Zimmar/Insurance),
-                # so this does not reintroduce the original over-rejection
-                # for a broader-market tenant like MJivity, whose bio
-                # legitimately may never mention Lebanon by name.
-                configured_location = (location or "").strip().lower()
-                if configured_location == "lebanon":
-                    # WIDENED 2026-09-19, real owner request while watching
-                    # this exact check reject candidates live: a place name
-                    # is not the only way a bio confirms Lebanon -- a
-                    # Lebanese phone number (+961 or a local area-code
-                    # pattern) or any Arabic script in the bio are both
-                    # real, independent positive signals too (see
-                    # _has_lebanon_phone_or_arabic's own comment). This only
-                    # ADDS ways to pass, never removes the existing
-                    # place-name check.
-                    has_lebanon_signal = (
-                        any(place in bio_text.lower() for place in _LEBANON_PLACE_MARKERS)
-                        or _has_lebanon_phone_or_arabic(bio_text)
-                    )
-                    if not has_lebanon_signal:
-                        counts["skipped_leads"].append({
-                            "platform": "instagram",
-                            "identifier": profile.get("display_name") or profile_url,
-                            "reason": "configured for 'lebanon', but the bio names no Lebanese location, phone number, or Arabic text.",
-                        })
-                        _progress_log.info(
-                            "[%s] Instagram round %d/%d: rejected (no Lebanon signal in bio) %s",
-                            account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS,
-                            profile.get("display_name") or profile_url,
-                        )
-                        continue
-                # BUGFIX 2026-09-17 -- see the identical, fully-explained fix
-                # in _discover_linkedin above: qualify-time niche must be
-                # THIS round's actual search_niche, not the single fixed
-                # `niche` resolved once at the top of the whole cycle.
+                # OWNER REQUEST 2026-10-07: the foreign-location pre-checks
+                # that used to live here (a hard reject on an explicit
+                # foreign place name, plus a separate "no Lebanon signal at
+                # all" silence-based reject) were REMOVED from this
+                # pre-check step -- qualify_profile() now owns Instagram's
+                # entire foreign-evidence decision internally (see
+                # _has_foreign_evidence in discovery/qualify.py), including
+                # the explicit-foreign-mention case this block used to
+                # handle here. The silence-based "no Lebanon signal" reject
+                # specifically does NOT carry over at all, per the owner's
+                # explicit instruction not to disqualify an uncertain/silent
+                # bio -- only a POSITIVE foreign signal (place name, non-
+                # Lebanese phone country code, or non-English/non-Arabic
+                # script) disqualifies now. Doing this inside
+                # qualify_profile() (not here) keeps one single place that
+                # owns the whole Instagram qualification decision, same
+                # reasoning as the niche_is_random fix just above.
                 qualifies, reasons = _save_if_qualified_with_reasons(
                     account, "instagram", profile_url, profile, search_niche,
                     niche_is_random=niche_is_random,
