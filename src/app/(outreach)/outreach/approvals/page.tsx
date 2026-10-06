@@ -12,14 +12,22 @@ export default async function OutreachApprovalsPage() {
   // distinct retry-only card, not reverted to "awaiting". "held" is
   // included too (fixed 2026-09-16) -- previously excluded here entirely,
   // which left held messages with no dashboard surface at all.
+  //
+  // OWNER REQUEST 2026-10-06: also fetch every OTHER approved message
+  // (pending/queued_for_pacing/sending/sent), not just the failed-retry
+  // case -- the page now renders two real sections (Awaiting approval /
+  // Approved) instead of only ever showing things that still need a
+  // decision. ApprovalQueueClient itself splits these back apart by
+  // approvalStatus/sendStatus; this query just needs to not leave any of
+  // them out.
   const messages = await withTenant(tenantId, (tx) =>
     tx.outreachMessage.findMany({
       where: {
         tenantId,
         OR: [
           { approvalStatus: "awaiting" },
-          { approvalStatus: "approved", sendStatus: "failed" },
           { approvalStatus: "held" },
+          { approvalStatus: "approved" },
         ],
       },
       include: {
@@ -28,6 +36,16 @@ export default async function OutreachApprovalsPage() {
       orderBy: { createdAt: "asc" },
     })
   );
+
+  // OWNER REQUEST 2026-10-06: surface the existing OutreachSettings.
+  // approvalRequired toggle directly on this page too (it already lives in
+  // Settings -- see SettingsClient.tsx's identical checkbox) so turning
+  // auto-approve on/off doesn't require leaving the queue. off = every
+  // newly generated message auto-approves itself (see
+  // run_message_generation_cycle's own approval_required check on the
+  // Python side) instead of landing in "Awaiting approval" first.
+  const settings = await withTenant(tenantId, (tx) => tx.outreachSettings.findFirst({ where: { tenantId } }));
+  const approvalRequired = settings?.approvalRequired ?? true;
 
   // OWNER REQUEST 2026-10-04: daily per-channel targets so each date
   // section in the queue can show "7 of 10 found" (Instagram) / "12 of 20
@@ -125,6 +143,7 @@ export default async function OutreachApprovalsPage() {
       initialMessages={serialized}
       dailyTargets={dailyTargets}
       dailyCounts={dailyCounts}
+      initialApprovalRequired={approvalRequired}
     />
   );
 }

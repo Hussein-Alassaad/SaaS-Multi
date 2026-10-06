@@ -14,6 +14,8 @@ import {
   approveAllMessagesAction,
   retryFailedEmailSendAction,
   deleteMessageAction,
+  deapproveMessageAction,
+  setApprovalRequiredAction,
 } from "@/lib/actions/outreach-approvals";
 
 export interface ApprovalMessage {
@@ -195,31 +197,63 @@ export function ApprovalQueueClient({
   initialMessages,
   dailyTargets,
   dailyCounts,
+  initialApprovalRequired,
 }: {
   tenantId: string;
   initialMessages: ApprovalMessage[];
   dailyTargets: DailyTargets;
   dailyCounts: Record<string, DailyCounts>;
+  initialApprovalRequired: boolean;
 }) {
   const [messages, setMessages] = useState(initialMessages);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [holdReasons, setHoldReasons] = useState<Record<string, string>>({});
+  const [approvalRequired, setApprovalRequired] = useState(initialApprovalRequired);
   const [, startTransition] = useTransition();
   const { showToast } = useToast();
   const router = useRouter();
+
+  // OWNER REQUEST 2026-10-06: ON (approvalRequired=true, the default) keeps
+  // today's behavior -- every generated message waits here first. OFF means
+  // the Python/Next.js generation paths auto-approve a message the instant
+  // it's created (see run_message_generation_cycle_for_tenant's own
+  // approval_required check), skipping this queue's manual Approve step
+  // entirely -- it would only ever show up already in the Approved section
+  // below, never in Awaiting approval.
+  const toggleApprovalRequired = () => {
+    const next = !approvalRequired;
+    setApprovalRequired(next);
+    startTransition(async () => {
+      const result = await setApprovalRequiredAction(next);
+      if (!result.ok) {
+        setApprovalRequired(!next);
+        showToast({ title: "Couldn't change this", description: result.error, variant: "error" });
+        return;
+      }
+      showToast({
+        title: next ? "Manual approval back on" : "Auto-approve turned on",
+        description: next
+          ? "New messages will wait here for your review again."
+          : "New messages will be approved automatically from now on -- Instagram still only sends after a real send attempt, same as always.",
+        variant: "default",
+      });
+    });
+  };
 
   const reload = useCallback(() => router.refresh(), [router]);
   useOutreachRealtime({ table: "outreach_messages", tenantId, reload });
 
   const approve = (message: ApprovalMessage) => {
-    setMessages((prev) => prev.filter((m) => m.id !== message.id));
+    // OWNER REQUEST 2026-10-06: approved messages now stay visible on this
+    // page (the new "Approved" section below), so this no longer
+    // optimistically removes the row -- it flips approvalStatus locally
+    // (the card re-renders into the Approved section immediately) and
+    // reload()s afterward either way to pick up the real server state
+    // (approvedAt, any guard the server applied) rather than only on error.
+    setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, approvalStatus: "approved" } : m)));
     startTransition(async () => {
       const result = await approveMessageAction(message.id);
       if (!result.ok) {
-        // The row was already optimistically removed above -- a blocked
-        // approval (e.g. this message just became permanently unreachable
-        // on its channel, see approveMessageAction's guard) must bring it
-        // back into view rather than let it silently vanish looking approved.
         showToast({ title: "Approve failed", description: result.error, variant: "error" });
         reload();
         return;
@@ -229,6 +263,25 @@ export function ApprovalQueueClient({
         description: `${message.lead.businessName || "This lead"} (${message.channel}) is cleared to send.`,
         variant: "success",
       });
+      reload();
+    });
+  };
+
+  const deapprove = (message: ApprovalMessage) => {
+    setMessages((prev) => prev.map((m) => (m.id === message.id ? { ...m, approvalStatus: "awaiting" } : m)));
+    startTransition(async () => {
+      const result = await deapproveMessageAction(message.id);
+      if (!result.ok) {
+        showToast({ title: "Couldn't pull this back", description: result.error, variant: "error" });
+        reload();
+        return;
+      }
+      showToast({
+        title: "Back in the queue",
+        description: `${message.lead.businessName || "This lead"} needs approval again before it can send.`,
+        variant: "default",
+      });
+      reload();
     });
   };
 
@@ -276,6 +329,18 @@ export function ApprovalQueueClient({
   // "held", just for a list that never actually contained any).
   const isHeld = (m: ApprovalMessage) => m.approvalStatus === "held";
 
+  // OWNER REQUEST 2026-10-06: the new "Approved" section -- anything
+  // cleared to send that ISN'T the failed-retry case above (that one keeps
+  // its own distinct red "Failed to send" card, same as before). Covers
+  // pending/queued_for_pacing/sending/sent so the section reflects
+  // everything currently approved, not just the not-yet-attempted subset.
+  const isApprovedSection = (m: ApprovalMessage) => m.approvalStatus === "approved" && !isFailedRetry(m);
+
+  // Only a message still genuinely untouched (pending) can be pulled back --
+  // matches deapproveMessageAction's own server-side guard exactly, kept
+  // here too so the button itself doesn't appear where it would just error.
+  const canDeapprove = (m: ApprovalMessage) => m.approvalStatus === "approved" && m.sendStatus === "pending";
+
   const deleteHeld = (message: ApprovalMessage) => {
     setMessages((prev) => prev.filter((m) => m.id !== message.id));
     startTransition(async () => {
@@ -305,9 +370,10 @@ export function ApprovalQueueClient({
   };
 
   const approveAll = () => {
-    const toApprove = messages.filter((m) => m.approvalStatus !== "held" && !isFailedRetry(m));
+    const toApprove = messages.filter((m) => m.approvalStatus === "awaiting");
     if (toApprove.length === 0) return;
-    setMessages((prev) => prev.filter((m) => m.approvalStatus === "held" || isFailedRetry(m)));
+    const toApproveIds = new Set(toApprove.map((m) => m.id));
+    setMessages((prev) => prev.map((m) => (toApproveIds.has(m.id) ? { ...m, approvalStatus: "approved" } : m)));
     startTransition(async () => {
       const result = await approveAllMessagesAction(toApprove.map((m) => m.id));
       if (!result.ok) {
@@ -327,7 +393,22 @@ export function ApprovalQueueClient({
     });
   };
 
-  const pendingCount = messages.filter((m) => m.approvalStatus !== "held" && !isFailedRetry(m)).length;
+  const pendingCount = messages.filter((m) => m.approvalStatus === "awaiting").length;
+  const approvedCount = messages.filter(isApprovedSection).length;
+
+  // OWNER REQUEST 2026-10-06: two real sections instead of one flat list --
+  // "awaiting" is the default tab (what actually needs a decision from the
+  // owner right now, approvalStatus="awaiting" only); "approved" covers
+  // everything already past that decision -- cleared to send (manually or
+  // via the auto-approve toggle above, with its own De-approve action),
+  // held back on purpose, or approved-but-failed (its own Retry card) --
+  // every one of those is a message that's already been decided on, just
+  // in different end states, so they all live in the same tab rather than
+  // held/failed-retry splitting off into a third place.
+  const [activeTab, setActiveTab] = useState<"awaiting" | "approved">("awaiting");
+  const tabMessages = messages.filter((m) =>
+    activeTab === "approved" ? isApprovedSection(m) || isHeld(m) || isFailedRetry(m) : m.approvalStatus === "awaiting"
+  );
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -340,7 +421,9 @@ export function ApprovalQueueClient({
           <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">
             Approval <span className="text-gradient">Queue</span>
           </h1>
-          <p className="mt-1 text-sm text-[var(--text-4)]">Nothing sends until you approve it here.</p>
+          <p className="mt-1 text-sm text-[var(--text-4)]">
+            {approvalRequired ? "Nothing sends until you approve it here." : "Auto-approve is on -- new messages skip straight to Approved."}
+          </p>
         </div>
         <AnimatePresence>
           {pendingCount > 0 && (
@@ -357,7 +440,47 @@ export function ApprovalQueueClient({
         </AnimatePresence>
       </motion.header>
 
-      {messages.length > 1 && (
+      <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[var(--border-hairline-strong)] bg-[var(--surface-1)]/50 px-3 py-2">
+        <span className="text-xs font-medium text-[var(--text-3)]">
+          {approvalRequired ? "Manual approval required" : "Auto-approve is on"}
+        </span>
+        <motion.button
+          whileTap={{ scale: 0.96 }}
+          onClick={toggleApprovalRequired}
+          role="switch"
+          aria-checked={!approvalRequired}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+            approvalRequired ? "bg-[var(--surface-3)]" : "bg-accent-gradient"
+          }`}
+        >
+          <motion.span
+            layout
+            className="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow"
+            style={{ left: approvalRequired ? 2 : 22 }}
+          />
+        </motion.button>
+      </div>
+
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={() => setActiveTab("awaiting")}
+          className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
+            activeTab === "awaiting" ? "bg-accent-gradient text-white" : "bg-[var(--surface-2)] text-[var(--text-3)]"
+          }`}
+        >
+          Awaiting approval {pendingCount > 0 && `(${pendingCount})`}
+        </button>
+        <button
+          onClick={() => setActiveTab("approved")}
+          className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors ${
+            activeTab === "approved" ? "bg-accent-gradient text-white" : "bg-[var(--surface-2)] text-[var(--text-3)]"
+          }`}
+        >
+          Approved {approvedCount > 0 && `(${approvedCount})`}
+        </button>
+      </div>
+
+      {activeTab === "awaiting" && pendingCount > 1 && (
         <motion.button
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
@@ -368,10 +491,10 @@ export function ApprovalQueueClient({
         </motion.button>
       )}
 
-      {messages.length === 0 && <EmptyState />}
+      {tabMessages.length === 0 && <EmptyState />}
 
       <div className="mt-6 space-y-8">
-        {groupByDiscoveryDate(messages).map(([dateKey, dayMessages]) => (
+        {groupByDiscoveryDate(tabMessages).map(([dateKey, dayMessages]) => (
           <div key={dateKey}>
             <DateSectionHeader dateKey={dateKey} dailyTargets={dailyTargets} counts={dailyCounts[dateKey]} />
             <div className="space-y-4">
@@ -512,6 +635,55 @@ export function ApprovalQueueClient({
                     </motion.button>
                   )}
                 </div>
+              </motion.div>
+            ) : isApprovedSection(message) ? (
+              // OWNER REQUEST 2026-10-06: a message already cleared to
+              // send (manually or via the auto-approve toggle) -- not
+              // swipeable, not part of Approve All, just a status card
+              // with a De-approve button to pull it back into Awaiting if
+              // it was approved by mistake or a decision changes. Only
+              // shown when canDeapprove(message) is true (still genuinely
+              // "pending" -- nothing has touched the real send yet); a
+              // message already sending/queued/sent shows its real status
+              // instead, since pulling it back at that point wouldn't
+              // undo anything real.
+              <motion.div
+                key={message.id}
+                layout
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="glass rounded-2xl p-4 ring-1 ring-[#4fd293]/30"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <Link
+                    href={`/outreach/leads/${message.leadId}`}
+                    className="text-sm font-semibold text-[var(--text-1)] underline-offset-2 hover:text-[var(--accent-from)] hover:underline"
+                  >
+                    {message.lead.businessName || "Unknown business"}
+                  </Link>
+                  <span className="rounded-full bg-[#4fd293]/15 px-2 py-0.5 text-xs font-medium text-[#3fb87e]">
+                    {message.sendStatus === "sent"
+                      ? "Sent"
+                      : message.sendStatus === "sending"
+                        ? "Sending..."
+                        : message.sendStatus === "queued_for_pacing"
+                          ? "Queued"
+                          : "Approved"}
+                  </span>
+                </div>
+                <p className="mt-2 line-clamp-2 text-xs text-[var(--text-4)]">{message.editedBody || message.body}</p>
+                {canDeapprove(message) && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <motion.button
+                      whileTap={{ scale: 0.96 }}
+                      onClick={() => deapprove(message)}
+                      className="rounded-lg bg-[var(--surface-2)] px-3 py-1.5 text-xs font-semibold text-[var(--text-2)] transition-colors hover:bg-[var(--surface-3)]"
+                    >
+                      De-approve
+                    </motion.button>
+                  </div>
+                )}
               </motion.div>
             ) : (
             <DraggableCard key={message.id} onApprove={() => approve(message)} onHold={() => hold(message)}>

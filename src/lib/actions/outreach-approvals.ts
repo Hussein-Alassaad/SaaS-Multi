@@ -71,6 +71,28 @@ function serializeApprovalMessage(
   };
 }
 
+/**
+ * OWNER REQUEST 2026-10-06: a lightweight toggle for OutreachSettings.
+ * approvalRequired, scoped to the "approvals" permission (not "settings")
+ * since this is meant to be flipped right from the Approval Queue page
+ * without needing Settings-edit access. Deliberately a single boolean
+ * write, not the full saveOutreachSettingsAction() form payload -- that
+ * action needs every other settings field present and is gated on a
+ * different permission.
+ */
+export async function setApprovalRequiredAction(approvalRequired: boolean) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  await withTenant(session.tenantId!, (tx) =>
+    tx.outreachSettings.update({ where: { tenantId: session.tenantId! }, data: { approvalRequired } })
+  );
+
+  return { ok: true as const };
+}
+
 export async function getApprovalQueueAction() {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };
@@ -668,6 +690,47 @@ export async function holdMessageAction(messageId: string, reason?: string) {
     return true;
   });
   if (!found) return { ok: false as const, error: "Message not found." };
+
+  return { ok: true as const };
+}
+
+/**
+ * OWNER REQUEST 2026-10-06: pull one already-approved message back into the
+ * "awaiting" queue, for review before it sends -- the reverse of
+ * approveMessageAction. Guarded against messages that already went out
+ * (sent/sending/queued_for_pacing could mean a real send is in flight or
+ * done): only a message still genuinely "pending" (approved but nothing
+ * has touched it yet) can be de-approved. "De-approving" a sent message
+ * would be misleading -- it can't be un-sent, only re-approving a NEW
+ * follow-up message could reach that lead again.
+ */
+export async function deapproveMessageAction(messageId: string) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = outreachGuardResult(session.role?.name ?? "", "approvals", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const result = await withTenant(session.tenantId!, async (tx) => {
+    const message = await tx.outreachMessage.findFirst({ where: { id: messageId, tenantId: session.tenantId! } });
+    if (!message) return { kind: "not_found" as const };
+    if (message.approvalStatus !== "approved") {
+      return { kind: "error" as const, error: "This message isn't currently approved." };
+    }
+    if (message.sendStatus !== "pending") {
+      return {
+        kind: "error" as const,
+        error: `This message is already ${message.sendStatus === "sent" ? "sent" : message.sendStatus} -- it can no longer be pulled back.`,
+      };
+    }
+    await tx.outreachMessage.update({
+      where: { id: messageId },
+      data: { approvalStatus: "awaiting", approvedById: null, approvedAt: null },
+    });
+    return { kind: "ok" as const };
+  });
+
+  if (result.kind === "not_found") return { ok: false as const, error: "Message not found." };
+  if (result.kind === "error") return { ok: false as const, error: result.error };
 
   return { ok: true as const };
 }
