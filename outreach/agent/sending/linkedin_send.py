@@ -411,20 +411,43 @@ def _send_to_company(page: Page, lead: dict, body: str, delivery: Delivery) -> N
 
     # LIVE-CONFIRMED 2026-09-20/21: the modal can open and stay on this
     # native LinkedIn banner instead of ever rendering the topic dropdown
-    # -- checked BEFORE the dropdown wait so this fails fast (a fraction of
-    # a second) instead of burning the full 10s topic-dropdown timeout on
-    # every single Page lead for the rest of the run. See
-    # PageMessagingRateLimited's docstring for why this is real platform
-    # rate limiting, not a broken selector, and why callers should stop
-    # trying further Page leads on this account once it fires.
+    # -- checked BEFORE the dropdown wait so this fails fast instead of
+    # burning the full 10s topic-dropdown timeout on every single Page
+    # lead for the rest of the run. See PageMessagingRateLimited's
+    # docstring for why this is real platform rate limiting, not a broken
+    # selector, and why callers should stop trying further Page leads on
+    # this account once it fires.
+    #
+    # REAL BUG FOUND 2026-10-06, live-confirmed: a 2026-10-05 test send
+    # against Falcon Logistics hit the generic topic-dropdown TimeoutError
+    # below, NOT this banner path -- but the debug screenshot it captured
+    # (topic-dropdown-timeout_...png) clearly showed the exact same "You
+    # have reached the limit..." banner on screen at that moment. This is a
+    # race: the banner can render a beat after the modal opens, and the
+    # original 2s wait here was sometimes too short to catch it, so
+    # execution fell through to the dropdown wait and only the slower,
+    # generic 10s timeout ever fired -- the SAME real rate-limit condition,
+    # just misreported as a dropdown failure instead of the specific,
+    # already-built PageMessagingRateLimited path. Widened to 5s (still far
+    # under the dropdown wait's own 10s, so a genuinely banner-free case
+    # isn't meaningfully slower) and logged explicitly either way, so the
+    # next occurrence is traceable from the logs alone, no manual test +
+    # screenshot pull required to tell which path actually fired.
     rate_limit_banner = page.get_by_text(
         "reached the limit for starting new conversations with pages", exact=False
     ).first
     try:
-        rate_limit_banner.wait_for(state="visible", timeout=2_000)
+        rate_limit_banner.wait_for(state="visible", timeout=5_000)
     except Exception:  # noqa: BLE001 -- Playwright's TimeoutError means the banner isn't there, the common case
-        pass
+        logging.getLogger("agent.discovery.progress").info(
+            "[sending] lead=%s: no rate-limit banner after 5s, proceeding to topic dropdown",
+            lead.get("id") or "unknown-lead",
+        )
     else:
+        logging.getLogger("agent.discovery.progress").warning(
+            "[sending] lead=%s: LinkedIn Page-messaging rate-limit banner detected",
+            lead.get("id") or "unknown-lead",
+        )
         # ADDED 2026-09-23, real live investigation: capture evidence on
         # EVERY occurrence going forward (previously this path raised with
         # no forensic capture at all -- only the unrelated topic-dropdown
@@ -453,6 +476,19 @@ def _send_to_company(page: Page, lead: dict, body: str, delivery: Delivery) -> N
             # code). Purely additive -- see _capture_topic_dropdown_failure's
             # docstring: no behavior change, the same exception is re-raised
             # immediately below exactly as before this change.
+            #
+            # ADDED 2026-10-06: explicit log line at the real failure point,
+            # since the rate-limit banner's own 5s wait just above (widened
+            # the same day) genuinely found no banner this time -- if this
+            # still fires, it's either a real selector break or a slower/
+            # different banner this check doesn't recognize yet, not the
+            # already-handled rate-limit case. Captured separately from the
+            # banner-detected log above so the two causes stay
+            # distinguishable in the logs without re-opening the screenshot.
+            logging.getLogger("agent.discovery.progress").warning(
+                "[sending] lead=%s: topic dropdown never appeared after 10s and no rate-limit banner was found either -- see debug_captures for this failure's screenshot",
+                lead.get("id") or "unknown-lead",
+            )
             _capture_topic_dropdown_failure(page, lead)
             raise
         topic.select_option(value=_TOPIC_VALUE)
