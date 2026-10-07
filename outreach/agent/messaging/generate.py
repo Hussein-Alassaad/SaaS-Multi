@@ -252,25 +252,32 @@ _ZIMMAR_BUSINESS_NAME = "Zimmar"
 #      reads identically and makes the template's length FIXED regardless
 #      of lead name length, so this specific failure mode cannot recur.
 # Fixed length: 710 chars, always -- verified via len() before shipping.
+# SIMPLIFIED 2026-10-07, owner's explicit request ("simpler english, no
+# dasher, human one"): rewrote both templates in plainer, more
+# conversational English and removed every em dash (the "dasher" the owner
+# meant) -- replaced with periods/commas instead, so sentences read like
+# something a person typed, not a copy-edited one-liner. Same message,
+# same structure, same length constraints (LinkedIn still fixed under 750
+# chars, verified via len() before shipping, same as the original).
 _ZIMMAR_TEMPLATE_LINKEDIN = """Hi {greeting_name},
 
-Quick reality check: your CCTV system isn't just cameras — it's real data. Footage, access logs, sometimes client info. Most systems still run on the default login, on the same network as the rest of the business.
+Quick question. Your CCTV system holds real data, not just footage. Access logs, sometimes client info too. Most systems still use the default login, on the same network as everything else.
 
-One weak point can mean stolen footage, a way into your systems, downtime if it's breached, or legal exposure. There's also a quieter risk — employees watching footage they shouldn't, or deleting it when something goes wrong, with nobody checking access.
+One weak point can mean stolen footage, a way into your systems, downtime if it gets breached, or legal trouble. There is also a quieter risk. Employees watching footage they should not, or deleting it when something goes wrong, with nobody checking who has access.
 
-Most companies don't find out until it's already happened.
+Most companies only find out after it already happened.
 
-We're Zimmar Tech — we run full security reviews for facilities and security companies. Done it for 100+ companies so far.
+We are Zimmar Tech. We run full security checks for facilities and security companies. Done it for over 100 companies so far.
 
-Worth a quick check on your setup?"""
+Worth a quick look at your setup?"""
 
 _ZIMMAR_TEMPLATE_INSTAGRAM = """Hi {greeting_name} \U0001F44B
 
-Here's something worth knowing: your CCTV system isn't just cameras watching your building — it holds real data. Footage, access logs, sometimes client information too. Most of these are still running on the default login, sitting on the same network as everything else.
+Here is something worth knowing. Your CCTV system holds real data, not just footage of your building. Access logs, sometimes client info too. Most of these still use the default login, on the same network as everything else.
 
-That one weak point can cause real damage — stolen or leaked footage, a way into your main systems, unexpected downtime, or legal exposure. There's also a quieter risk: employees watching footage they shouldn't, or deleting it when something goes wrong, with no one checking who has access. Most companies don't find out there was a problem until after it's already happened.
+That one weak point can cause real damage. Stolen or leaked footage, a way into your main systems, unexpected downtime, or legal trouble. There is also a quieter risk. Employees watching footage they should not, or deleting it when something goes wrong, with no one checking who has access. Most companies only find out after it already happened.
 
-We're Zimmar Tech. We run full security reviews for facilities and security companies — cameras, network, access, backups, all of it. We've done this for 100+ companies so far.
+We are Zimmar Tech. We run full security checks for facilities and security companies, cameras, network, access, backups, all of it. We have done this for over 100 companies so far.
 
 Want us to take a quick look at {company_name}'s setup?"""
 
