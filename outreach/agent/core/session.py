@@ -307,6 +307,25 @@ def _has_auth_cookies(state: dict, platform: str | None) -> bool:
 # effect on what the agent can see, since analysis/scoring/message
 # generation are entirely text-based (see analysis/prompts.py) and never
 # inspect image or video content.
+#
+# NOT applied to SENDING, though (see SessionManager.open()'s allow_media
+# param) -- real investigation 2026-10-07: a real client confirmed sending
+# cold Page messages manually, from their own device/browser, on this same
+# account and IP, works fine, while the automated send hits LinkedIn's "you
+# have reached the limit for starting new conversations with Pages" banner
+# every single time, on every Page tested (both a previously-messaged one
+# and a brand new one -- ruling out a per-Page cap). Same account, same IP,
+# same cookies -- the one concrete difference left between "client's
+# browser" and "this agent's browser" is that a real browser loads every
+# image/font/media byte on the page and this one never has, on any visit,
+# ever. A real device requesting zero image bytes across months of browsing
+# is not a real browsing pattern and is a server-side-visible signal (via
+# actual asset request logs), independent of anything client-side JS checks
+# like navigator.webdriver already patch around. Scoped to sending only,
+# not discovery: discovery's bandwidth savings (the whole reason this
+# exists) still apply where detection risk is lower and volume is much
+# higher; a real send is a single page visit, so the bandwidth cost of
+# loading images there is negligible.
 _BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
 
 
@@ -427,7 +446,7 @@ class SessionManager:
             self._global_slot.__exit__(None, None, None)
             self._global_slot = None
 
-    def open(self, account: dict) -> tuple[BrowserContext, "Page", str | None]:  # noqa: F821
+    def open(self, account: dict, *, allow_media: bool = False) -> tuple[BrowserContext, "Page", str | None]:  # noqa: F821
         """
         Create this account's isolated context: its own proxy (if configured)
         and its own restored cookies/storage from the last run, if any exist.
@@ -436,6 +455,16 @@ class SessionManager:
         returning the context to the caller -- raises ProxyIpMismatch if it
         doesn't, closing the mismatched context itself first so callers
         never have to remember to clean up on this specific failure path.
+
+        `allow_media=True` skips _block_heavy_media's image/video/font
+        blocking for this context -- see that constant's own comment for the
+        real investigation behind this (a context that never loads a single
+        image byte, ever, is itself a server-visible automation signal, and
+        real sends need to look like a real browser far more than they need
+        the bandwidth savings discovery relies on at high volume). Defaults
+        to False (the original, bandwidth-saving behavior) so every existing
+        discovery call site is unaffected -- only sending's call sites pass
+        True.
 
         Returns (context, page, verified_ip) -- verified_ip is None when no
         proxy is configured for this account at all (nothing to verify),
@@ -497,7 +526,8 @@ class SessionManager:
         context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
         )
-        context.route("**/*", _block_heavy_media)
+        if not allow_media:
+            context.route("**/*", _block_heavy_media)
         page = context.new_page()
 
         verified_ip: str | None = None

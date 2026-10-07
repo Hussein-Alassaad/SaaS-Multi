@@ -697,7 +697,13 @@ def send_message(message: dict) -> dict:
             # treatment NoMessageButtonAvailable already gets, so a real send
             # attempt never proceeds on an account whose proxy resolved to an
             # unexpected IP.
-            context, page, new_verified_ip = sessions.open(account)
+            #
+            # allow_media=True, added 2026-10-07: see core/session.py's
+            # _BLOCKED_RESOURCE_TYPES comment for the real investigation --
+            # a send is the one action most worth looking like a genuine
+            # browser for, not the one place to keep the bandwidth-saving
+            # image block that's been live on every single send attempt.
+            context, page, new_verified_ip = sessions.open(account, allow_media=True)
             if new_verified_ip and not account.get("verified_proxy_ip"):
                 repo.update_account(account["id"], {"verified_proxy_ip": new_verified_ip})
             try:
@@ -837,7 +843,8 @@ def send_reply(message: dict) -> dict:
             attachment_path = attachments.download_attachment(attachment_url, message.get("attachment_name"))
 
         with SessionManager() as sessions:
-            context, page, new_verified_ip = sessions.open(account)
+            # allow_media=True -- same reasoning as send_message() above.
+            context, page, new_verified_ip = sessions.open(account, allow_media=True)
             if new_verified_ip and not account.get("verified_proxy_ip"):
                 repo.update_account(account["id"], {"verified_proxy_ip": new_verified_ip})
             try:
