@@ -253,9 +253,29 @@ export async function sendIfEmailChannel(tenantId: string, message: { id: string
       return { kind: "stop" as const };
     }
 
-    const account = lead.accountId
+    // REAL BUG FOUND AND FIXED 2026-10-07, live-confirmed: a LinkedIn lead
+    // whose email was found directly in its own bio text (agent/scheduler.py's
+    // _email_from_bio()) gets a channel="email" message generated on the
+    // SAME lead row -- which is still platform="linkedin", so lead.accountId
+    // points at the LinkedIn account, not an email-sending one. The old
+    // lookup trusted lead.accountId unconditionally whenever it was set,
+    // bypassing the platform="email" fallback entirely and failing with
+    // "No email-sending account is configured" even though a real, active
+    // email account existed for this tenant. 6 real leads (Noema Consulting,
+    // Traincape Technology, PIS Walls and Floors, Food Business Gulf
+    // Magazine, logistics Yard, Lebtivity.com) stuck this way the same
+    // night this was found. Now only trusts lead.accountId when that
+    // account is ACTUALLY an email-sending one (platform="email"); any
+    // other case (LinkedIn/Instagram account, or no account at all) falls
+    // back to the tenant's active email account, same as the no-accountId
+    // case always did.
+    const leadAccount = lead.accountId
       ? await tx.outreachAccount.findUnique({ where: { id: lead.accountId } })
-      : await tx.outreachAccount.findFirst({ where: { tenantId, platform: "email", status: "active" } });
+      : null;
+    const account =
+      leadAccount?.platform === "email"
+        ? leadAccount
+        : await tx.outreachAccount.findFirst({ where: { tenantId, platform: "email", status: "active" } });
     if (!account?.sesFromEmail) {
       // Same silent-stall gap as the missing-contact-email case above -- a
       // tenant with no configured sending account (or one missing its From
