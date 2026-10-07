@@ -2564,6 +2564,24 @@ def _run_message_generation_cycle_for_tenant(limit: int | None) -> list[dict]:
     # normal freshly-analyzed lead -- same generation path, same approval
     # gate afterward, nothing special-cased past this point.
     stranded = repo.stranded_approved_leads_missing_message()
+    if stranded:
+        # ADDED 2026-10-07, real incident: 5 real leads (Noema Consulting,
+        # Traincape Technology, PIS Walls and Floors, Human Valoris,
+        # logistics Yard) sat stranded in "approved" with zero message rows
+        # for 7+ hours across TWO scheduled message_generation runs before
+        # this was noticed -- the recovery query itself was correct and
+        # caught them instantly the moment it was run manually, but nothing
+        # ever logged whether/how many stranded leads a given cycle found,
+        # so a run that silently failed to recover anyone (for whatever
+        # reason: a mid-batch exception after this point, a tenant_scope
+        # mismatch, etc.) looked identical in the logs to a run with no
+        # stranded leads at all. This makes every cycle's stranded-recovery
+        # outcome visible in `docker logs` without needing a manual DB query
+        # to even know there's something to investigate.
+        _progress_log.warning(
+            "[message_generation] recovering %d stranded lead(s): %s",
+            len(stranded), ", ".join(l.get("business_name") or l["id"] for l in stranded),
+        )
     for lead in stranded:
         repo.update_lead(lead["id"], {"status": "analyzed"})
         lead["status"] = "analyzed"

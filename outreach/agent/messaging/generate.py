@@ -20,6 +20,9 @@ _PLATFORM_TONE = {
     "whatsapp": "Direct, casual tone -- this is a WhatsApp message, closer to texting a person "
                 "than emailing a company.",
     "instagram": "Casual, warm tone -- this is an Instagram DM, informal but respectful.",
+    "email": "Professional but warm tone -- this is a cold email to a business contact's inbox, "
+             "not a LinkedIn Page message or a DM. Read as a standalone note with its own opening "
+             "line (the subject line is generated separately, do not repeat it in the body).",
 }
 
 _MESSAGE_RULES = """Rules:
@@ -281,18 +284,51 @@ We are Zimmar Tech. We run full security checks for facilities and security comp
 
 Want us to take a quick look at {company_name}'s setup?"""
 
+# ADDED 2026-10-07, real bug found and fixed live: this channel never had
+# its own template. generate_message()'s email path (scheduler.py's
+# _run_message_generation_cycle_for_tenant, the "a LinkedIn/Instagram lead
+# whose bio had a plain-text email also gets a real email message" branch)
+# calls straight into _zimmar_fixed_template(lead, "email") -- the comment
+# that used to sit on this function claiming "email is handled entirely by
+# the Next.js/SES pipeline, never by this Python agent" was wrong: SES
+# (src/lib/actions/outreach-approvals.ts's sendIfEmailChannel) sends
+# whatever is in OutreachMessage.body verbatim as the email HTML, and this
+# Python agent is the only thing that ever writes that body. With no email
+# branch, `channel == "email"` fell through to the LinkedIn template
+# (`else`), so every bio-found-email lead for Zimmar got a LinkedIn-flavored
+# message ("Worth a quick look at your setup?", no greeting/sign-off
+# appropriate for an inbox) silently emailed to a real prospect. Written to
+# read as a standalone email (own opening line, no dependency on a
+# platform's own message-preview chrome), same facts/claims as the other
+# two channels.
+_ZIMMAR_TEMPLATE_EMAIL = """Hi {greeting_name},
+
+Quick note. Your CCTV system holds real data, not just footage, access logs, sometimes client info too. Most systems we see still use the default login, on the same network as everything else.
+
+One weak point can mean stolen footage, a way into your systems, downtime if it gets breached, or legal trouble. There is also a quieter risk: employees watching footage they should not, or deleting it when something goes wrong, with nobody checking who has access. Most companies only find out after it already happened.
+
+We are Zimmar Tech. We run full security checks for facilities and security companies, cameras, network, access, backups, all of it. We have done this for over 100 companies so far.
+
+Worth a quick look at {company_name}'s setup?"""
+
 
 def _zimmar_fixed_template(lead: dict, channel: str) -> str:
     """
-    LinkedIn and Instagram only -- email is handled entirely by the
-    Next.js/SES pipeline (src/lib/outreach/ses.ts), never by this Python
-    agent (see this module's own docstring / messages_approved_pending's
-    channel scoping), so there is no email branch here; the email version
-    of the Zimmar template lives only in Zimmar-Templates.pdf for whoever
-    sends those manually or wires them into the SES path separately.
+    One fixed template per channel (LinkedIn/Instagram/email), all three
+    owner-approved, same "literal text, not an AI-written prompt" posture as
+    Insurance's template above. See _ZIMMAR_TEMPLATE_EMAIL's own comment for
+    the real bug this channel branch fixes -- email messages ARE generated
+    by this Python agent (scheduler.py's message-generation cycle), not by
+    the Next.js/SES side, which only ever sends whatever body is already on
+    the OutreachMessage row.
     """
     greeting_name = _greeting_name(lead)
-    template = _ZIMMAR_TEMPLATE_INSTAGRAM if channel == "instagram" else _ZIMMAR_TEMPLATE_LINKEDIN
+    if channel == "instagram":
+        template = _ZIMMAR_TEMPLATE_INSTAGRAM
+    elif channel == "email":
+        template = _ZIMMAR_TEMPLATE_EMAIL
+    else:
+        template = _ZIMMAR_TEMPLATE_LINKEDIN
     return template.format(
         greeting_name=greeting_name,
         company_name=_company_name_in_sentence(lead),
@@ -367,7 +403,7 @@ def generate_message(lead: dict, channel: str, message_style: str, model: str | 
     """
     Generate one personalized outreach message for one lead on one channel.
 
-    `channel` is "linkedin", "whatsapp", or "instagram" -- affects tone.
+    `channel` is "linkedin", "whatsapp", "instagram", or "email" -- affects tone.
     `message_style` is style.DIRECT or style.DISCOVERY -- affects how weak
     points are framed. Returns the raw message text, ready to store on
     messages.body.
