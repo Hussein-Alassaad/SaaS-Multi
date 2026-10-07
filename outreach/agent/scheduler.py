@@ -3423,8 +3423,14 @@ _ACCOUNT_HEALTH_CHECK_INTERVAL_HOURS = 4
 # messages at ~85 min average, comfortably inside 2 hours even on a
 # slower-than-average day, while still varying run to run rather than
 # landing on a fixed interval.
+# TIGHTENED 2026-10-07, owner's explicit request: 6-13 min (avg ~9.5 min)
+# was sized for a 10/day cap. With the cap now 15/day and the window-start
+# fix landing sends closer to 8:00, 6-8 min (avg ~7 min) comfortably fits
+# 15 messages (14 gaps, ~98 min worst case) well inside the 08:00-12:00
+# window with real margin to spare, while still being genuinely randomized
+# rather than a fixed interval (itself a bot signal).
 _SEND_GAP_MIN_SECONDS = 6 * 60
-_SEND_GAP_MAX_SECONDS = 13 * 60
+_SEND_GAP_MAX_SECONDS = 8 * 60
 
 # ADDED 2026-10-04, owner's explicit request: Instagram follow-ups get their
 # own separate daily cap, independent of (not sharing) the account's regular

@@ -1159,13 +1159,15 @@ finally:
     sess._MAX_CONCURRENT_BROWSER_SESSIONS = _orig_cap
     sess._GLOBAL_SESSION_LOCK_TIMEOUT_SECONDS = _orig_timeout
 
-# Owner-requested 2026-09-17: 10 approved messages must reliably finish
-# within a ~2-hour sending window. At the old 8-25 min gap (avg ~16.5 min),
-# 10 messages averaged ~2.5 hours -- routinely spilling past the window.
-check("send-gap pacing tightened to 6-13 min (was 8-25) so 10 messages fit within ~2 hours even in the worst case",
-      sch._SEND_GAP_MIN_SECONDS == 6 * 60 and sch._SEND_GAP_MAX_SECONDS == 13 * 60)
-check("10 messages' worst-case total gap time (9 max-length gaps) stays under 2 hours",
-      9 * sch._SEND_GAP_MAX_SECONDS <= 120 * 60)
+# TIGHTENED 2026-10-07, owner's explicit request: the daily cap rose to
+# 15/day (was 10), so 15 approved messages must reliably finish within the
+# real 08:00-12:00 Beirut window (4 hours), with real margin given the
+# window-start fix the same day still leaves some slop in exactly when the
+# job actually begins.
+check("send-gap pacing tightened to 6-8 min (was 6-13) so 15 messages fit comfortably within the 4-hour window",
+      sch._SEND_GAP_MIN_SECONDS == 6 * 60 and sch._SEND_GAP_MAX_SECONDS == 8 * 60)
+check("15 messages' worst-case total gap time (14 max-length gaps) stays well under the 4-hour window",
+      14 * sch._SEND_GAP_MAX_SECONDS <= 180 * 60)
 check("the gap is still genuinely randomized, not a fixed interval (regression check -- a fixed cadence is itself a bot signal)",
       sch._SEND_GAP_MIN_SECONDS < sch._SEND_GAP_MAX_SECONDS)
 
