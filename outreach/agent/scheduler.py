@@ -2852,6 +2852,37 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
     if limit is not None:
         messages = messages[:limit]
 
+    # ADDED 2026-10-07, owner's explicit request: the fixed 6-13min gap was
+    # sized for a 10/day cap (see _SEND_GAP_MIN/MAX_SECONDS's own comment:
+    # "10 messages fit within ~2 hours even in the worst case") -- it was
+    # never re-checked after the cap rose to 15, and a late scheduled start
+    # (see the 2026-10-07 index==0 fix in build_daily_schedule) made the
+    # real available time even shorter. Real incident this fixes: Oct 7,
+    # Zimmar Instagram started at 9:46 (should have been ~8:00) and only
+    # got 11 of 15 approved messages out before running out of real
+    # wall-clock time in the 08:00-12:00 window, even though the 15/day cap
+    # itself was never the limiting factor. If the fixed 13-min MAX gap
+    # genuinely would not fit every message before the window closes, the
+    # gap shrinks (toward, but never below, a safe floor) so the whole
+    # approved batch actually finishes inside its window -- only ever
+    # shrinks the gap, never grows it past the normal 6-13min range.
+    # Beirut (config.TIMEZONE), not the server's own local/system timezone
+    # -- the sending window itself is defined in Beirut time
+    # (_SENDING_WINDOW_START_HOUR/_SENDING_WINDOW_END_HOUR are both "Beirut"
+    # per their own names), so the remaining-time calculation has to use
+    # the same clock or it would compute a nonsense deadline on a server
+    # running in UTC or any other timezone.
+    _tz_now = dt.datetime.now(ZoneInfo(config.TIMEZONE))
+    window_end_today = _tz_now.replace(hour=_SENDING_WINDOW_END_HOUR, minute=0, second=0, microsecond=0)
+    seconds_left_in_window = max(0, (window_end_today - _tz_now).total_seconds())
+    non_linkedin_count = sum(1 for m in messages if m.get("channel") != "linkedin")
+    gaps_needed = max(0, non_linkedin_count - 1)
+    if gaps_needed > 0:
+        max_gap_that_fits = seconds_left_in_window / gaps_needed
+        effective_gap_max = max(_SEND_GAP_MIN_SECONDS, min(_SEND_GAP_MAX_SECONDS, max_gap_that_fits))
+    else:
+        effective_gap_max = _SEND_GAP_MAX_SECONDS
+
     results = []
     for index, message in enumerate(messages):
         # Space COLD sends out instead of firing an account's whole daily
@@ -2878,7 +2909,7 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
         # sleep decision, instead of after it.
         channel = message.get("channel")
         if index > 0 and channel != "linkedin":
-            _sleep_between_sends()
+            _sleep_between_sends(gap_max_seconds=effective_gap_max)
         try:
             if channel == "instagram":
                 # DELIBERATE PRODUCT DECISION: Instagram cold sends used to
@@ -3711,10 +3742,19 @@ def _sleep_between_profile_visits() -> float:
     return gap
 
 
-def _sleep_between_sends() -> float:
+def _sleep_between_sends(gap_max_seconds: float | None = None) -> float:
     """
     Block for a random inter-send gap, returning the seconds actually
     waited (so callers/tests can assert on real pacing rather than guess).
+
+    `gap_max_seconds` (added 2026-10-07, owner's explicit request) lets the
+    caller shrink the upper bound below the normal _SEND_GAP_MAX_SECONDS
+    when the fixed gap genuinely would not fit the whole approved batch
+    inside the remaining sending window -- see _run_sending_cycle_for_tenant's
+    own comment on the real incident this fixes. Never exceeds the normal
+    range and never goes below _SEND_GAP_MIN_SECONDS, even if the caller
+    passes something smaller -- a gap that's too tight is itself a bot
+    signal, same reasoning as the original fixed range.
 
     Deliberately a plain time.sleep on the scheduler's own worker thread:
     APScheduler runs each job in its own thread, so a cycle sitting idle
@@ -3722,7 +3762,8 @@ def _sleep_between_sends() -> float:
     that must stay responsive. Making this async or job-splitting instead
     would buy nothing while adding real complexity.
     """
-    gap = random.uniform(_SEND_GAP_MIN_SECONDS, _SEND_GAP_MAX_SECONDS)
+    effective_max = _SEND_GAP_MAX_SECONDS if gap_max_seconds is None else max(_SEND_GAP_MIN_SECONDS, min(_SEND_GAP_MAX_SECONDS, gap_max_seconds))
+    gap = random.uniform(_SEND_GAP_MIN_SECONDS, effective_max)
     time.sleep(gap)
     return gap
 
@@ -3885,6 +3926,20 @@ def build_daily_schedule() -> BackgroundScheduler:
             send_hour, send_minute = _insurance_jittered_minutes(
                 _INSURANCE_SENDING_HOUR, _INSURANCE_SENDING_MINUTE
             )
+        elif index == 0:
+            # OWNER REQUEST 2026-10-07: the first sending account in the
+            # window starts right at its own open (8:00 Beirut +/-15 min),
+            # not centered mid-slot like _spread_within_window's default
+            # (Zimmar landed at 9:46 before this fix) -- same reasoning and
+            # same pattern as the identical Zimmar-discovery-window-start
+            # fix from 2026-10-04. Starting late ate directly into the real
+            # sending time available before the window closes at 12:00,
+            # which is why only 11 of 15 approved messages went out that
+            # morning even though the daily cap wasn't the limiting factor.
+            send_hour, send_minute = divmod(
+                _SENDING_WINDOW_START_HOUR * 60 + random.randint(0, _RUN_TIME_JITTER_MINUTES), 60,
+            )
+            send_hour %= 24
         else:
             send_hour, send_minute = _spread_within_window(
                 index, len(sending_accounts),
