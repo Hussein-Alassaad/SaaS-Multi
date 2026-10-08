@@ -72,18 +72,47 @@ def call_json(system_blocks: list[dict], user_content: str, model: str, max_toke
     Strips a ```json ... ``` fence if the model wraps its answer in one
     despite the prompt instructing otherwise -- a common enough model habit
     that it's worth handling here once, rather than in every caller.
+
+    REAL BUG FOUND 2026-10-08: json.loads("") raises
+    "Expecting value: line 1 column 1 (char 0)" -- a genuinely unhelpful
+    error with no indication an empty API response was the cause. Hit 9
+    times across 2026-10-07/08's analysis cycles, every single lead that
+    hit it silently lost its analysis for that cycle (the caller's own
+    try/except just logs this exact unhelpful string and moves on). A
+    single empty-text response from an otherwise-successful API call (no
+    exception, a real 200, just zero usable content) is rare enough that a
+    single bounded retry is worth it before giving up -- genuine API
+    flakiness, not a broken prompt, is the most likely cause since it is
+    intermittent on the same prompt shape that otherwise succeeds constantly.
     """
-    response = get_client().messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system_blocks,
-        messages=[{"role": "user", "content": user_content}],
-    )
-    text = response.content[0].text.strip()
-    match = _FENCE_RE.match(text)
-    if match:
-        text = match.group(1)
-    return json.loads(text)
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        response = get_client().messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system_blocks,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        text = response.content[0].text.strip() if response.content else ""
+        if not text:
+            last_exc = ValueError(
+                f"Claude returned an empty response (stop_reason={response.stop_reason!r}) "
+                f"on attempt {attempt + 1}/2."
+            )
+            continue
+        match = _FENCE_RE.match(text)
+        if match:
+            text = match.group(1)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            last_exc = ValueError(
+                f"Claude's response wasn't valid JSON (stop_reason={response.stop_reason!r}): "
+                f"{text[:200]!r}"
+            )
+            last_exc.__cause__ = exc
+            continue
+    raise last_exc
 
 
 def call_text(system_blocks: list[dict], user_content: str, model: str, max_tokens: int = 1024) -> str:
