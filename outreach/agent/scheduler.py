@@ -55,7 +55,7 @@ from agent.analysis import whatsapp_detect
 from agent.core import account_pool as pool
 from agent.core import health
 from agent.core import warmup
-from agent.core.session import ProxyIpMismatch, SessionManager
+from agent.core.session import ProxyIpMismatch, SessionBusy, SessionManager
 from agent.crm import followup
 from agent.db import repositories as repo
 from agent.discovery import findymail, hunter, icypeas, instagram, linkedin
@@ -2771,6 +2771,34 @@ def run_sending_cycle(limit: int | None = None) -> list[dict]:
     return results
 
 
+# ADDED 2026-10-08, real incident: see the REAL BUG comment at this
+# function's instagram_send.send_cold_message() call site for the full
+# story -- this droplet's single shared browser slot means a cold send can
+# lose a short race to the hourly reply-detection-poll and, before this fix,
+# would then wait a full extra day for its only other scheduled chance.
+# Bounded to 2 retries (3 attempts total): each one re-enters
+# _global_session_slot's own up-to-300s wait (see that function's
+# docstring), so 3 attempts already covers up to ~15 real minutes of
+# contention -- generous for a poll that empirically clears within a few
+# minutes, without letting one stuck message burn the rest of this
+# account's whole sending window.
+_SESSION_BUSY_MAX_RETRIES = 2
+
+
+def _retry_on_session_busy(send_fn, message: dict) -> None:
+    for attempt in range(_SESSION_BUSY_MAX_RETRIES + 1):
+        try:
+            send_fn(message)
+            return
+        except SessionBusy:
+            if attempt == _SESSION_BUSY_MAX_RETRIES:
+                raise
+            _progress_log.warning(
+                "[sending] message=%s: lost the browser-slot race (attempt %d/%d), retrying",
+                message.get("id"), attempt + 1, _SESSION_BUSY_MAX_RETRIES + 1,
+            )
+
+
 def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = None, tenant_id: str | None = None) -> list[dict]:
     # Reply-tagged messages (is_reply=True, from "Reply Here") are
     # deliberately excluded here -- run_reply_send_cycle() below picks them
@@ -2938,13 +2966,31 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
                 # was explicitly accepted anyway (keeping every send on the
                 # agent's own consistent proxy/location, never the account
                 # owner's real device).
-                instagram_send.send_cold_message(message)
+                #
+                # REAL BUG FOUND AND FIXED 2026-10-08, live-confirmed: this
+                # droplet's single shared browser slot
+                # (core/session.py's _MAX_CONCURRENT_BROWSER_SESSIONS = 1)
+                # means SessionBusy fires whenever the hourly
+                # reply-detection-poll happens to be mid-cycle when a send
+                # tries to open its own session -- confirmed live, 5 separate
+                # SessionBusy hits during one morning's sending window, each
+                # one silently caught by the generic except below and logged
+                # as an ordinary failure. Since that except leaves the
+                # message's send_status at 'pending' (SessionBusy is raised
+                # by sessions.open() before claim_message_for_sending() ever
+                # runs), the message WAS naturally retryable -- just not
+                # until this account's NEXT scheduled run, a full day later,
+                # for a contention that typically clears within minutes.
+                # _retry_on_session_busy() closes that gap: a message that
+                # loses the race gets more chances within THIS SAME run
+                # before falling back to tomorrow.
+                _retry_on_session_busy(instagram_send.send_cold_message, message)
                 results.append({
                     "message_id": message["id"], "channel": channel,
                     "ok": True, "action": "sent",
                 })
             elif channel == "whatsapp":
-                whatsapp_send.send_message(message)
+                _retry_on_session_busy(whatsapp_send.send_message, message)
                 results.append({
                     "message_id": message["id"], "channel": channel,
                     "ok": True, "action": "sent",
