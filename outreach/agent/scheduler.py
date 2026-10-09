@@ -1933,6 +1933,21 @@ def _instagram_search_terms(
 #     bad night is made up. Extra leads are only a buffer: the daily SEND cap
 #     is separate, so over-discovering never over-sends.
 _TAG_ABANDON_AFTER_VISITS = 6
+
+
+def _profile_has_message_button(page) -> bool | None:
+    """
+    True/False when the open Instagram profile does / does not show a Message
+    button (same selector the sender uses, so "reachable" means the same thing
+    at discovery as at send time); None if it could not be determined.
+    wait_for returns the moment the button renders, so a normal account costs
+    ~1-3s; only an unreachable one pays the full wait.
+    """
+    try:
+        page.locator(instagram_send._PROFILE_MESSAGE_BUTTON_SELECTOR).first.wait_for(state="visible", timeout=8_000)
+        return True
+    except Exception as exc:  # noqa: BLE001 -- Playwright TimeoutError == no button; anything else == unknown
+        return False if type(exc).__name__ == "TimeoutError" else None
 _MAX_SHORTFALL_CARRY = 10
 
 
@@ -2116,9 +2131,12 @@ def _discover_instagram(
                     continue
                 round_visited += 1
                 engagement = instagram.extract_post_engagement(page)  # page is still on the post/reel here
+                sample_caption = instagram.extract_post_caption(page)
                 page.goto(profile_url, timeout=30_000, wait_until="domcontentloaded")
                 profile = instagram.extract_profile(page)
                 profile["engagement_sample"] = engagement
+                profile["sample_caption"] = sample_caption
+                profile["can_message"] = _profile_has_message_button(page)
                 # FIXED 2026-09-20 -- see instagram.py's
                 # _OG_TITLE_DISPLAY_NAME_RE for the real discovery: og:title
                 # now genuinely carries the display name (re-verified live,

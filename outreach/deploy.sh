@@ -146,7 +146,8 @@ check("a confident 'no' verdict from the model is returned as a rejection", _v i
 business_check.claude_client.call_json = lambda *a, **k: {"verdict": "unsure", "category": "?", "reason": "thin bio"}
 check("an 'unsure' verdict is NOT a rejection", business_check.classify(dict(_ig)) is None)
 business_check.claude_client.call_json = lambda *a, **k: {"verdict": "yes", "category": "agency", "reason": "Lebanese agency"}
-check("a 'yes' verdict is NOT a rejection", business_check.classify(dict(_ig)) is None)
+_yes = business_check.classify(dict(_ig))
+check("a 'yes' verdict is returned as a confirmed business, not a rejection", _yes is not None and _yes[0] is True)
 business_check.claude_client.call_json = _orig_call
 check("Instagram handle with a foreign country suffix (.bh / .ly) is rejected without any AI call",
       all(not qualify.qualify_profile(profile(**{**_ig, "handle": h}), "")[0] for h in ("mirrormedia.bh", "pro_media.ly", "agency.ae")))
@@ -180,6 +181,29 @@ check("Instagram discovery carries a short night's gap into the next night's tar
       and callable(sch.repo.count_account_leads_between))
 check("the save loop stops at the carried-forward target, not the bare daily limit",
       _src.count('counts["instagram_saved"] >= target') >= 2 and 'counts["instagram_saved"] >= limit' not in _src)
+business_check.classify = lambda p: (True, "agency: Lebanese agency")
+_ok_c, _why_c = qualify.qualify_profile(profile(**_ig), "")
+check("a confident 'yes' is recorded as CONFIRMED in the lead's notes", _ok_c and any("confirmed Lebanese business" in r for r in _why_c))
+business_check.classify = lambda p: None
+_ok_u, _why_u = qualify.qualify_profile(profile(**_ig), "")
+check("an unsure/failed AI answer is recorded as UNSURE (kept), distinguishable from confirmed", _ok_u and any("unsure or unavailable" in r for r in _why_u))
+_dm_calls = []
+business_check.classify = lambda p: _dm_calls.append(1)
+_ok_dm, _why_dm = qualify.qualify_profile(profile(**{**_ig, "can_message": False}), "")
+check("an Instagram account with no Message button is rejected, and the AI is not even called", (not _ok_dm) and not _dm_calls and any("Message button" in r for r in _why_dm))
+business_check.classify = lambda p: None
+check("can_message=None (could not tell) does NOT reject -- fail-open", qualify.qualify_profile(profile(**{**_ig, "can_message": None}), "")[0])
+check("can_message=True is kept", qualify.qualify_profile(profile(**{**_ig, "can_message": True}), "")[0])
+_cap_seen = []
+business_check.claude_client.call_json = lambda s, u, m, max_tokens=0: (_cap_seen.append(u), {"verdict": "unsure"})[1]
+business_check.classify = _real_classify
+business_check.classify(dict(_ig, sample_caption="Fresh bread baked daily in Beirut"))
+check("the AI business check is given the post caption as context", any("Fresh bread baked daily in Beirut" in u for u in _cap_seen))
+business_check.claude_client.call_json = _orig_call
+business_check.classify = lambda p: None
+_dsrc = inspect.getsource(sch._discover_instagram)
+check("Instagram discovery probes the Message button and captures the caption on each profile it visits",
+      "_profile_has_message_button(page)" in _dsrc and "extract_post_caption(page)" in _dsrc)
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")

@@ -625,12 +625,25 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
         # business_check.py's docstring for the real batch that proved it.
         # Runs LAST so the AI call is only spent on candidates that already
         # survived every free deterministic check. Fails open (None).
+        # ADDED 2026-10-09: an account with no reachable Message button can
+        # never receive our DM (4 of 9 queued leads failed exactly this way
+        # one morning). Checked while the profile is already open at
+        # discovery time; None (could not tell) is kept, only a definite
+        # False rejects. Runs before the AI call so no AI cost is spent on it.
+        if profile.get("can_message") is False:
+            reasons.append("Hard reject: no reachable Message button -- this account cannot be DMed.")
+            reasons.append("Final score: n/a -> SKIP")
+            return False, reasons
         ai_verdict = business_check.classify(profile)
         if ai_verdict is not None and ai_verdict[0] is False:
             reasons.append(f"Hard reject (AI check): not a Lebanese business -- {ai_verdict[1]}")
             reasons.append("Final score: n/a -> SKIP")
             return False, reasons
-        reasons.append("AI check: looks like a Lebanese business (or unsure -- kept)")
+        reasons.append(
+            "AI check: confirmed Lebanese business"
+            if ai_verdict is not None and ai_verdict[0] is True
+            else "AI check: unsure or unavailable -- kept"
+        )
         reasons.append("Final score: n/a -> QUALIFIES")
         return True, reasons
 

@@ -48,7 +48,8 @@ _SYSTEM = [{
 
 def classify(profile: dict) -> tuple[bool, str] | None:
     """
-    Returns (is_business, "category: reason") when the model is confident,
+    Returns (True, "category: reason") when the model is confident it IS a
+    Lebanese business, (False, "category: reason") when confident it is NOT,
     or None (keep the candidate) on unsure / any failure.
     """
     if not claude_client.is_configured():
@@ -59,7 +60,8 @@ def classify(profile: dict) -> tuple[bool, str] | None:
         f"Display name: {profile.get('display_name') or 'unknown'}\n"
         f"Bio: {(profile.get('bio') or '').strip()[:500] or '(empty)'}\n"
         f"Followers: {profile.get('follower_or_headcount')}\n"
-        f"Posts: {profile.get('post_count')}"
+        f"Posts: {profile.get('post_count')}\n"
+        f"Sample post caption: {(profile.get('sample_caption') or '').strip()[:300] or '(none)'}"
     )
     try:
         answer = claude_client.call_json(_SYSTEM, user_content, config.MODEL_ANALYSIS, max_tokens=200)
@@ -72,4 +74,6 @@ def classify(profile: dict) -> tuple[bool, str] | None:
     _log.info("[business_check] @%s -> %s (%s)", profile.get("handle"), verdict or "invalid", detail)
     if verdict == "no":
         return False, detail
+    if verdict == "yes":
+        return True, detail
     return None

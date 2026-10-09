@@ -231,6 +231,22 @@ def extract_post_engagement(page: Page) -> dict:
     return {"likes": parse_count(match.group(1)), "comments": parse_count(match.group(2))}
 
 
+def extract_post_caption(page: Page) -> str:
+    """
+    The caption of the post/reel discovery found, from the same og:description
+    meta tag extract_post_engagement() reads ("N likes, N comments - user on
+    DATE: caption..."). Gives the AI business check a sample of what the
+    account actually posts about. Empty string on any parse failure.
+    """
+    og_description = _meta_content(page, "og:description") or ""
+    if " - " not in og_description:
+        return ""
+    tail = og_description.split(" - ", 1)[1]
+    if ": " not in tail:
+        return ""
+    return tail.split(": ", 1)[1].strip().strip("\"\u201c\u201d")[:300]
+
+
 def extract_profile(page: Page) -> dict:
     """
     Reads a profile page's bio and follower/post counts. Verified 2026-07-31
