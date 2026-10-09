@@ -662,6 +662,26 @@ def stranded_approved_leads_missing_message(tenant_id: str | None = None) -> lis
     return [_lead_out(r) for r in rows]
 
 
+def count_account_leads_between(
+    account_id: str, start_iso: str, end_iso: str, tenant_id: str | None = None
+) -> int:
+    """
+    How many leads this account saved in [start, end). Used by discovery's
+    shortfall carry-forward: a night that fell short of its daily target
+    raises the next night's target by the gap, so a bad night is made up
+    instead of silently lost.
+    """
+    tenant_id = _resolve_tenant(tenant_id)
+    with get_cursor(commit=False) as cur:
+        cur.execute(
+            "SELECT count(*) AS n FROM outreach_leads "
+            "WHERE tenant_id = %s AND account_id = %s AND created_at >= %s AND created_at < %s",
+            (tenant_id, account_id, start_iso, end_iso),
+        )
+        row = cur.fetchone()
+    return int(row["n"] if isinstance(row, dict) else row[0])
+
+
 def lead_profile_url_exists(tenant_id: str, profile_url: str) -> bool:
     """
     True if this exact profile URL is already in this tenant's `leads`,

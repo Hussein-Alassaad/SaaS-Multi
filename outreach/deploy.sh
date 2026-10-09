@@ -154,6 +154,32 @@ check("Instagram handle ending in .lb (Lebanon) is NOT rejected by the suffix ru
       qualify.qualify_profile(profile(**{**_ig, "handle": "waredmedialb.lb"}), "")[0])
 check("plain handles with no country suffix are not rejected by the suffix rule",
       qualify.qualify_profile(profile(**{**_ig, "handle": "oradigitalmedia"}), "")[0])
+# ADDED 2026-10-09: Instagram search efficiency (owner: "guarantee 15/day, search well").
+import inspect
+check("a no-sector tenant's first Instagram term is anchored to its target country (#engineeringlebanon, not global #engineering)",
+      sch._instagram_search_terms("engineering", [], True, "Lebanon")[0] == "engineering lebanon")
+_first, _pool = sch._instagram_search_terms("media", None, True, "Lebanon, UAE")
+check("the rotation pool mixes country-anchored industry tags with the curated Lebanese business tags",
+      "media lebanon" in _pool and "made in lebanon" in _pool and not any("," in t for t in _pool))
+check("a tenant WITH its own sector terms (MJivity) is left exactly as before",
+      sch._instagram_search_terms("jewelry", ["jewelry", "cosmetics"], True, "Lebanon") == ("jewelry", ["jewelry", "cosmetics"]))
+check("a tenant with a real configured niche is left exactly as before",
+      sch._instagram_search_terms("bakery", None, False, "Lebanon") == ("bakery", None))
+check("a term already naming the country is not double-anchored",
+      sch._instagram_search_terms("lebanon food", [], True, "Lebanon")[0] == "lebanon food")
+_f_dead, _p_dead = sch._instagram_search_terms("pharmaceutical", [], True, "Lebanon")
+check("tags verified dead on Instagram are never used as the first term or in the rotation pool",
+      "pharmaceutical" not in _f_dead and not any(x.startswith(("pharmaceutical", "general trading", "general commercial", "consulting ")) for x in _p_dead))
+_src = inspect.getsource(sch._discover_instagram)
+check("Instagram discovery rejects foreign-suffix handles BEFORE paying for a profile visit",
+      "_foreign_handle_suffix(handle)" in _src and _src.index("_foreign_handle_suffix(handle)") < _src.index("instagram.extract_profile(page)"))
+check("Instagram discovery abandons a hashtag after repeated zero-save profile visits",
+      "_TAG_ABANDON_AFTER_VISITS" in _src and sch._TAG_ABANDON_AFTER_VISITS == 6)
+check("Instagram discovery carries a short night's gap into the next night's target (capped), skipped during warm-up",
+      "count_account_leads_between" in _src and sch._MAX_SHORTFALL_CARRY == 10 and "ig_daily_limit" in _src
+      and callable(sch.repo.count_account_leads_between))
+check("the save loop stops at the carried-forward target, not the bare daily limit",
+      _src.count('counts["instagram_saved"] >= target') >= 2 and 'counts["instagram_saved"] >= limit' not in _src)
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")

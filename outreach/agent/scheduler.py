@@ -59,7 +59,7 @@ from agent.core.session import ProxyIpMismatch, SessionBusy, SessionManager
 from agent.crm import followup
 from agent.db import repositories as repo
 from agent.discovery import findymail, hunter, icypeas, instagram, linkedin
-from agent.discovery.qualify import qualify_profile
+from agent.discovery.qualify import _foreign_handle_suffix, qualify_profile
 from agent.discovery.qualify import _is_agency as _lead_is_agency
 from agent.messaging import approval
 from agent.messaging import generate as message_generate
@@ -1886,6 +1886,56 @@ def _next_hashtag(
     return None
 
 
+# LIVE-VERIFIED 2026-10-09 against the real Instagram session: of the 30
+# _RANDOM_INDUSTRY_TERMS, "<term> lebanon" returned a full 21-post page for 26,
+# 5 posts for "consulting" and ZERO for these three -- a dead tag costs a whole
+# round for nothing, so they are left out of the anchored pool.
+_DEAD_ANCHORED_TERMS = {"general trading", "general commercial", "pharmaceutical", "consulting"}
+
+
+def _instagram_search_terms(
+    niche: str, tenant_terms: list[str] | None, niche_is_random: bool, location: str = "",
+) -> tuple[str, list[str] | None]:
+    """
+    Returns (first hashtag term, rotation terms) for one Instagram run.
+
+    ADDED 2026-10-09: for a tenant with no real sector niche (Zimmar), the
+    first search term is a random plain industry word ("engineering",
+    "media") and Instagram's hashtag for a plain English word is dominated by
+    worldwide creators, students and foreign agencies -- the source of a
+    whole night's junk batch. Anchoring each industry word to the tenant's
+    target country ("engineering lebanon" -> #engineeringlebanon) lands in
+    tags Lebanese businesses actually post under. The rotation pool also
+    gets the curated business/Lebanon tags so later rounds mix both. A
+    tenant WITH its own sector terms (MJivity: wider MENA/GCC target) is left
+    exactly as it was.
+    """
+    if tenant_terms or not niche_is_random:
+        return niche, tenant_terms
+    anchor = (location or "lebanon").split(",")[0].strip().lower() or "lebanon"
+    live_terms = [t for t in _RANDOM_INDUSTRY_TERMS if t not in _DEAD_ANCHORED_TERMS]
+    anchored = [f"{t} {anchor}" for t in live_terms]
+    if niche in _DEAD_ANCHORED_TERMS:
+        niche = random.choice(live_terms)
+    first = f"{niche} {anchor}" if niche and anchor not in niche.lower() else niche
+    return first, anchored + list(_BUSINESS_HASHTAG_TERMS)
+
+
+# ADDED 2026-10-09, owner's explicit request ("guarantee 15 per day, make the
+# agent search well so we don't waste all the time rejecting"). With the new
+# AI business gate rejecting far more candidates than the old red-flag-only
+# check did (Oct 8: 15 saved / 2 rejected, mostly junk), a bad hashtag can
+# burn the whole per-account time budget on profile visits that never save.
+#   _TAG_ABANDON_AFTER_VISITS: stop working a hashtag once this many real
+#     profile visits in one round produced zero saves -- move to the next tag.
+#   _MAX_SHORTFALL_CARRY: a night that saved fewer than its daily target
+#     raises the NEXT night's target by the gap (up to this many extra), so a
+#     bad night is made up. Extra leads are only a buffer: the daily SEND cap
+#     is separate, so over-discovering never over-sends.
+_TAG_ABANDON_AFTER_VISITS = 6
+_MAX_SHORTFALL_CARRY = 10
+
+
 def _discover_instagram(
     account: dict, page, niche: str, counts: dict,
     tenant_terms: list[str] | None = None, business_name: str = "",
@@ -1901,10 +1951,30 @@ def _discover_instagram(
     limit = warmup.effective_limit(account, "instagram")
     # Raw-collection target per ROUND, not the final saved count.
     search_target = limit * _DISCOVERY_OVERSAMPLE_MULTIPLIER
-    search_niche = niche
+    # Shortfall carry-forward (see _MAX_SHORTFALL_CARRY). Skipped while the
+    # account is still warming up (limit below its steady-state daily limit):
+    # the warm-up ramp is deliberate and must not be overridden.
+    target = limit
+    try:
+        if limit >= (account.get("ig_daily_limit") or 20):
+            today_start = pool.today_start_iso(account["tenant_id"])
+            yesterday_start = (dt.datetime.fromisoformat(today_start) - dt.timedelta(days=1)).isoformat()
+            saved_yesterday = repo.count_account_leads_between(
+                account["id"], yesterday_start, today_start, tenant_id=account["tenant_id"],
+            )
+            target = limit + min(max(0, limit - saved_yesterday), _MAX_SHORTFALL_CARRY)
+            if target > limit:
+                _progress_log.info(
+                    "[%s] Instagram: yesterday saved %d/%d -- raising tonight's target to %d to make up the gap",
+                    account.get("label"), saved_yesterday, limit, target,
+                )
+    except Exception as exc:  # noqa: BLE001 -- the carry-forward is a bonus, never block discovery on it
+        _progress_log.warning("[%s] Instagram: shortfall carry-forward skipped (%s)", account.get("label"), exc)
+    search_niche, tenant_terms = _instagram_search_terms(niche, tenant_terms, niche_is_random, location)
     seen_urls: set[str] = set()
     tried_tags: set[str] = set()
     counts["instagram_search_terms"] = []
+    prev_round_empty = False
 
     # RESTRUCTURED 2026-09-13, same fix and same reason as
     # _discover_linkedin above: search and qualification used to be two
@@ -1914,7 +1984,7 @@ def _discover_instagram(
     # another round if the SAVED count is still short.
     _discovery_started_at = time.monotonic()
     for attempt in range(_MAX_SEARCH_ATTEMPTS):
-        if counts["instagram_saved"] >= limit:
+        if counts["instagram_saved"] >= target:
             break
         # ADDED 2026-10-04, owner's explicit request: same time cap and
         # same reasoning as _discover_linkedin's own copy -- see
@@ -1934,7 +2004,13 @@ def _discover_instagram(
             # the same anti-burst reasoning as the LinkedIn loop's own
             # wait -- a real person doesn't fire hashtag searches back to
             # back.
-            page.wait_for_timeout(random.randint(60_000, 150_000))
+            # ADDED 2026-10-09: the long anti-burst wait exists to space out
+            # profile-visit activity; after a round that returned ZERO posts
+            # there was none, so a short gap is enough and the 1-2.5 minutes
+            # would be pure dead time on a dead tag.
+            page.wait_for_timeout(
+                random.randint(8_000, 20_000) if prev_round_empty else random.randint(60_000, 150_000)
+            )
 
         tried_tags.add(search_niche)
         posts: list[dict] = []
@@ -1981,13 +2057,22 @@ def _discover_instagram(
             "[%s] Instagram round %d/%d: %d raw post(s) for %r",
             account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS, len(posts), search_niche,
         )
+        prev_round_empty = not posts
         # Raw candidates from THIS round only; the daily cap is enforced by
         # the saved-count checks, not by pre-filtering the batch.
         posts = posts[: max(search_target, limit)]
         counts["instagram_found"] = counts.get("instagram_found", 0) + len(posts)
 
+        round_visited = 0
+        round_saved_before = counts["instagram_saved"]
         for post_index, post in enumerate(posts):
-            if counts["instagram_saved"] >= limit:
+            if counts["instagram_saved"] >= target:
+                break
+            if round_visited >= _TAG_ABANDON_AFTER_VISITS and counts["instagram_saved"] == round_saved_before:
+                _progress_log.info(
+                    "[%s] Instagram round %d/%d: abandoning %r -- %d profile visits, 0 saved (low-yield tag)",
+                    account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS, search_niche, round_visited,
+                )
                 break
             # Same profile-visit pacing as the LinkedIn loop above -- each
             # iteration here navigates to a post AND then to that poster's
@@ -1997,7 +2082,7 @@ def _discover_instagram(
             _progress_log.info(
                 "[%s] Instagram round %d/%d: visiting candidate %d/%d -- saved so far: %d/%d",
                 account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS,
-                post_index + 1, len(posts), counts["instagram_saved"], limit,
+                post_index + 1, len(posts), counts["instagram_saved"], target,
             )
             try:
                 profile_url = instagram.resolve_post_to_profile_url(page, post["post_url"])
@@ -2018,6 +2103,18 @@ def _discover_instagram(
                 handle = profile_url.rstrip("/").rsplit("/", 1)[-1]
                 if repo.was_recently_seen("instagram", handle, tenant_id=account["tenant_id"]):
                     continue
+                # ADDED 2026-10-09: a handle with a foreign country suffix
+                # (mirrormedia.bh, pro_media.ly) is certain foreign evidence
+                # from the handle alone -- reject before spending a profile
+                # page load on it, and remember it so it is never re-visited.
+                if _foreign_handle_suffix(handle):
+                    repo.record_seen_profile("instagram", handle, "rejected", tenant_id=account["tenant_id"])
+                    _progress_log.info(
+                        "[%s] Instagram round %d/%d: skipped @%s before visiting (foreign country suffix)",
+                        account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS, handle,
+                    )
+                    continue
+                round_visited += 1
                 engagement = instagram.extract_post_engagement(page)  # page is still on the post/reel here
                 page.goto(profile_url, timeout=30_000, wait_until="domcontentloaded")
                 profile = instagram.extract_profile(page)
@@ -2123,6 +2220,11 @@ def _discover_instagram(
                     post.get("post_url"), exc,
                 )
                 log_error("discovery", exc, channel="instagram", account_id=account["id"])
+        _progress_log.info(
+            "[%s] Instagram round %d/%d done: %r -> %d profile visit(s), %d saved this round, %d/%d saved overall",
+            account.get("label"), attempt + 1, _MAX_SEARCH_ATTEMPTS, search_niche, round_visited,
+            counts["instagram_saved"] - round_saved_before, counts["instagram_saved"], target,
+        )
 
 
 def run_analysis_cycle(limit: int | None = None) -> list[dict]:
