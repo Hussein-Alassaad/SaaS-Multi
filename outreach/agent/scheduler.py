@@ -537,6 +537,8 @@ def _save_if_qualified_with_reasons(
     profile_key = profile_url if platform == "linkedin" else profile_url.rstrip("/").rsplit("/", 1)[-1]
 
     normalised = {**raw_profile, "platform": platform}
+    if platform == "instagram":
+        normalised["handle"] = profile_key
     qualifies, reasons = qualify_profile(normalised, niche, niche_is_random=niche_is_random)
     if not qualifies:
         repo.record_seen_profile(platform, profile_key, "rejected", tenant_id=account["tenant_id"])

@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import re
 
+from agent.discovery import business_check
+
 # Below this, a profile needs another strong signal (bio, website) to pass --
 # on its own, a low count isn't disqualifying (a brand-new real business looks
 # exactly like this), it just isn't enough evidence by itself.
@@ -519,6 +521,22 @@ _LEBANON_PHONE_RE = re.compile(
 )
 
 
+# ADDED 2026-10-09: a handle ending in a non-Lebanese country suffix
+# (mirrormedia.bh, pro_media.ly) is free, certain foreign evidence -- the AI
+# gate let pro_media.ly through in a real-data test, so this is checked
+# deterministically instead of trusting the model with it. ".lb" is
+# deliberately absent.
+_FOREIGN_HANDLE_SUFFIX_RE = re.compile(
+    r"\.(?:bh|ly|ae|sa|qa|kw|om|eg|jo|iq|sy|tn|ma|dz|ps|ir|tr|pk|in|uk|us|ca|au|de|fr|es|it|ru|cn)$"
+)
+
+
+def _foreign_handle_suffix(handle: str | None) -> str | None:
+    match = _FOREIGN_HANDLE_SUFFIX_RE.search((handle or "").strip().lower().rstrip("/"))
+    return match.group(0) if match else None
+
+
+
 def _has_foreign_evidence(bio: str) -> str | None:
     """
     The whole foreign-business check: does this bio show POSITIVE evidence
@@ -583,6 +601,11 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
             reasons.append(f"Hard reject: {foreign_marker} -- reads as a foreign (non-Lebanese) business.")
             reasons.append("Final score: n/a -> SKIP")
             return False, reasons
+        suffix = _foreign_handle_suffix(profile.get("handle"))
+        if suffix:
+            reasons.append(f"Hard reject: handle ends in foreign country suffix {suffix!r} -- not a Lebanese business.")
+            reasons.append("Final score: n/a -> SKIP")
+            return False, reasons
         reasons.append("No foreign evidence found in bio")
 
         if _looks_like_personal_name(display_name):
@@ -596,6 +619,18 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
             reasons.append("Final score: n/a -> SKIP")
             return False, reasons
         reasons.append("Does not read as a personal/individual account")
+
+        # ADDED 2026-10-09: positive-evidence gate. The checks above only
+        # reject red flags, so a quiet bio always passed -- see
+        # business_check.py's docstring for the real batch that proved it.
+        # Runs LAST so the AI call is only spent on candidates that already
+        # survived every free deterministic check. Fails open (None).
+        ai_verdict = business_check.classify(profile)
+        if ai_verdict is not None and ai_verdict[0] is False:
+            reasons.append(f"Hard reject (AI check): not a Lebanese business -- {ai_verdict[1]}")
+            reasons.append("Final score: n/a -> SKIP")
+            return False, reasons
+        reasons.append("AI check: looks like a Lebanese business (or unsure -- kept)")
         reasons.append("Final score: n/a -> QUALIFIES")
         return True, reasons
 

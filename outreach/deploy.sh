@@ -40,8 +40,10 @@ fail() { printf '   \033[31mFAIL\033[0m %s\n' "$*"; }
 # ---------------------------------------------------------------------------
 read -r -d '' VERIFY_PY <<'PYEOF' || true
 import sys
-from agent.discovery import linkedin, qualify, hunter
+from agent.discovery import linkedin, qualify, hunter, business_check
 from agent import scheduler as sch
+_real_classify = business_check.classify
+business_check.classify = lambda p: None  # no live API calls in the regression suite; AI-gate tests below swap in fakes
 from agent.core import session as sess
 from agent.sending import linkedin_send, instagram_send, linkedin_reply_check, instagram_reply_check
 
@@ -123,6 +125,41 @@ check("zero-post Instagram page is NO LONGER hard-rejected (owner request 2026-1
       qualify.qualify_profile(profile(platform="instagram", display_name="Beirut Home Decor", bio="Furniture showroom in Beirut. Delivery across Lebanon.", post_count=0, recent_activity=False, follower_or_headcount=1000), "")[0])
 check("zero-post LinkedIn page no longer carries the hard-reject reason (2026-10-04 owner decision)",
       not any("Hard reject: 0 posts" in r for r in qualify.qualify_profile(profile(platform="linkedin", post_count=0, recent_activity=False), "")[1]))
+# ADDED 2026-10-09: AI "is this a Lebanese business" gate on Instagram.
+_ig = dict(platform="instagram", display_name="Beirut Home Decor", bio="Furniture showroom in Beirut. Delivery across Lebanon.", post_count=40, recent_activity=True, follower_or_headcount=5000, handle="someaccount")
+business_check.classify = lambda p: (False, "travel page: content page about Lebanon, not a business")
+_ok, _why = qualify.qualify_profile(profile(**_ig), "")
+check("Instagram candidate the AI confidently calls NOT a Lebanese business is rejected, with the AI reason recorded",
+      (not _ok) and any("AI check" in r and "travel page" in r for r in _why))
+business_check.classify = lambda p: None
+check("Instagram candidate the AI is unsure about (None) is KEPT -- fail-open, no repeat of the 6-of-167 collapse",
+      qualify.qualify_profile(profile(**_ig), "")[0])
+def _boom(p): raise RuntimeError("api down")
+business_check.classify = _real_classify
+_orig_call = business_check.claude_client.call_json
+business_check.claude_client.call_json = lambda *a, **k: _boom(None)
+check("a failing AI call is KEPT (fail-open), never blocks discovery",
+      business_check.classify(dict(_ig)) is None)
+business_check.claude_client.call_json = lambda *a, **k: {"verdict": "no", "category": "creator", "reason": "vlogger"}
+_v = business_check.classify(dict(_ig))
+check("a confident 'no' verdict from the model is returned as a rejection", _v is not None and _v[0] is False)
+business_check.claude_client.call_json = lambda *a, **k: {"verdict": "unsure", "category": "?", "reason": "thin bio"}
+check("an 'unsure' verdict is NOT a rejection", business_check.classify(dict(_ig)) is None)
+business_check.claude_client.call_json = lambda *a, **k: {"verdict": "yes", "category": "agency", "reason": "Lebanese agency"}
+check("a 'yes' verdict is NOT a rejection", business_check.classify(dict(_ig)) is None)
+business_check.claude_client.call_json = _orig_call
+check("Instagram handle with a foreign country suffix (.bh / .ly) is rejected without any AI call",
+      all(not qualify.qualify_profile(profile(**{**_ig, "handle": h}), "")[0] for h in ("mirrormedia.bh", "pro_media.ly", "agency.ae")))
+check("Instagram handle ending in .lb (Lebanon) is NOT rejected by the suffix rule",
+      qualify.qualify_profile(profile(**{**_ig, "handle": "waredmedialb.lb"}), "")[0])
+check("plain handles with no country suffix are not rejected by the suffix rule",
+      qualify.qualify_profile(profile(**{**_ig, "handle": "oradigitalmedia"}), "")[0])
+_li_calls = []
+business_check.classify = lambda p: _li_calls.append(1)
+qualify.qualify_profile(profile(), "trading")
+check("LinkedIn qualification never calls the AI gate (Instagram-only)", not _li_calls)
+business_check.classify = lambda p: None
+
 check("LinkedIn page with no website and no real bio still rejected (unchanged, LinkedIn-only now)",
       not qualify.qualify_profile(profile(bio="", has_website=False), "")[0])
 check("LinkedIn page with posts but dormant still rejected (unchanged, LinkedIn-only now)",
