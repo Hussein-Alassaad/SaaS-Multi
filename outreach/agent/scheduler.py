@@ -2746,7 +2746,7 @@ def _run_message_generation_cycle_for_tenant(limit: int | None) -> list[dict]:
         # email message drafted on the SAME lead row, in addition to its
         # primary-platform message -- not a replacement, same reasoning as
         # WhatsApp: an extra channel is strictly additive, never instead of.
-        if lead.get("platform") != "email" and lead.get("contact_email") and "email" not in channels:
+        if _EMAIL_OUTREACH_ENABLED and lead.get("platform") != "email" and lead.get("contact_email") and "email" not in channels:
             channels.append("email")
 
         try:
@@ -3036,12 +3036,14 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
     # shrinks the gap, never grows it past the normal 6-13min range.
     # Beirut (config.TIMEZONE), not the server's own local/system timezone
     # -- the sending window itself is defined in Beirut time
-    # (_SENDING_WINDOW_START_HOUR/_SENDING_WINDOW_END_HOUR are both "Beirut"
+    # (_SENDING_WINDOW_START_HOUR/_SENDING_WINDOW_END_MINUTES are both "Beirut"
     # per their own names), so the remaining-time calculation has to use
     # the same clock or it would compute a nonsense deadline on a server
     # running in UTC or any other timezone.
     _tz_now = dt.datetime.now(ZoneInfo(config.TIMEZONE))
-    window_end_today = _tz_now.replace(hour=_SENDING_WINDOW_END_HOUR, minute=0, second=0, microsecond=0)
+    window_end_today = _tz_now.replace(
+        hour=_SENDING_WINDOW_END_MINUTES // 60, minute=_SENDING_WINDOW_END_MINUTES % 60, second=0, microsecond=0,
+    )
     seconds_left_in_window = max(0, (window_end_today - _tz_now).total_seconds())
     non_linkedin_count = sum(1 for m in messages if m.get("channel") != "linkedin")
     gaps_needed = max(0, non_linkedin_count - 1)
@@ -3683,7 +3685,15 @@ _INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 5
 # message generated the same night and is ready for approval before the
 # next morning's sending window.
 _SENDING_WINDOW_START_HOUR = 8
-_SENDING_WINDOW_END_HOUR = 12
+# OWNER REQUEST 2026-10-10: sending runs 08:00 (+/-15 min start) to 11:50
+# Beirut, about four hours. Expressed in minutes so the end can be 11:50.
+_SENDING_WINDOW_END_MINUTES = 11 * 60 + 50
+
+# OWNER REQUEST 2026-10-10: Instagram-only outreach. Email messages are no
+# longer generated at all (not even for an Instagram lead whose bio carries an
+# address); LinkedIn and email accounts are paused in the database, which
+# removes their discovery/lookup/sending jobs.
+_EMAIL_OUTREACH_ENABLED = False
 
 # OWNER REQUEST 2026-09-30: discovery windows are now fully SEQUENTIAL per
 # tenant rather than interleaved across one shared span -- Zimmar gets the
@@ -3733,12 +3743,15 @@ _INSURANCE_DISCOVERY_WINDOW_END_MINUTES = 27 * 60 + 59  # 03:59 Beirut, next cal
 # the same way running out of _MAX_SEARCH_ATTEMPTS already does.
 _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS = 2.5 * 60 * 60
 
-# End-of-day sending recovery, added 2026-09-20 -- see
-# build_daily_schedule()'s own "SECOND, DAILY safety net" comment for the
-# real incident this fixes. 18:00 sits in the middle of the gap between
-# the morning sending window closing (12:00) and the night discovery
-# window opening (20:00), so it can never collide with either.
-_SENDING_RECOVERY_HOUR = 18
+# Sending recovery, added 2026-09-20 -- see build_daily_schedule()'s own
+# "SECOND, DAILY safety net" comment for the real incident this fixes.
+# MOVED 2026-10-10 from 18:00 to 12:00 and narrowed to "nothing at all was
+# sent today": at 18:00 it re-sent any unused quota every evening, which now
+# lands exactly on top of the 18:00 discovery start and fought it for the
+# single browser slot (live incident 2026-10-10: recovery sending held the
+# slot while the 18:12 discovery gave up). 12:00 is just after the morning
+# window closes and before the evening discovery, so it collides with neither.
+_SENDING_RECOVERY_HOUR = 12
 _SENDING_RECOVERY_MINUTE = 0
 
 
@@ -4171,7 +4184,7 @@ def build_daily_schedule() -> BackgroundScheduler:
         else:
             send_hour, send_minute = _spread_within_window(
                 index, len(sending_accounts),
-                _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_HOUR * 60,
+                _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_MINUTES,
             )
 
         def _run_sending_for_this_account(tenant_id: str = tenant_id, account_id: str = account["id"]) -> None:
@@ -4210,7 +4223,9 @@ def build_daily_schedule() -> BackgroundScheduler:
             now_local = dt.datetime.now(tz)
             today_slot = now_local.replace(hour=send_hour, minute=send_minute, second=0, microsecond=0)
             window_start = now_local.replace(hour=_SENDING_WINDOW_START_HOUR, minute=0, second=0, microsecond=0)
-            window_end = now_local.replace(hour=_SENDING_WINDOW_END_HOUR, minute=0, second=0, microsecond=0)
+            window_end = now_local.replace(
+                hour=_SENDING_WINDOW_END_MINUTES // 60, minute=_SENDING_WINDOW_END_MINUTES % 60, second=0, microsecond=0,
+            )
             if window_start <= now_local < window_end and now_local > today_slot:
                 catch_up_at = now_local + dt.timedelta(seconds=10 + index * 30)
                 scheduler.add_job(
@@ -4251,8 +4266,8 @@ def build_daily_schedule() -> BackgroundScheduler:
             daily_limit = override if override is not None else warmup.effective_limit(acct, acct.get("platform"))
             day_start = pool.today_start_iso(tenant_id)
             already_sent = repo.cold_sends_today_for_account(account_id, day_start, tenant_id=tenant_id)
-            if already_sent >= daily_limit:
-                return  # already sent its full allowance today -- nothing to recover
+            if already_sent >= daily_limit or already_sent > 0:
+                return  # sent its allowance, or the morning window ran at all -- nothing to recover
             run_account_sending_cycle(tenant_id, account_id)
 
         scheduler.add_job(

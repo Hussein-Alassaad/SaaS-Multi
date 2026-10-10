@@ -214,6 +214,17 @@ check("the hourly reply poll still RUNS in the free gaps (04:00-07:19 and 12:30-
       not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 30), (15, 3), (17, 19))))
 check("run_reply_detection_poll can still be forced past the quiet windows",
       "force" in inspect.signature(sch.run_reply_detection_poll).parameters)
+# ADDED 2026-10-10: Instagram-only, 08:00-11:50 sending.
+check("the sending window ends at 11:50 Beirut", sch._SENDING_WINDOW_END_MINUTES == 11 * 60 + 50)
+check("25 cold sends at the longest gap (24 gaps) fit between the latest start (08:15) and 11:50",
+      24 * sch._SEND_GAP_MAX_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
+check("30 cold sends at the SHORTEST gap (29 gaps) also fit, so the dynamic gap can always squeeze them in",
+      29 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
+check("email messages are no longer generated (even for a lead with an email in its bio)",
+      sch._EMAIL_OUTREACH_ENABLED is False
+      and "_EMAIL_OUTREACH_ENABLED and" in inspect.getsource(sch._run_message_generation_cycle_for_tenant))
+check("end-of-day recovery moved to 12:00 so it can't collide with the 18:00 discovery start",
+      sch._SENDING_RECOVERY_HOUR == 12 and sch._SENDING_RECOVERY_MINUTE == 0)
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")
