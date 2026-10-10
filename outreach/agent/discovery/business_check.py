@@ -25,6 +25,13 @@ from agent.analysis import client as claude_client
 
 _log = logging.getLogger("agent.discovery.progress")
 
+# 2026-10-10, owner's instruction: leads must be qualified Lebanese businesses.
+# An "unsure" model verdict used to keep the candidate; in the first confirmed
+# batch (15/15 saved were "confirmed", none "unsure") the model almost never
+# says unsure, so rejecting it costs nearly no yield. An API FAILURE is still
+# kept (fail-open) -- that is an outage, not a judgement. Set False to revert.
+REJECT_UNSURE = True
+
 _SYSTEM = [{
     "type": "text",
     "text": (
@@ -76,4 +83,6 @@ def classify(profile: dict) -> tuple[bool, str] | None:
         return False, detail
     if verdict == "yes":
         return True, detail
+    if verdict == "unsure" and REJECT_UNSURE:
+        return False, f"unsure: {detail}"
     return None

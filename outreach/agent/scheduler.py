@@ -1891,6 +1891,13 @@ def _next_hashtag(
 # 5 posts for "consulting" and ZERO for these three -- a dead tag costs a whole
 # round for nothing, so they are left out of the anchored pool.
 _DEAD_ANCHORED_TERMS = {"general trading", "general commercial", "pharmaceutical", "consulting"}
+# ADDED 2026-10-10 from real results: abstract-sector tags return pages ABOUT a
+# sector rather than businesses in it. Tonight's forced run visited 28 profiles
+# for 2 saves, the rejects being news/radio/podcast accounts from Mexico, Turkey
+# and Brazil (the "media lebanon" tag); the Oct 8 "media/marketing" batch was
+# the one the owner called junk. Concrete product/trade tags (automotive,
+# technology, wholesale, construction...) gave 40-50% yields on Oct 9 and 10.
+_JUNK_PRONE_ANCHORED_TERMS = {"media", "advertising", "banking", "telecommunications", "education"}
 
 
 def _instagram_search_terms(
@@ -1913,9 +1920,12 @@ def _instagram_search_terms(
     if tenant_terms or not niche_is_random:
         return niche, tenant_terms
     anchor = (location or "lebanon").split(",")[0].strip().lower() or "lebanon"
-    live_terms = [t for t in _RANDOM_INDUSTRY_TERMS if t not in _DEAD_ANCHORED_TERMS]
+    live_terms = [
+        t for t in _RANDOM_INDUSTRY_TERMS
+        if t not in _DEAD_ANCHORED_TERMS and t not in _JUNK_PRONE_ANCHORED_TERMS
+    ]
     anchored = [f"{t} {anchor}" for t in live_terms]
-    if niche in _DEAD_ANCHORED_TERMS:
+    if niche in _DEAD_ANCHORED_TERMS or niche in _JUNK_PRONE_ANCHORED_TERMS:
         niche = random.choice(live_terms)
     first = f"{niche} {anchor}" if niche and anchor not in niche.lower() else niche
     return first, anchored + list(_BUSINESS_HASHTAG_TERMS)
@@ -1948,7 +1958,12 @@ def _profile_has_message_button(page) -> bool | None:
         return True
     except Exception as exc:  # noqa: BLE001 -- Playwright TimeoutError == no button; anything else == unknown
         return False if type(exc).__name__ == "TimeoutError" else None
-_MAX_SHORTFALL_CARRY = 10
+_MAX_SHORTFALL_CARRY = 0
+# SET TO 0 2026-10-10, owner's instruction: Instagram discovery AND sending
+# are both 25/day. The carry-forward compares last night's saves against the
+# CURRENT limit, so on the day the limit was raised 15 -> 25 it would have
+# invented a 10-lead "shortfall" and pushed the target to 35. The standing
+# approved queue is the buffer now. Set above 0 to bring the carry back.
 
 
 def _discover_instagram(

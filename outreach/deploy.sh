@@ -144,7 +144,9 @@ business_check.claude_client.call_json = lambda *a, **k: {"verdict": "no", "cate
 _v = business_check.classify(dict(_ig))
 check("a confident 'no' verdict from the model is returned as a rejection", _v is not None and _v[0] is False)
 business_check.claude_client.call_json = lambda *a, **k: {"verdict": "unsure", "category": "?", "reason": "thin bio"}
-check("an 'unsure' verdict is NOT a rejection", business_check.classify(dict(_ig)) is None)
+_uns = business_check.classify(dict(_ig))
+check("an 'unsure' verdict IS a rejection now (owner: must be qualified Lebanese businesses), while an API failure is still kept",
+      business_check.REJECT_UNSURE is True and _uns is not None and _uns[0] is False)
 business_check.claude_client.call_json = lambda *a, **k: {"verdict": "yes", "category": "agency", "reason": "Lebanese agency"}
 _yes = business_check.classify(dict(_ig))
 check("a 'yes' verdict is returned as a confirmed business, not a rejection", _yes is not None and _yes[0] is True)
@@ -161,7 +163,7 @@ check("a no-sector tenant's first Instagram term is anchored to its target count
       sch._instagram_search_terms("engineering", [], True, "Lebanon")[0] == "engineering lebanon")
 _first, _pool = sch._instagram_search_terms("media", None, True, "Lebanon, UAE")
 check("the rotation pool mixes country-anchored industry tags with the curated Lebanese business tags",
-      "media lebanon" in _pool and "made in lebanon" in _pool and not any("," in t for t in _pool))
+      "automotive lebanon" in _pool and "made in lebanon" in _pool and not any("," in t for t in _pool))
 check("a tenant WITH its own sector terms (MJivity) is left exactly as before",
       sch._instagram_search_terms("jewelry", ["jewelry", "cosmetics"], True, "Lebanon") == ("jewelry", ["jewelry", "cosmetics"]))
 check("a tenant with a real configured niche is left exactly as before",
@@ -171,13 +173,18 @@ check("a term already naming the country is not double-anchored",
 _f_dead, _p_dead = sch._instagram_search_terms("pharmaceutical", [], True, "Lebanon")
 check("tags verified dead on Instagram are never used as the first term or in the rotation pool",
       "pharmaceutical" not in _f_dead and not any(x.startswith(("pharmaceutical", "general trading", "general commercial", "consulting ")) for x in _p_dead))
+_f_j, _p_j = sch._instagram_search_terms("media", [], True, "Lebanon")
+check("junk-prone abstract-sector tags (media/advertising/banking/telecommunications/education) are never used as the first term or in the pool",
+      _f_j != "media lebanon"
+      and not any(x in _p_j for x in ("media lebanon", "advertising lebanon", "banking lebanon", "telecommunications lebanon", "education lebanon"))
+      and "automotive lebanon" in _p_j and "technology lebanon" in _p_j)
 _src = inspect.getsource(sch._discover_instagram)
 check("Instagram discovery rejects foreign-suffix handles BEFORE paying for a profile visit",
       "_foreign_handle_suffix(handle)" in _src and _src.index("_foreign_handle_suffix(handle)") < _src.index("instagram.extract_profile(page)"))
 check("Instagram discovery abandons a hashtag after repeated zero-save profile visits",
       "_TAG_ABANDON_AFTER_VISITS" in _src and sch._TAG_ABANDON_AFTER_VISITS == 6)
 check("Instagram discovery carries a short night's gap into the next night's target (capped), skipped during warm-up",
-      "count_account_leads_between" in _src and sch._MAX_SHORTFALL_CARRY == 10 and "ig_daily_limit" in _src
+      "count_account_leads_between" in _src and sch._MAX_SHORTFALL_CARRY == 0 and "ig_daily_limit" in _src
       and callable(sch.repo.count_account_leads_between))
 check("the save loop stops at the carried-forward target, not the bare daily limit",
       _src.count('counts["instagram_saved"] >= target') >= 2 and 'counts["instagram_saved"] >= limit' not in _src)
