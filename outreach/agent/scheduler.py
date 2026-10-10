@@ -3204,7 +3204,32 @@ def run_reply_send_cycle() -> list[dict]:
     return results
 
 
-def run_reply_detection_poll() -> dict:
+# ADDED 2026-10-10, owner's explicit request ("remove the hourly reply check
+# in times of sending and discovery"). This droplet has ONE browser slot, and
+# the hourly reply-detection poll can hold it for 30+ minutes (it opens a
+# thread per contacted lead, and each stale thread burns timeouts). Live
+# incident: the 18:03 poll held the slot until 18:37, so the 18:12 discovery
+# waited its 5 minutes, gave up, and tonight's discovery simply did not run;
+# the same collision cost sending messages on Oct 8-9. The poll now skips
+# itself in these Beirut-time windows (minutes after midnight), each starting
+# 40 minutes BEFORE the real window so a poll that begins just ahead of it
+# has finished by the time the window opens:
+#   sending    08:00-12:00  -> quiet 07:20-12:30
+#   discovery  18:00-04:00  -> quiet 17:20-04:00 (covers Zimmar's 18:00-23:00
+#                              window and Insurance's 23:00-04:00 window)
+# Replies are then checked 04:00-07:20 and 12:30-17:20.
+_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 30), (17 * 60 + 20, 28 * 60))
+
+
+def _reply_poll_should_skip(now: dt.datetime) -> bool:
+    minute_of_day = now.hour * 60 + now.minute
+    return any(
+        start <= minute_of_day < end or start <= minute_of_day + 24 * 60 < end
+        for start, end in _REPLY_POLL_QUIET_WINDOWS
+    )
+
+
+def run_reply_detection_poll(force: bool = False) -> dict:
     """
     Real gap fixed 2026-09-07: check_linkedin_replies()/check_instagram_
     replies()/check_whatsapp_replies() only ever ran once daily, inside
@@ -3224,6 +3249,9 @@ def run_reply_detection_poll() -> dict:
     channel's send on the same tick, for no real benefit since they don't
     share any state.
     """
+    if not force and _reply_poll_should_skip(dt.datetime.now(ZoneInfo(config.TIMEZONE))):
+        _progress_log.info("[reply_check] skipped: inside a sending/discovery quiet window (see _REPLY_POLL_QUIET_WINDOWS)")
+        return {}
     results: dict[str, dict] = {}
     for tenant_id in repo.list_active_tenant_ids():
         with repo.tenant_scope(tenant_id):

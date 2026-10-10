@@ -204,6 +204,16 @@ business_check.classify = lambda p: None
 _dsrc = inspect.getsource(sch._discover_instagram)
 check("Instagram discovery probes the Message button and captures the caption on each profile it visits",
       "_profile_has_message_button(page)" in _dsrc and "extract_post_caption(page)" in _dsrc)
+import datetime as _qdt
+def _bt(h, m): return _qdt.datetime(2026, 10, 10, h, m)
+check("the hourly reply poll SKIPS during the sending window and the 40 min before it (07:20-12:30)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((7, 20), (8, 11), (10, 0), (12, 29))))
+check("the hourly reply poll SKIPS during the discovery window and the 40 min before it (17:20-04:00, including after midnight)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((17, 20), (18, 3), (21, 0), (23, 59), (0, 30), (3, 59))))
+check("the hourly reply poll still RUNS in the free gaps (04:00-07:19 and 12:30-17:19)",
+      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 30), (15, 3), (17, 19))))
+check("run_reply_detection_poll can still be forced past the quiet windows",
+      "force" in inspect.signature(sch.run_reply_detection_poll).parameters)
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")
