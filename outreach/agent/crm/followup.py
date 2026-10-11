@@ -30,6 +30,13 @@ from agent.messaging import generate as message_generate
 from agent.messaging import style as message_style
 
 
+# 2026-10-11: Instagram-only outreach (owner's instruction 2026-10-10). A
+# scheduled follow-up on a channel that is switched off is cancelled instead of
+# generating a message nobody can send -- the Follow-ups button schedules every
+# contacted lead, including the LinkedIn and email ones.
+_FOLLOWUP_CHANNELS = {"instagram"}
+
+
 class MaxContactsReached(RuntimeError):
     """Raised when scheduling a follow-up would exceed max_contacts_per_lead."""
 
@@ -96,6 +103,18 @@ def _original_body_for(lead_id: str, channel: str) -> str | None:
     return max(sent, key=lambda m: m.get("sent_at") or "").get("body")
 
 
+def _has_open_followup_message(lead_id: str, channel: str) -> bool:
+    """A follow-up for this lead is already waiting in the queue (or approved and
+    not yet sent), so a second scheduled row for the same lead is a duplicate --
+    clicking the button twice creates one row per lead per click."""
+    return any(
+        m.get("is_followup") and m.get("channel") == channel
+        and m.get("approval_status") in ("awaiting", "approved", "held")
+        and m.get("send_status") not in ("sent", "failed")
+        for m in repo.messages_for_lead(lead_id)
+    )
+
+
 def dispatch_due_followups() -> list[dict]:
     """
     For every follow-up whose scheduled time has arrived, generate its
@@ -128,6 +147,22 @@ def dispatch_due_followups() -> list[dict]:
             continue
 
         channel = lead.get("platform")
+        if channel not in _FOLLOWUP_CHANNELS:
+            repo.update_follow_up(follow_up["id"], {"status": "cancelled"})
+            results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": False,
+                            "skipped": f"{channel} outreach is switched off"})
+            continue
+        if _has_open_followup_message(lead_id, channel):
+            repo.update_follow_up(follow_up["id"], {"status": "cancelled"})
+            results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": False,
+                            "skipped": "duplicate -- a follow-up is already queued for this lead"})
+            continue
+        max_contacts = (repo.get_settings() or {}).get("max_contacts_per_lead") or 2
+        if (lead.get("contact_count") or 0) >= max_contacts:
+            repo.update_follow_up(follow_up["id"], {"status": "cancelled"})
+            results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": False,
+                            "skipped": f"already contacted {lead.get('contact_count')} time(s) (max {max_contacts})"})
+            continue
         try:
             original_body = _original_body_for(lead_id, channel)
             if not original_body:

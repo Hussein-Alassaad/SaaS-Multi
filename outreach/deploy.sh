@@ -232,6 +232,15 @@ check("email messages are no longer generated (even for a lead with an email in 
       and "_EMAIL_OUTREACH_ENABLED and" in inspect.getsource(sch._run_message_generation_cycle_for_tenant))
 check("end-of-day recovery moved to 12:00 so it can't collide with the 18:00 discovery start",
       sch._SENDING_RECOVERY_HOUR == 12 and sch._SENDING_RECOVERY_MINUTE == 0)
+# ADDED 2026-10-11: follow-up dispatch.
+from agent.crm import followup as _fu
+_fjobs = [j for j in sch.build_daily_schedule().get_jobs() if j.id == "followup-dispatch-poll"]
+check("a fast follow-up dispatcher job is scheduled (the button used to wait for the 00:30/07:00 pipeline)",
+      len(_fjobs) == 1 and sch._FOLLOWUP_POLL_INTERVAL_MINUTES <= 5)
+check("follow-ups are only dispatched on Instagram (LinkedIn and email are off)", _fu._FOLLOWUP_CHANNELS == {"instagram"})
+_dsrc2 = inspect.getsource(_fu.dispatch_due_followups)
+check("dispatch cancels duplicate follow-ups and honors the max-contacts cap instead of generating a second message",
+      "_has_open_followup_message" in _dsrc2 and "max_contacts_per_lead" in _dsrc2 and "_FOLLOWUP_CHANNELS" in _dsrc2)
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")

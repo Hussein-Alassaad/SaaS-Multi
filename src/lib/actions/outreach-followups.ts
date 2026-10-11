@@ -136,7 +136,17 @@ export async function followUpAllAction() {
 
   const result = await withTenant(session.tenantId!, async (tx) => {
     const leads = await tx.outreachLead.findMany({
-      where: { tenantId: session.tenantId!, status: "contacted", doNotContact: false },
+      where: {
+        tenantId: session.tenantId!,
+        status: "contacted",
+        doNotContact: false,
+        // Instagram is the only live outreach channel (LinkedIn and email are
+        // switched off), and a lead that already has a scheduled follow-up must
+        // not get a second one: pressing the button twice used to create one
+        // row per lead per press, i.e. two follow-up messages per lead.
+        platform: "instagram",
+        followUps: { none: { status: "scheduled" } },
+      },
       select: { id: true },
     });
     if (leads.length === 0) return { scheduled: 0 };

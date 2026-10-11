@@ -3246,6 +3246,31 @@ def _reply_poll_should_skip(now: dt.datetime) -> bool:
     )
 
 
+def run_followup_dispatch_poll() -> dict:
+    """
+    ADDED 2026-10-11, real incident: the dashboard's Follow-up button only
+    writes "scheduled" markers; the agent turned them into messages solely
+    inside the once-daily downstream pipeline (00:30 / 07:00), so after
+    pressing it nothing reached the Approval Queue for hours -- and across two
+    presses no follow-up message had EVER been written. This polls every few
+    minutes so a press shows up in the Approval Queue within minutes. It calls
+    Claude only (no browser), so it cannot collide with sending or discovery.
+    """
+    results: dict[str, list] = {}
+    for tenant_id in repo.list_active_tenant_ids():
+        with repo.tenant_scope(tenant_id):
+            if repo.is_tenant_paused():
+                continue
+            try:
+                results[tenant_id] = followup.dispatch_due_followups()
+            except Exception as exc:  # noqa: BLE001 -- one tenant must not stop the others
+                log_error("followup", exc)
+    return results
+
+
+_FOLLOWUP_POLL_INTERVAL_MINUTES = 5
+
+
 def run_reply_detection_poll(force: bool = False) -> dict:
     """
     Real gap fixed 2026-09-07: check_linkedin_replies()/check_instagram_
@@ -4335,6 +4360,14 @@ def build_daily_schedule() -> BackgroundScheduler:
         trigger=IntervalTrigger(minutes=_REPLY_POLL_INTERVAL_MINUTES),
         id="reply-send-poll",
         name="Fast poll: deliver tenant-written replies",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        run_followup_dispatch_poll,
+        trigger=IntervalTrigger(minutes=_FOLLOWUP_POLL_INTERVAL_MINUTES),
+        id="followup-dispatch-poll",
+        name="Fast poll: turn scheduled follow-ups into approval-queue messages",
         replace_existing=True,
     )
 
