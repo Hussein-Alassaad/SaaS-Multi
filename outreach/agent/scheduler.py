@@ -3249,6 +3249,19 @@ _REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (17 * 60 + 20, 28 * 60
 # 12:45 (a send that starts at 12:29 may still be finishing).
 
 
+# Hard stops (Beirut minutes after midnight): the reply poll must be completely
+# finished by 07:55 (sending opens 08:00) and 17:55 (discovery opens 18:00), no
+# matter how many leads it still has to check.
+_REPLY_POLL_HARD_STOP_MINUTES = (7 * 60 + 55, 17 * 60 + 55)
+
+
+def _reply_poll_deadline(now: dt.datetime) -> dt.datetime:
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    candidates = [midnight + dt.timedelta(minutes=m) for m in _REPLY_POLL_HARD_STOP_MINUTES]
+    candidates.append(midnight + dt.timedelta(days=1, minutes=_REPLY_POLL_HARD_STOP_MINUTES[0]))
+    return min(c for c in candidates if c > now)
+
+
 def _reply_poll_should_skip(now: dt.datetime) -> bool:
     minute_of_day = now.hour * 60 + now.minute
     return any(
@@ -3317,6 +3330,7 @@ def run_reply_detection_poll(force: bool = False) -> dict:
     if not force and _reply_poll_should_skip(dt.datetime.now(ZoneInfo(config.TIMEZONE))):
         _progress_log.info("[reply_check] skipped: inside a sending/discovery quiet window (see _REPLY_POLL_QUIET_WINDOWS)")
         return {}
+    deadline_ts = _reply_poll_deadline(dt.datetime.now(ZoneInfo(config.TIMEZONE))).timestamp()
     results: dict[str, dict] = {}
     for tenant_id in repo.list_active_tenant_ids():
         with repo.tenant_scope(tenant_id):
@@ -3332,7 +3346,7 @@ def run_reply_detection_poll(force: bool = False) -> dict:
                 tenant_result["linkedin"] = {"ok": False, "error": str(exc)}
                 log_error("reply_check", exc, channel="linkedin")
             try:
-                tenant_result["instagram"] = instagram_reply_check.check_instagram_replies()
+                tenant_result["instagram"] = instagram_reply_check.check_instagram_replies(deadline_ts=deadline_ts)
             except Exception as exc:  # noqa: BLE001 -- e.g. unverified selector mismatch; don't lose the other channels
                 tenant_result["instagram"] = {"ok": False, "error": str(exc)}
                 log_error("reply_check", exc, channel="instagram")

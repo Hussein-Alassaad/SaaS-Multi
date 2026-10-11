@@ -172,7 +172,14 @@ class SessionBusy(RuntimeError):
 # actual capacity is 1 concurrent browser, not 2 -- a slower but complete
 # scrape beats a fast one that fails outright.
 _MAX_CONCURRENT_BROWSER_SESSIONS = 1
-_GLOBAL_SESSION_LOCK_TIMEOUT_SECONDS = 300
+# RAISED 2026-10-11 from 300 to 45 minutes, owner's instruction ("if the reply
+# checker is working, when it finishes everything continues normally"). At 5
+# minutes a job that arrived while the hourly reply poll held the slot (it ran
+# 34 minutes on 2026-10-10) gave up -- discovery recorded nothing for the night.
+# Now a job simply WAITS for the slot, then proceeds. The reply poll also has
+# a hard stop before each real window (see scheduler._reply_poll_deadline), so
+# the wait is normally short.
+_GLOBAL_SESSION_LOCK_TIMEOUT_SECONDS = 45 * 60
 
 
 @contextlib.contextmanager

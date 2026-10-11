@@ -272,6 +272,16 @@ check("the Zimmar follow-up only asks whether they are interested: no website, s
 check("generate_followup_message returns the fixed Zimmar text without calling the AI",
       "_ZIMMAR_FOLLOWUP_TEMPLATE.format" in inspect.getsource(_gen.generate_followup_message)
       and inspect.getsource(_gen.generate_followup_message).index("_ZIMMAR_FOLLOWUP_TEMPLATE.format") < inspect.getsource(_gen.generate_followup_message).index("claude_client.call_text"))
+# ADDED 2026-10-11: the reply poll must never block sending/discovery.
+check("a job waits up to 45 minutes for the browser slot instead of giving up after 5 (owner: when the reply check finishes, everything continues)",
+      sess._GLOBAL_SESSION_LOCK_TIMEOUT_SECONDS == 45 * 60)
+check("the reply poll's next hard stop is 07:55 before sending and 17:55 before discovery, rolling to tomorrow's 07:55 after 17:55",
+      sch._reply_poll_deadline(_bt(4, 37)) == _bt(7, 55) and sch._reply_poll_deadline(_bt(7, 54)) == _bt(7, 55)
+      and sch._reply_poll_deadline(_bt(7, 55)) == _bt(17, 55) and sch._reply_poll_deadline(_bt(13, 37)) == _bt(17, 55)
+      and sch._reply_poll_deadline(_bt(17, 56)) == _qdt.datetime(2026, 10, 11, 7, 55))
+check("every reply poll is bounded by that deadline and the Instagram check actually honors it between leads",
+      "deadline_ts=deadline_ts" in inspect.getsource(sch.run_reply_detection_poll)
+      and "time.time() >= deadline_ts" in inspect.getsource(instagram_reply_check.check_instagram_replies))
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")

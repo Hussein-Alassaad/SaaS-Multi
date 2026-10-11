@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import time
 
 from playwright.sync_api import Page
 
@@ -251,7 +252,7 @@ def _read_thread_messages(page: Page) -> list[dict]:
     return boxes
 
 
-def check_instagram_replies() -> list[dict]:
+def check_instagram_replies(deadline_ts: float | None = None) -> list[dict]:
     """
     Checks both "contacted" leads (never replied yet) AND "replied" leads
     (an ongoing back-and-forth) reached via Instagram, opens the owning
@@ -283,6 +284,11 @@ def check_instagram_replies() -> list[dict]:
     accounts_by_id = {}
     with SessionManager() as sessions:
         for lead in leads:
+            # ADDED 2026-10-11: hard stop so this poll can never still be holding
+            # the single browser slot when a sending or discovery window opens.
+            # Leads not reached are simply checked on the next poll.
+            if deadline_ts is not None and time.time() >= deadline_ts:
+                break
             if not _has_instagram_sent(lead["id"]):
                 continue
 
