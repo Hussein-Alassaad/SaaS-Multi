@@ -31,6 +31,11 @@ _log = logging.getLogger("agent.discovery.progress")
 # says unsure, so rejecting it costs nearly no yield. An API FAILURE is still
 # kept (fail-open) -- that is an outage, not a judgement. Set False to revert.
 REJECT_UNSURE = True
+# 2026-10-11: an API FAILURE now rejects too (it used to keep the candidate).
+# The API balance running out would otherwise silently turn the check off and
+# let every unvetted account through. Discovery also pre-flights is_available()
+# and skips the night when the check is down. Set False to revert.
+REJECT_ON_FAILURE = True
 
 _SYSTEM = [{
     "type": "text",
@@ -53,6 +58,18 @@ _SYSTEM = [{
 }]
 
 
+def is_available() -> bool:
+    """One tiny real API call: True if the model can currently be reached."""
+    if not claude_client.is_configured():
+        return False
+    try:
+        claude_client.call_text(_SYSTEM, "ping", config.MODEL_ANALYSIS, max_tokens=5)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("[business_check] availability probe failed: %s", exc)
+        return False
+
+
 def classify(profile: dict) -> tuple[bool, str] | None:
     """
     Returns (True, "category: reason") when the model is confident it IS a
@@ -60,7 +77,7 @@ def classify(profile: dict) -> tuple[bool, str] | None:
     or None (keep the candidate) on unsure / any failure.
     """
     if not claude_client.is_configured():
-        return None
+        return (False, "AI check unavailable (no API key)") if REJECT_ON_FAILURE else None
 
     user_content = (
         f"Handle: @{profile.get('handle') or 'unknown'}\n"
@@ -73,7 +90,9 @@ def classify(profile: dict) -> tuple[bool, str] | None:
     try:
         answer = claude_client.call_json(_SYSTEM, user_content, config.MODEL_ANALYSIS, max_tokens=200)
     except Exception as exc:  # noqa: BLE001 -- fail open, never block discovery on an AI hiccup
-        _log.warning("[business_check] @%s: AI check failed (%s) -- keeping candidate", profile.get("handle"), exc)
+        _log.warning("[business_check] @%s: AI check failed (%s)", profile.get("handle"), exc)
+        if REJECT_ON_FAILURE:
+            return False, "AI check unavailable -- cannot confirm this is a Lebanese business"
         return None
 
     verdict = str(answer.get("verdict", "")).strip().lower()

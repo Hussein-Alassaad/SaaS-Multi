@@ -115,7 +115,7 @@ def _has_open_followup_message(lead_id: str, channel: str) -> bool:
     )
 
 
-def dispatch_due_followups() -> list[dict]:
+def dispatch_due_followups(limit: int | None = None) -> list[dict]:
     """
     For every follow-up whose scheduled time has arrived, generate its
     distinct follow-up message (see generate.generate_followup_message) on
@@ -138,8 +138,11 @@ def dispatch_due_followups() -> list[dict]:
     # mid-batch). Added 2026-09-15.
     follow_up_guidance = (repo.get_settings() or {}).get("follow_up_guidance") or None
     results = []
+    generated = 0
 
     for follow_up in due_followups():
+        if limit is not None and generated >= limit:
+            break
         lead_id = follow_up["lead_id"]
         lead = repo.get_lead(lead_id)
         if not lead:
@@ -180,6 +183,7 @@ def dispatch_due_followups() -> list[dict]:
             })
             repo.update_follow_up(follow_up["id"], {"status": "sent"})
             results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": True, "channel": channel})
+            generated += 1
         except Exception as exc:  # noqa: BLE001 -- one bad follow-up shouldn't stop the batch
             results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": False, "error": str(exc)})
             try:
@@ -189,5 +193,10 @@ def dispatch_due_followups() -> list[dict]:
                 })
             except Exception:  # noqa: BLE001 -- logging itself must never crash the pipeline
                 pass
+            if limit is not None:
+                # One attempt per paced tick: a systemic failure (e.g. the
+                # Anthropic API balance running out, which failed 51 follow-ups
+                # in a row on 2026-10-11) must not burn through every pending row.
+                break
 
     return results

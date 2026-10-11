@@ -109,7 +109,7 @@ export function FollowUpsClient({
         description:
           result.scheduled === 0
             ? "Nothing to follow up right now."
-            : `${result.scheduled} lead${result.scheduled === 1 ? "" : "s"} scheduled — messages will appear in the Approval Queue shortly.`,
+            : `${result.scheduled} lead${result.scheduled === 1 ? "" : "s"} scheduled — the agent writes one follow-up every 2 minutes between 1 pm and 5 pm, and each appears in the Approval Queue as it is written.`,
         variant: "success",
       });
     });
@@ -172,7 +172,7 @@ export function FollowUpsClient({
 
       {justScheduled !== null && justScheduled > 0 && (
         <p className="mt-2 text-xs text-[var(--text-5)]">
-          Scheduled — check the Approval Queue in a moment once the agent generates each message.
+          Scheduled — between 1 pm and 5 pm the agent writes one follow-up every 2 minutes; check the Approval Queue as they appear.
         </p>
       )}
 

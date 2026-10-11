@@ -138,8 +138,15 @@ def _boom(p): raise RuntimeError("api down")
 business_check.classify = _real_classify
 _orig_call = business_check.claude_client.call_json
 business_check.claude_client.call_json = lambda *a, **k: _boom(None)
-check("a failing AI call is KEPT (fail-open), never blocks discovery",
-      business_check.classify(dict(_ig)) is None)
+import inspect
+_fail = business_check.classify(dict(_ig))
+check("a failing AI call now REJECTS the candidate (fail-closed: an API outage must not let unvetted accounts through)",
+      business_check.REJECT_ON_FAILURE is True and _fail is not None and _fail[0] is False and "unavailable" in _fail[1])
+_orig_text = business_check.claude_client.call_text
+business_check.claude_client.call_text = lambda *a, **k: _boom(None)
+check("is_available() is False when the API cannot be reached, so discovery can skip the night instead of saving unvetted leads",
+      business_check.is_available() is False and "is_available()" in inspect.getsource(sch._discover_instagram))
+business_check.claude_client.call_text = _orig_text
 business_check.claude_client.call_json = lambda *a, **k: {"verdict": "no", "category": "creator", "reason": "vlogger"}
 _v = business_check.classify(dict(_ig))
 check("a confident 'no' verdict from the model is returned as a rejection", _v is not None and _v[0] is False)
@@ -153,6 +160,7 @@ check("a 'yes' verdict is returned as a confirmed business, not a rejection", _y
 business_check.claude_client.call_json = _orig_call
 check("Instagram handle with a foreign country suffix (.bh / .ly) is rejected without any AI call",
       all(not qualify.qualify_profile(profile(**{**_ig, "handle": h}), "")[0] for h in ("mirrormedia.bh", "pro_media.ly", "agency.ae")))
+business_check.classify = lambda p: None  # these two tests are about the suffix rule, not the AI call
 check("Instagram handle ending in .lb (Lebanon) is NOT rejected by the suffix rule",
       qualify.qualify_profile(profile(**{**_ig, "handle": "waredmedialb.lb"}), "")[0])
 check("plain handles with no country suffix are not rejected by the suffix rule",
@@ -213,34 +221,57 @@ check("Instagram discovery probes the Message button and captures the caption on
       "_profile_has_message_button(page)" in _dsrc and "extract_post_caption(page)" in _dsrc)
 import datetime as _qdt
 def _bt(h, m): return _qdt.datetime(2026, 10, 10, h, m)
-check("the hourly reply poll SKIPS during the sending window and the 40 min before it (07:20-12:30)",
-      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((7, 20), (8, 11), (10, 0), (12, 29))))
+check("the hourly reply poll SKIPS during the sending window and the 40 min before it (07:20-12:45)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((7, 20), (8, 11), (10, 0), (12, 29), (12, 44))))
 check("the hourly reply poll SKIPS during the discovery window and the 40 min before it (17:20-04:00, including after midnight)",
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((17, 20), (18, 3), (21, 0), (23, 59), (0, 30), (3, 59))))
-check("the hourly reply poll still RUNS in the free gaps (04:00-07:19 and 12:30-17:19)",
-      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 30), (15, 3), (17, 19))))
+check("the hourly reply poll still RUNS in the free gaps (04:00-07:19 and 12:45-17:19)",
+      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 45), (15, 3), (17, 19))))
 check("run_reply_detection_poll can still be forced past the quiet windows",
       "force" in inspect.signature(sch.run_reply_detection_poll).parameters)
 # ADDED 2026-10-10: Instagram-only, 08:00-11:50 sending.
-check("the sending window ends at 11:50 Beirut", sch._SENDING_WINDOW_END_MINUTES == 11 * 60 + 50)
-check("25 cold sends at the longest gap (24 gaps) fit between the latest start (08:15) and 11:50",
+check("the sending window ends at 12:30 Beirut (owner 2026-10-11)", sch._SENDING_WINDOW_END_MINUTES == 12 * 60 + 30)
+check("25 new + 15 follow-ups = 40 sends: 39 gaps at the 6-minute minimum fit between the latest start (08:15) and 12:30",
+      39 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
+check("the Instagram follow-up cap is 15/day, separate from the 25 new-lead cap", sch._INSTAGRAM_FOLLOWUP_DAILY_LIMIT == 15)
+check("25 cold sends at the longest gap (24 gaps) fit between the latest start (08:15) and the window end",
       24 * sch._SEND_GAP_MAX_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
 check("30 cold sends at the SHORTEST gap (29 gaps) also fit, so the dynamic gap can always squeeze them in",
       29 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
 check("email messages are no longer generated (even for a lead with an email in its bio)",
       sch._EMAIL_OUTREACH_ENABLED is False
       and "_EMAIL_OUTREACH_ENABLED and" in inspect.getsource(sch._run_message_generation_cycle_for_tenant))
-check("end-of-day recovery moved to 12:00 so it can't collide with the 18:00 discovery start",
-      sch._SENDING_RECOVERY_HOUR == 12 and sch._SENDING_RECOVERY_MINUTE == 0)
+check("end-of-day recovery runs just after the window (12:35), nowhere near the 18:00 discovery start",
+      sch._SENDING_RECOVERY_HOUR == 12 and sch._SENDING_RECOVERY_MINUTE == 35)
 # ADDED 2026-10-11: follow-up dispatch.
 from agent.crm import followup as _fu
 _fjobs = [j for j in sch.build_daily_schedule().get_jobs() if j.id == "followup-dispatch-poll"]
 check("a fast follow-up dispatcher job is scheduled (the button used to wait for the 00:30/07:00 pipeline)",
-      len(_fjobs) == 1 and sch._FOLLOWUP_POLL_INTERVAL_MINUTES <= 5)
+      len(_fjobs) == 1 and sch._FOLLOWUP_POLL_INTERVAL_MINUTES == 2)
+check("follow-ups are written only 13:00-17:00 Beirut (every 2 min = up to 120 in the window), outside it the poll does nothing",
+      sch._followup_dispatch_in_window(_bt(13, 0)) and sch._followup_dispatch_in_window(_bt(16, 59))
+      and not sch._followup_dispatch_in_window(_bt(12, 59)) and not sch._followup_dispatch_in_window(_bt(17, 0))
+      and not sch._followup_dispatch_in_window(_bt(3, 0)))
+check("each follow-up tick writes at most ONE message (and stops after a single failure)",
+      "limit=1" in inspect.getsource(sch.run_followup_dispatch_poll)
+      and "limit is not None" in inspect.getsource(_fu.dispatch_due_followups))
 check("follow-ups are only dispatched on Instagram (LinkedIn and email are off)", _fu._FOLLOWUP_CHANNELS == {"instagram"})
 _dsrc2 = inspect.getsource(_fu.dispatch_due_followups)
 check("dispatch cancels duplicate follow-ups and honors the max-contacts cap instead of generating a second message",
       "_has_open_followup_message" in _dsrc2 and "max_contacts_per_lead" in _dsrc2 and "_FOLLOWUP_CHANNELS" in _dsrc2)
+# ADDED 2026-10-11: Zimmar follow-ups are a fixed "interested or not?" note.
+from agent.messaging import generate as _gen
+_fu_text = _gen._ZIMMAR_FOLLOWUP_TEMPLATE.format(greeting_name="Acme Trading")
+check("the Zimmar follow-up is short (one greeting line and one small paragraph) and addresses the lead by name",
+      _fu_text.startswith("Hi Acme Trading,") and len(_fu_text) < 120 and _fu_text.count("\n\n") == 1)
+check("the Zimmar follow-up contains NO dashes of any kind (owner's instruction)",
+      not any(c in _gen._ZIMMAR_FOLLOWUP_TEMPLATE for c in ("-", "\u2013", "\u2014", "\u2012")))
+check("the Zimmar follow-up only asks whether they are interested: no website, security pitch, or 'circling back' wording",
+      "interested" in _fu_text.lower()
+      and not any(w in _fu_text.lower() for w in ("website", "circling", "network", "camera", "cctv", "security", "zimmar")))
+check("generate_followup_message returns the fixed Zimmar text without calling the AI",
+      "_ZIMMAR_FOLLOWUP_TEMPLATE.format" in inspect.getsource(_gen.generate_followup_message)
+      and inspect.getsource(_gen.generate_followup_message).index("_ZIMMAR_FOLLOWUP_TEMPLATE.format") < inspect.getsource(_gen.generate_followup_message).index("claude_client.call_text"))
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")

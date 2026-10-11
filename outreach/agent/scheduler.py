@@ -58,7 +58,7 @@ from agent.core import warmup
 from agent.core.session import ProxyIpMismatch, SessionBusy, SessionManager
 from agent.crm import followup
 from agent.db import repositories as repo
-from agent.discovery import findymail, hunter, icypeas, instagram, linkedin
+from agent.discovery import business_check, findymail, hunter, icypeas, instagram, linkedin
 from agent.discovery.qualify import _foreign_handle_suffix, qualify_profile
 from agent.discovery.qualify import _is_agency as _lead_is_agency
 from agent.messaging import approval
@@ -2000,6 +2000,15 @@ def _discover_instagram(
                 )
     except Exception as exc:  # noqa: BLE001 -- the carry-forward is a bonus, never block discovery on it
         _progress_log.warning("[%s] Instagram: shortfall carry-forward skipped (%s)", account.get("label"), exc)
+    # ADDED 2026-10-11: the AI business check is what keeps junk out of the
+    # queue. If it is down (the Anthropic API balance ran out on 2026-10-11),
+    # saving leads would let unvetted accounts through -- so skip the night
+    # loudly instead of burning it on profile visits that cannot be vetted.
+    if business_check.REJECT_ON_FAILURE and not business_check.is_available():
+        raise RuntimeError(
+            "Instagram discovery skipped: the AI business check is unavailable "
+            "(check the Anthropic API credit balance) -- not saving unvetted leads."
+        )
     search_niche, tenant_terms = _instagram_search_terms(niche, tenant_terms, niche_is_random, location)
     seen_urls: set[str] = set()
     tried_tags: set[str] = set()
@@ -3235,7 +3244,9 @@ def run_reply_send_cycle() -> list[dict]:
 #   discovery  18:00-04:00  -> quiet 17:20-04:00 (covers Zimmar's 18:00-23:00
 #                              window and Insurance's 23:00-04:00 window)
 # Replies are then checked 04:00-07:20 and 12:30-17:20.
-_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 30), (17 * 60 + 20, 28 * 60))
+_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (17 * 60 + 20, 28 * 60))
+# 2026-10-11: sending window now ends 12:30, so the morning quiet window runs to
+# 12:45 (a send that starts at 12:29 may still be finishing).
 
 
 def _reply_poll_should_skip(now: dt.datetime) -> bool:
@@ -3246,7 +3257,7 @@ def _reply_poll_should_skip(now: dt.datetime) -> bool:
     )
 
 
-def run_followup_dispatch_poll() -> dict:
+def run_followup_dispatch_poll(force: bool = False) -> dict:
     """
     ADDED 2026-10-11, real incident: the dashboard's Follow-up button only
     writes "scheduled" markers; the agent turned them into messages solely
@@ -3256,19 +3267,31 @@ def run_followup_dispatch_poll() -> dict:
     minutes so a press shows up in the Approval Queue within minutes. It calls
     Claude only (no browser), so it cannot collide with sending or discovery.
     """
+    if not force and not _followup_dispatch_in_window(dt.datetime.now(ZoneInfo(config.TIMEZONE))):
+        return {}
     results: dict[str, list] = {}
     for tenant_id in repo.list_active_tenant_ids():
         with repo.tenant_scope(tenant_id):
             if repo.is_tenant_paused():
                 continue
             try:
-                results[tenant_id] = followup.dispatch_due_followups()
+                results[tenant_id] = followup.dispatch_due_followups(limit=1)
             except Exception as exc:  # noqa: BLE001 -- one tenant must not stop the others
                 log_error("followup", exc)
     return results
 
 
-_FOLLOWUP_POLL_INTERVAL_MINUTES = 5
+# OWNER REQUEST 2026-10-11: follow-ups are WRITTEN (into the Approval Queue)
+# one every 2 minutes between 13:00 and 17:00 Beirut, so ~120 fit in the window
+# and a backlog is worked through steadily instead of all at once. Writing is
+# Claude-only (no Instagram activity); sending happens in the morning window.
+_FOLLOWUP_POLL_INTERVAL_MINUTES = 2
+_FOLLOWUP_WINDOW_MINUTES = (13 * 60, 17 * 60)
+
+
+def _followup_dispatch_in_window(now: dt.datetime) -> bool:
+    minute_of_day = now.hour * 60 + now.minute
+    return _FOLLOWUP_WINDOW_MINUTES[0] <= minute_of_day < _FOLLOWUP_WINDOW_MINUTES[1]
 
 
 def run_reply_detection_poll(force: bool = False) -> dict:
@@ -3693,7 +3716,7 @@ _SEND_GAP_MAX_SECONDS = 8 * 60
 # first-contact daily limit (ig_daily_limit, currently 10) -- see
 # _run_sending_cycle_for_tenant's own comment on why they're split instead
 # of competing for one shared counter.
-_INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 5
+_INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 15  # owner 2026-10-11: 15 follow-ups/day, on top of (separate from) the 25 new-lead sends
 
 # Two non-overlapping daily windows, Beirut time. Sending 08:00-12:00
 # (owner's original 2026-09-16 design, unchanged). Discovery widened
@@ -3726,8 +3749,9 @@ _INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 5
 # next morning's sending window.
 _SENDING_WINDOW_START_HOUR = 8
 # OWNER REQUEST 2026-10-10: sending runs 08:00 (+/-15 min start) to 11:50
-# Beirut, about four hours. Expressed in minutes so the end can be 11:50.
-_SENDING_WINDOW_END_MINUTES = 11 * 60 + 50
+# Beirut. EXTENDED 2026-10-11 to 12:30 (owner) so 25 new-lead messages plus 15
+# follow-ups (40 sends at 6-8 min gaps) fit. Expressed in minutes.
+_SENDING_WINDOW_END_MINUTES = 12 * 60 + 30
 
 # OWNER REQUEST 2026-10-10: Instagram-only outreach. Email messages are no
 # longer generated at all (not even for an Instagram lead whose bio carries an
@@ -3792,7 +3816,7 @@ _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS = 2.5 * 60 * 60
 # slot while the 18:12 discovery gave up). 12:00 is just after the morning
 # window closes and before the evening discovery, so it collides with neither.
 _SENDING_RECOVERY_HOUR = 12
-_SENDING_RECOVERY_MINUTE = 0
+_SENDING_RECOVERY_MINUTE = 35  # after the 12:30 window end (2026-10-11)
 
 
 # Minutes-since-midnight ranges that _spread_within_window() must never

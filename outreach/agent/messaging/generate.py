@@ -434,6 +434,18 @@ def generate_message(lead: dict, channel: str, message_style: str, model: str | 
     return _enforce_channel_length(body, channel)
 
 
+# ADDED 2026-10-11, owner's instruction: a Zimmar follow-up is ONLY a short
+# check on whether they are interested or not. No dashes, one small paragraph,
+# no pitch, nothing about their website or "circling back" waffle (the first
+# AI-written follow-ups said things like "circling back on this -- is the shop
+# even running on a secured network"). A fixed template, like Zimmar's first
+# messages, so it is identical in tone every time and needs no AI call (it
+# keeps working when the API balance is empty).
+_ZIMMAR_FOLLOWUP_TEMPLATE = """Hi {greeting_name},
+
+Just following up on my last message. Are you interested or not?"""
+
+
 def generate_followup_message(
     lead: dict, channel: str, message_style: str, original_body: str,
     model: str | None = None, follow_up_guidance: str | None = None,
@@ -452,6 +464,8 @@ def generate_followup_message(
     """
     model = model or config.MODEL_MESSAGES
     business_name, business_description = _business_identity()
+    if business_name == _ZIMMAR_BUSINESS_NAME:
+        return _ZIMMAR_FOLLOWUP_TEMPLATE.format(greeting_name=_greeting_name(lead))
     system = prompts.cacheable_system(
         build_system_prompt(channel, message_style, business_name, business_description, is_followup=True)
     )
