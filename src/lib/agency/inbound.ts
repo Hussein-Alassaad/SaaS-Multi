@@ -52,19 +52,36 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
         if (seen) return null;
       }
 
-      let client = input.customerPhone
-        ? await tx.nexarisClient.findFirst({ where: { tenantId, phone: input.customerPhone } })
+      // Conversation first: on Instagram/Messenger there is no phone number to match a client on, so the
+      // customer's id on the channel is the only thing that says "this is the same person as last time".
+      let conversation = input.externalContactId
+        ? await tx.conversation.findFirst({
+            where: { tenantId, channelId: input.channelId, externalContactId: input.externalContactId, status: { not: "CLOSED" } },
+            orderBy: { lastMessageAt: "desc" },
+          })
         : null;
+      let client = conversation
+        ? await tx.nexarisClient.findUnique({ where: { id: conversation.nexarisClientId } })
+        : input.customerPhone
+          ? await tx.nexarisClient.findFirst({ where: { tenantId, phone: input.customerPhone } })
+          : input.externalContactId
+            ? (
+                await tx.conversation.findFirst({
+                  where: { tenantId, channelId: input.channelId, externalContactId: input.externalContactId },
+                  orderBy: { lastMessageAt: "desc" },
+                  include: { nexarisClient: true },
+                })
+              )?.nexarisClient ?? null
+            : null;
       if (!client) {
         client = await tx.nexarisClient.create({ data: { tenantId, name: input.customerName, phone: input.customerPhone } });
       }
-
-      let conversation = await tx.conversation.findFirst({
-        where: input.externalContactId
-          ? { tenantId, channelId: input.channelId, externalContactId: input.externalContactId, status: { not: "CLOSED" } }
-          : { tenantId, channelId: input.channelId, nexarisClientId: client.id, status: { not: "CLOSED" } },
-        orderBy: { lastMessageAt: "desc" },
-      });
+      if (!conversation && !input.externalContactId) {
+        conversation = await tx.conversation.findFirst({
+          where: { tenantId, channelId: input.channelId, nexarisClientId: client.id, status: { not: "CLOSED" } },
+          orderBy: { lastMessageAt: "desc" },
+        });
+      }
       const isNewConversation = !conversation;
       const now = new Date();
       if (!conversation) {

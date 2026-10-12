@@ -14,7 +14,7 @@
 
 import { createHmac, timingSafeEqual } from "crypto";
 
-function graphBase(): string {
+export function graphBase(): string {
   return process.env.WHATSAPP_API_BASE || `https://graph.facebook.com/${process.env.META_GRAPH_VERSION || "v21.0"}`;
 }
 

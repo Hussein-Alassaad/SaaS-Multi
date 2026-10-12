@@ -25,6 +25,7 @@ export default async function IntegrationsPage() {
       channels={rows}
       lang={lang}
       webhookUrl={appUrl ? `${appUrl}/api/webhooks/whatsapp` : null}
+      metaWebhookUrl={appUrl ? `${appUrl}/api/webhooks/meta` : null}
       serverReady={!!process.env.META_APP_SECRET && !!process.env.WHATSAPP_VERIFY_TOKEN && !!process.env.APP_ENCRYPTION_KEY}
     />
   );

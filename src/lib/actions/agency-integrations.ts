@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { encryptSecret } from "@/lib/crypto";
 import { fetchWhatsAppNumberInfo } from "@/lib/channels/whatsapp";
+import { fetchMetaAccountInfo } from "@/lib/channels/meta-messaging";
 import type { ChannelProvider, OAuthChannelProvider } from "@/lib/agency/channels";
 
 /**
@@ -149,6 +150,79 @@ export async function disconnectWhatsAppAction() {
   await withTenant(tenantId, (tx) =>
     tx.channel.updateMany({
       where: { tenantId, provider: "WHATSAPP" },
+      data: { status: "DISCONNECTED", connectedAt: null, externalId: null, apiToken: null, displayName: null },
+    })
+  );
+
+  revalidatePath("/agency/integrations");
+  revalidatePath("/agency/ai-control");
+  return { ok: true as const };
+}
+
+/**
+ * Connects a real Facebook Page or Instagram business account for the AI
+ * inbox. Same shape as connectWhatsAppAction: the id + token pair is checked
+ * against Meta first, and the token is stored encrypted and never returned.
+ */
+export async function connectMetaChannelAction(input: { provider: "INSTAGRAM" | "FACEBOOK"; accountId: string; accessToken: string }) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = agencyGuardResult(session.role?.name ?? "", "integrations", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  if (input.provider !== "INSTAGRAM" && input.provider !== "FACEBOOK") return { ok: false as const, error: "Unknown channel." };
+  const accountId = input.accountId.trim();
+  const accessToken = input.accessToken.trim();
+  const what = input.provider === "FACEBOOK" ? "Page ID" : "Instagram account ID";
+  if (!/^\d{5,25}$/.test(accountId)) return { ok: false as const, error: `${what} should be digits only.` };
+  if (accessToken.length < 20) return { ok: false as const, error: "Paste the full access token." };
+  if (!process.env.APP_ENCRYPTION_KEY) return { ok: false as const, error: "The server is missing APP_ENCRYPTION_KEY, so the token cannot be stored safely." };
+  if (!process.env.META_APP_SECRET || !process.env.WHATSAPP_VERIFY_TOKEN) {
+    return { ok: false as const, error: "The server is missing META_APP_SECRET or WHATSAPP_VERIFY_TOKEN, so incoming messages could not be verified." };
+  }
+
+  const tenantId = session.tenantId!;
+  const checked = await fetchMetaAccountInfo(input.provider, accountId, accessToken);
+  if (!checked.ok) return { ok: false as const, error: `Meta rejected these details: ${checked.error}` };
+
+  const data = {
+    status: "CONNECTED",
+    connectedAt: new Date(),
+    externalId: accountId,
+    apiToken: encryptSecret(accessToken),
+    displayName: checked.displayName,
+  };
+  try {
+    await withTenant(tenantId, (tx) =>
+      tx.channel.upsert({
+        where: { tenantId_provider: { tenantId, provider: input.provider } },
+        update: data,
+        create: { tenantId, provider: input.provider, ...data },
+      })
+    );
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return { ok: false as const, error: "This account is already connected to another workspace." };
+    }
+    throw err;
+  }
+
+  revalidatePath("/agency/integrations");
+  revalidatePath("/agency/ai-control");
+  return { ok: true as const, displayName: checked.displayName };
+}
+
+export async function disconnectMetaChannelAction(provider: "INSTAGRAM" | "FACEBOOK") {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = agencyGuardResult(session.role?.name ?? "", "integrations", "edit");
+  if (!permCheck.ok) return permCheck;
+  if (provider !== "INSTAGRAM" && provider !== "FACEBOOK") return { ok: false as const, error: "Unknown channel." };
+
+  const tenantId = session.tenantId!;
+  await withTenant(tenantId, (tx) =>
+    tx.channel.updateMany({
+      where: { tenantId, provider },
       data: { status: "DISCONNECTED", connectedAt: null, externalId: null, apiToken: null, displayName: null },
     })
   );

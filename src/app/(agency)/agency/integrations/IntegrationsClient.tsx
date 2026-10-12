@@ -6,8 +6,9 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatDateTime } from "@/lib/utils";
-import { toggleChannelConnectionAction, disconnectOAuthChannelAction, disconnectWhatsAppAction } from "@/lib/actions/agency-integrations";
+import { toggleChannelConnectionAction, disconnectOAuthChannelAction, disconnectWhatsAppAction, disconnectMetaChannelAction } from "@/lib/actions/agency-integrations";
 import { WhatsAppConnect } from "./WhatsAppConnect";
+import { MetaChannelConnect } from "./MetaChannelConnect";
 import { OAUTH_CHANNEL_PROVIDERS, type OAuthChannelProvider } from "@/lib/agency/channel-providers";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { MessageCircle, Camera, ThumbsUp, Mail } from "lucide-react";
@@ -58,11 +59,13 @@ export function IntegrationsClient({
   channels,
   lang,
   webhookUrl,
+  metaWebhookUrl,
   serverReady,
 }: {
   channels: ChannelRow[];
   lang: UiLanguage;
   webhookUrl: string | null;
+  metaWebhookUrl: string | null;
   serverReady: boolean;
 }) {
   const t = getDictionary(lang);
@@ -204,6 +207,38 @@ export function IntegrationsClient({
                 ) : (
                   <>
                     <WhatsAppConnect lang={lang} webhookUrl={webhookUrl} serverReady={serverReady} onDone={() => router.refresh()} />
+                    {connected && (
+                      <Button className="mt-2 w-full" variant="outline" size="sm" disabled={pending} onClick={() => handleToggle(c.provider, false)}>
+                        {t.common.disconnect}
+                      </Button>
+                    )}
+                  </>
+                )
+              ) : c.provider === "INSTAGRAM" || c.provider === "FACEBOOK" ? (
+                c.isReal ? (
+                  <Button
+                    className="mt-3 w-full"
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() =>
+                      startTransition(async () => {
+                        await disconnectMetaChannelAction(c.provider as "INSTAGRAM" | "FACEBOOK");
+                        router.refresh();
+                      })
+                    }
+                  >
+                    {t.common.disconnect}
+                  </Button>
+                ) : (
+                  <>
+                    <MetaChannelConnect
+                      provider={c.provider as "INSTAGRAM" | "FACEBOOK"}
+                      lang={lang}
+                      webhookUrl={metaWebhookUrl}
+                      serverReady={serverReady}
+                      onDone={() => router.refresh()}
+                    />
                     {connected && (
                       <Button className="mt-2 w-full" variant="outline" size="sm" disabled={pending} onClick={() => handleToggle(c.provider, false)}>
                         {t.common.disconnect}

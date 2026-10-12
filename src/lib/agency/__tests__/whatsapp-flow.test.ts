@@ -6,6 +6,9 @@ import { db } from "@/lib/db";
 import { seedMinimalFixtures, createTenantWithOwner, resetDb } from "@/lib/actions/__tests__/test-helpers";
 
 // Real WhatsApp/Claude are never contacted: a local HTTP server stands in for Meta's Graph API and the AI reply is scripted.
+// Each webhook post is many round trips to a remote Postgres; the default 15s is too tight for the multi-post tests.
+vi.setConfig({ testTimeout: 90_000, hookTimeout: 90_000 });
+
 process.env.META_APP_SECRET = "test-app-secret";
 process.env.WHATSAPP_VERIFY_TOKEN = "test-verify-token";
 process.env.APP_ENCRYPTION_KEY = randomBytes(32).toString("base64");

@@ -16,12 +16,15 @@ import { withTenant } from "@/lib/db";
 import { decryptSecret } from "@/lib/crypto";
 import { logError } from "@/lib/error-log";
 import { createAlert } from "@/lib/agency/alerts";
-import { isWithinCustomerServiceWindow, sendWhatsAppText } from "@/lib/channels/whatsapp";
+import { isWithinCustomerServiceWindow, sendWhatsAppText, type SendResult } from "@/lib/channels/whatsapp";
+import { sendMetaMessage } from "@/lib/channels/meta-messaging";
 
 export type DeliverResult =
   | { ok: true; skipped: "simulated" | "already_sent" | "not_sendable" }
   | { ok: true; messageId: string }
   | { ok: false; error: string };
+
+const REAL_PROVIDERS = ["WHATSAPP", "INSTAGRAM", "FACEBOOK"];
 
 export async function deliverMessage(tenantId: string, messageId: string): Promise<DeliverResult> {
   const loaded = await withTenant(tenantId, async (tx) => {
@@ -42,7 +45,7 @@ export async function deliverMessage(tenantId: string, messageId: string): Promi
     return { ok: true, skipped: "not_sendable" };
   }
 
-  const isReal = channel.provider === "WHATSAPP" && !!channel.externalId && !!channel.apiToken && !!conversation.externalContactId;
+  const isReal = REAL_PROVIDERS.includes(channel.provider) && !!channel.externalId && !!channel.apiToken && !!conversation.externalContactId;
   if (!isReal) return { ok: true, skipped: "simulated" };
 
   // Atomic claim: whoever flips null/FAILED -> QUEUED first is the only one that sends.
@@ -68,23 +71,23 @@ export async function deliverMessage(tenantId: string, messageId: string): Promi
     return { ok: false as const, error: reason };
   };
 
-  // WhatsApp only allows a free-form message within 24h of the customer's last message.
+  const label = channel.provider === "WHATSAPP" ? "WhatsApp" : channel.provider === "INSTAGRAM" ? "Instagram" : "Facebook";
+
+  // All three channels only allow a free-form message within 24h of the customer's last message.
   if (!isWithinCustomerServiceWindow(conversation.lastCustomerMessageAt)) {
-    return fail("More than 24 hours since the customer's last message, so WhatsApp does not allow a free-form reply. Ask them to message you again.");
+    return fail(`More than 24 hours since the customer's last message, so ${label} does not allow a free-form reply. Ask them to message you again.`);
   }
 
   const token = decryptSecret(channel.apiToken!);
-  if (!token) return fail("The saved WhatsApp access token could not be read. Reconnect WhatsApp in Integrations.");
+  if (!token) return fail(`The saved ${label} access token could not be read. Reconnect ${label} in Integrations.`);
 
   try {
-    const sent = await sendWhatsAppText({
-      phoneNumberId: channel.externalId!,
-      token,
-      to: conversation.externalContactId!,
-      body: loaded.body,
-    });
+    const sent: SendResult =
+      channel.provider === "WHATSAPP"
+        ? await sendWhatsAppText({ phoneNumberId: channel.externalId!, token, to: conversation.externalContactId!, body: loaded.body })
+        : await sendMetaMessage({ token, to: conversation.externalContactId!, body: loaded.body });
     if (!sent.ok) {
-      await logError({ source: "channels.whatsapp_send", error: new Error(sent.error), tenantId, context: { messageId, code: sent.code } });
+      await logError({ source: "channels.send", error: new Error(sent.error), tenantId, context: { messageId, code: sent.code } });
       return fail(sent.error);
     }
     await withTenant(tenantId, (tx) =>
@@ -92,7 +95,7 @@ export async function deliverMessage(tenantId: string, messageId: string): Promi
     );
     return { ok: true, messageId: sent.messageId };
   } catch (err) {
-    await logError({ source: "channels.whatsapp_send", error: err, tenantId, context: { messageId } });
+    await logError({ source: "channels.send", error: err, tenantId, context: { messageId } });
     return fail(err instanceof Error ? err.message : "Unexpected error while sending.");
   }
 }
