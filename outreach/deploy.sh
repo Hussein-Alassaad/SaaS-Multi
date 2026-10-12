@@ -140,12 +140,23 @@ _orig_call = business_check.claude_client.call_json
 business_check.claude_client.call_json = lambda *a, **k: _boom(None)
 import inspect
 _fail = business_check.classify(dict(_ig))
-check("a failing AI call now REJECTS the candidate (fail-closed: an API outage must not let unvetted accounts through)",
-      business_check.REJECT_ON_FAILURE is True and _fail is not None and _fail[0] is False and "unavailable" in _fail[1])
+check("when the AI call fails, a clearly Lebanese business is still accepted by the strict rule-based fallback (a night is no longer lost to an empty API balance)",
+      business_check.REJECT_ON_FAILURE is True and _fail is not None and _fail[0] is True and _fail[1].startswith("rule-based"))
+business_check._ai_down_until = 0
+_bad = business_check.classify(dict(_ig, display_name="Lebanon Explorer", bio="Travel guide to Lebanon", handle="lebanon_explorer"))
+check("...while a creator / travel page is still rejected by the fallback", _bad is not None and _bad[0] is False)
+business_check._ai_down_until = 0
+_thin = business_check.classify(dict(_ig, display_name="Sunny Page", bio="hello world", handle="sunny"))
+check("...and an account with no Lebanese evidence is rejected by the fallback", _thin is not None and _thin[0] is False and "Lebanese" in _thin[1])
+business_check._ai_down_until = 0
+_foreign = business_check.classify(dict(_ig, display_name="Madrid Furniture Showroom", bio="Furniture showroom in Madrid", handle="madridfurniture"))
+check("...and a foreign business is rejected by the fallback", _foreign is not None and _foreign[0] is False)
+business_check._ai_down_until = 0
 _orig_text = business_check.claude_client.call_text
 business_check.claude_client.call_text = lambda *a, **k: _boom(None)
-check("is_available() is False when the API cannot be reached, so discovery can skip the night instead of saving unvetted leads",
-      business_check.is_available() is False and "is_available()" in inspect.getsource(sch._discover_instagram))
+check("is_available() is False when the API cannot be reached, and discovery then RUNS on the rule-based fallback instead of skipping the night",
+      business_check.is_available() is False and "is_available()" in inspect.getsource(sch._discover_instagram)
+      and "rule-based fallback" in inspect.getsource(sch._discover_instagram) and "raise RuntimeError" not in inspect.getsource(sch._discover_instagram))
 business_check.claude_client.call_text = _orig_text
 business_check.claude_client.call_json = lambda *a, **k: {"verdict": "no", "category": "creator", "reason": "vlogger"}
 _v = business_check.classify(dict(_ig))
@@ -282,6 +293,13 @@ check("the reply poll's next hard stop is 07:55 before sending and 17:55 before 
 check("every reply poll is bounded by that deadline and the Instagram check actually honors it between leads",
       "deadline_ts=deadline_ts" in inspect.getsource(sch.run_reply_detection_poll)
       and "time.time() >= deadline_ts" in inspect.getsource(instagram_reply_check.check_instagram_replies))
+# ADDED 2026-10-12: analysis must not stall Instagram leads when the AI is down.
+check("an AI outage (empty balance, bad key, unreachable) is recognised, an ordinary error is not",
+      sch._is_ai_outage(RuntimeError("Your credit balance is too low to access the Anthropic API"))
+      and not sch._is_ai_outage(ValueError("could not parse JSON")))
+_asrc = inspect.getsource(sch._run_analysis_cycle_for_tenant)
+check("analysis lets an Instagram lead continue unanalyzed during an AI outage (fixed templates need no analysis); other failures still skip the lead",
+      '_is_ai_outage(exc)' in _asrc and 'lead.get("platform") == "instagram"' in _asrc and "continue" in _asrc)
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")

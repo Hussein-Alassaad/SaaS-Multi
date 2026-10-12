@@ -2005,9 +2005,13 @@ def _discover_instagram(
     # saving leads would let unvetted accounts through -- so skip the night
     # loudly instead of burning it on profile visits that cannot be vetted.
     if business_check.REJECT_ON_FAILURE and not business_check.is_available():
-        raise RuntimeError(
-            "Instagram discovery skipped: the AI business check is unavailable "
-            "(check the Anthropic API credit balance) -- not saving unvetted leads."
+        # CHANGED 2026-10-12: used to raise and skip the whole night (the
+        # 2026-10-11 night was lost to an empty API balance). Now it runs on
+        # business_check's strict rule-based fallback instead: slower yield,
+        # same quality bar. Top up the Anthropic balance to get the AI check back.
+        _progress_log.warning(
+            "[%s] Instagram: the AI business check is unavailable (Anthropic API credit balance?) -- "
+            "running on the strict rule-based fallback tonight.", account.get("label"),
         )
     search_niche, tenant_terms = _instagram_search_terms(niche, tenant_terms, niche_is_random, location)
     seen_urls: set[str] = set()
@@ -2536,6 +2540,15 @@ def _maybe_find_email(tenant_id: str, lead: dict, founder_name: str | None) -> b
     return any_email_lead_exists
 
 
+def _is_ai_outage(exc: Exception) -> bool:
+    """The Claude API is unusable (no credit, bad key, unreachable) -- as opposed to one bad response."""
+    text = str(exc).lower()
+    return (
+        "credit balance" in text or "api key" in text or "authentication" in text
+        or type(exc).__name__ in ("APIConnectionError", "APITimeoutError", "AuthenticationError", "PermissionDeniedError")
+    )
+
+
 def _run_analysis_cycle_for_tenant(tenant_id: str, limit: int | None) -> list[dict]:
     leads = repo.leads_by_status("discovered", tenant_id=tenant_id)
     if limit is not None:
@@ -2549,9 +2562,19 @@ def _run_analysis_cycle_for_tenant(tenant_id: str, limit: int | None) -> list[di
             whatsapp_result = whatsapp_detect.detect_whatsapp(lead)
             score_result = scoring.score_lead(lead, analysis)
         except Exception as exc:  # noqa: BLE001 -- one bad lead shouldn't stop the batch
-            results.append({"lead": lead.get("business_name"), "ok": False, "error": str(exc)})
-            log_error("analysis", exc, lead_id=lead.get("id"), account_id=lead.get("account_id"))
-            continue
+            if lead.get("platform") == "instagram" and _is_ai_outage(exc):
+                # ADDED 2026-10-12: an empty Anthropic balance (2026-10-11) used
+                # to leave every Instagram lead stuck at "discovered" with no
+                # message, so tomorrow's queue emptied. Zimmar's messages are
+                # FIXED templates -- they never read the analysis -- so an
+                # Instagram lead moves on unanalyzed instead of stalling.
+                analysis, founder_result, whatsapp_result = {}, {}, {}
+                score_result = {"score": 0, "temperature": None, "score_reasoning": "Not scored: the AI was unavailable."}
+                log_error("analysis", exc, lead_id=lead.get("id"), account_id=lead.get("account_id"))
+            else:
+                results.append({"lead": lead.get("business_name"), "ok": False, "error": str(exc)})
+                log_error("analysis", exc, lead_id=lead.get("id"), account_id=lead.get("account_id"))
+                continue
 
         update_fields = {
             "company_size": analysis.get("company_size"),

@@ -19,6 +19,8 @@ business, and names the category.
 from __future__ import annotations
 
 import logging
+import re
+import time
 
 from agent import config
 from agent.analysis import client as claude_client
@@ -58,6 +60,71 @@ _SYSTEM = [{
 }]
 
 
+# ADDED 2026-10-11/12: STRICT RULE-BASED FALLBACK for when the AI cannot be
+# reached (the Anthropic balance ran out on 2026-10-11 and a whole night's
+# discovery was skipped, which the owner rightly called a bug-level outcome).
+# Used ONLY while the API is down. It is deliberately stricter than the AI: a
+# candidate needs BOTH clear Lebanese evidence AND clear business signals, and
+# anything that reads like a creator, media page, club or institution is
+# rejected -- so an outage costs yield, never quality.
+_LEBANON_MARKERS = (
+    "lebanon", "lebanese", "liban", "libanais", "beirut", "beyrouth", "tripoli", "jounieh", "byblos",
+    "jbeil", "saida", "sidon", "tyre", "zahle", "baalbek", "batroun", "aley", "metn", "keserwan",
+    "kesrouan", "chouf", "bekaa", "nabatieh", "antelias", "hamra", "achrafieh", "dbayeh", "zalka",
+    "dekwaneh", "sin el fil", "hazmieh", "verdun", "naccache", "broummana", "faraya", "jeita",
+    "kaslik", "ghazir", "mansourieh", "bourj hammoud", "jal el dib", "dora", "madeinlebanon",
+)
+_PHONE_LEBANON_RE = re.compile(r"(\+?961[\s.\-]?\d|\b0?(?:3|70|71|76|78|79|81)[\s.\-]?\d{3}[\s.\-]?\d{3}\b)")
+_ARABIC_RE = re.compile("[\u0600-\u06FF]")
+_LB_HANDLE_RE = re.compile(r"(^|[._])lb($|[._\d])|\.lb$|[a-z]{3,}lb$|lebanon|leb(?![a-z])")
+_BUSINESS_WORDS = (
+    "shop", "store", "boutique", "restaurant", "cafe", "coffee", "bakery", "hotel", "resort", "company",
+    "co.", "sal", "sarl", "factory", "supplier", "supply", "wholesale", "retail", "trading", "distribut",
+    "import", "export", "services", "solutions", "agency", "studio", "clinic", "pharmacy", "salon",
+    "showroom", "order now", "delivery", "branch", "since 19", "since 20", "our products", "we offer",
+    "equipment", "engineering", "construction", "contracting", "furniture", "garage", "auto", "tires",
+    "spare parts", "real estate", "properties", "apartments", "hospital", "school", "academy", "gym",
+    "ltd", "group", "industries", "manufactur", "workshop", "printing", "design", "decor", "handmade",
+)
+_CREATOR_WORDS = (
+    "influencer", "blogger", "vlogger", "content creator", "digital creator", "travel guide", "tourism guide",
+    "news", "magazine", "podcast", "radio", "meme", "fan page", "fanpage", "community", "municipality",
+    "ngo", "foundation", "student club", "university club", "personal brand", "coach", "freelanc",
+    "my journey", "lifestyle", "photographer", "model ", "dj ", "explorer", "habibe", "vibes", "quotes",
+)
+
+
+def _rule_based_verdict(profile: dict) -> tuple[bool, str]:
+    handle = (profile.get("handle") or "").lower()
+    name = profile.get("display_name") or ""
+    bio = profile.get("bio") or ""
+    text = f"{name} {bio} {handle}".lower()
+
+    for word in _CREATOR_WORDS:
+        if word in text:
+            return False, f"rule-based: reads like a creator/media/community page ({word.strip()!r})"
+
+    lebanese = (
+        any(m in text for m in _LEBANON_MARKERS)
+        or bool(_PHONE_LEBANON_RE.search(bio))
+        or bool(_ARABIC_RE.search(name + bio))
+        or bool(_LB_HANDLE_RE.search(handle))
+    )
+    if not lebanese:
+        return False, "rule-based: no clear Lebanese evidence (place, +961 number, Arabic text or .lb handle)"
+
+    business = any(w in text for w in _BUSINESS_WORDS) or "@" in bio or bool(_PHONE_LEBANON_RE.search(bio))
+    if not business:
+        return False, "rule-based: no clear business signals in the name or bio"
+    return True, "rule-based fallback: Lebanese evidence and business signals present"
+
+
+# After one failed API call, skip the API for a while and go straight to the
+# fallback (no point hammering an empty balance once per candidate).
+_ai_down_until = 0.0
+_AI_DOWN_BACKOFF_SECONDS = 600
+
+
 def is_available() -> bool:
     """One tiny real API call: True if the model can currently be reached."""
     if not claude_client.is_configured():
@@ -76,8 +143,9 @@ def classify(profile: dict) -> tuple[bool, str] | None:
     Lebanese business, (False, "category: reason") when confident it is NOT,
     or None (keep the candidate) on unsure / any failure.
     """
-    if not claude_client.is_configured():
-        return (False, "AI check unavailable (no API key)") if REJECT_ON_FAILURE else None
+    global _ai_down_until
+    if not claude_client.is_configured() or time.time() < _ai_down_until:
+        return _rule_based_verdict(profile) if REJECT_ON_FAILURE else None
 
     user_content = (
         f"Handle: @{profile.get('handle') or 'unknown'}\n"
@@ -90,10 +158,9 @@ def classify(profile: dict) -> tuple[bool, str] | None:
     try:
         answer = claude_client.call_json(_SYSTEM, user_content, config.MODEL_ANALYSIS, max_tokens=200)
     except Exception as exc:  # noqa: BLE001 -- fail open, never block discovery on an AI hiccup
-        _log.warning("[business_check] @%s: AI check failed (%s)", profile.get("handle"), exc)
-        if REJECT_ON_FAILURE:
-            return False, "AI check unavailable -- cannot confirm this is a Lebanese business"
-        return None
+        _log.warning("[business_check] @%s: AI check failed (%s) -- using the strict rule-based fallback", profile.get("handle"), exc)
+        _ai_down_until = time.time() + _AI_DOWN_BACKOFF_SECONDS
+        return _rule_based_verdict(profile) if REJECT_ON_FAILURE else None
 
     verdict = str(answer.get("verdict", "")).strip().lower()
     detail = f"{answer.get('category', '?')}: {answer.get('reason', '')}".strip()

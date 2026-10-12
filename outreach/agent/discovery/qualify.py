@@ -639,11 +639,12 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
             reasons.append(f"Hard reject (AI check): not a Lebanese business -- {ai_verdict[1]}")
             reasons.append("Final score: n/a -> SKIP")
             return False, reasons
-        reasons.append(
-            "AI check: confirmed Lebanese business"
-            if ai_verdict is not None and ai_verdict[0] is True
-            else "AI check: unsure or unavailable -- kept"
-        )
+        if ai_verdict is not None and ai_verdict[0] is True and ai_verdict[1].startswith("rule-based"):
+            reasons.append("AI check unavailable: accepted by the strict rule-based fallback (Lebanese evidence + business signals)")
+        elif ai_verdict is not None and ai_verdict[0] is True:
+            reasons.append("AI check: confirmed Lebanese business")
+        else:
+            reasons.append("AI check: unsure or unavailable -- kept")
         reasons.append("Final score: n/a -> QUALIFIES")
         return True, reasons
 
