@@ -16,6 +16,7 @@ import { checkAiBudget } from "@/lib/ai/usage";
 import { logError } from "@/lib/error-log";
 import { createAlertIn } from "@/lib/agency/alerts";
 import { deliverMessage } from "@/lib/channels/dispatch";
+import { ensureMeetingSlots, formatSlotLabel, safeTimezone, spreadAcrossDays } from "@/lib/agency/slots";
 
 export interface InboundInput {
   tenantId: string;
@@ -130,13 +131,18 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
         orderBy: { createdAt: "desc" },
         take: HISTORY_LIMIT,
       });
-      const openSlots = await tx.meetingSlot.findMany({
-        where: { tenantId, status: "AVAILABLE", startsAt: { gte: new Date() } },
+      const localization = await tx.localizationSettings.findUnique({ where: { tenantId }, select: { timezone: true } });
+      const timezone = safeTimezone(localization?.timezone);
+      // Working-hours slots are created on demand, so the owner never has to add them by hand.
+      await ensureMeetingSlots(tx, tenantId, settings, timezone);
+      const upcoming = await tx.meetingSlot.findMany({
+        where: { tenantId, status: "AVAILABLE", startsAt: { gte: new Date(Date.now() + 60 * 60 * 1000) } },
         orderBy: { startsAt: "asc" },
-        take: 10,
+        take: 60,
       });
+      const openSlots = spreadAcrossDays(upcoming, timezone);
 
-      return { client, conversation, settings, knowledge, history: recent.reverse(), openSlots, isNewConversation };
+      return { client, conversation, settings, knowledge, history: recent.reverse(), openSlots, timezone, isNewConversation };
     });
   } catch (err) {
     // A webhook retry that raced the first delivery trips the unique wamid index -- that is "already handled", not an error.
@@ -145,7 +151,7 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
   }
   if (!ctx) return { ok: true, duplicate: true };
 
-  const { client, conversation, settings, knowledge, history, openSlots } = ctx;
+  const { client, conversation, settings, knowledge, history, openSlots, timezone } = ctx;
 
   // A person has taken over this chat: store the message, tell the admin, say nothing.
   if (conversation.aiPaused) {
@@ -176,15 +182,17 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
     return { ok: true, conversationId: conversation.id, aiReplied: false };
   }
 
+  const replyLanguage = settings.allowEnglish ? language : "AR";
+  const slotLabels = new Map(openSlots.map((s) => [s.id, formatSlotLabel(s.startsAt, timezone, replyLanguage)]));
   const aiReply = await generateAiReply({
     history: history.map((m) => ({ sender: m.sender as "CUSTOMER" | "AI" | "HUMAN", body: m.body })),
-    language: settings.allowEnglish ? language : "AR",
+    language: replyLanguage,
     clientName: client.name,
     knowledgeEntries: selectKnowledge(knowledge, input.body).map((k) => ({ title: k.title, body: k.body })),
     settings,
     tenantId,
     conversationId: conversation.id,
-    availableSlots: openSlots.map((s) => ({ id: s.id, startsAt: s.startsAt.toISOString() })),
+    availableSlots: openSlots.map((s) => ({ id: s.id, startsAt: s.startsAt.toISOString(), label: slotLabels.get(s.id)! })),
   });
 
   const extracted = aiReply.extracted;
@@ -233,8 +241,8 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
         await createAlertIn(tx, {
           tenantId,
           type: "MEETING_REQUESTED",
-          title: "A customer was offered a meeting",
-          body: `${who} is interested. Open the Meetings page to confirm or change the time.`,
+          title: `Meeting offered: ${slotLabels.get(extracted.proposedSlotId!) ?? "a time"}`,
+          body: `${who} was offered this time and is waiting. Open Meetings to confirm it.`,
           conversationId: conversation.id,
         });
       });

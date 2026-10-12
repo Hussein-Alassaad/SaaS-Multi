@@ -770,7 +770,7 @@ model Message {
   // (approval); deliveryStatus is what the channel says happened to a message
   // we sent. externalId is the channel's own id for the message (WhatsApp: wamid)
   // -- unique, so a webhook retried by Meta can never create a duplicate.
-  externalId     String?   @unique
+  externalId     String? @unique
   deliveryStatus String? // QUEUED | SENT | DELIVERED | READ | FAILED
   failureReason  String?
 
@@ -888,6 +888,19 @@ model AiSettings {
   model              String   @default("claude-sonnet-4-5")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  // Meeting availability (added 2026-10-13). When meetingAutoSlots is on, open
+  // MeetingSlot rows are generated from these working hours (in the tenant's
+  // Localization timezone) so nobody has to add slots by hand. Slots are made
+  // once per day and tracked by meetingSlotsThrough, so a slot the owner
+  // deletes to block time is not re-created.
+  meetingAutoSlots    Boolean   @default(false)
+  meetingDays         String    @default("1,2,3,4,5") // 0 = Sunday ... 6 = Saturday
+  meetingStartHour    Int       @default(10)
+  meetingEndHour      Int       @default(17)
+  meetingDurationMin  Int       @default(30)
+  meetingHorizonDays  Int       @default(7)
+  meetingSlotsThrough DateTime? // last local calendar day (as UTC midnight) already generated
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -1198,10 +1211,10 @@ model OutreachAccount {
   lastActiveAt            DateTime? @map("last_active_at")
   createdAt               DateTime  @default(now()) @map("created_at")
 
-  tenant         Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant         Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   leads          OutreachLead[]
   runs           OutreachRun[]
-  sentMessages   OutreachMessage[]         @relation("OutreachSentViaAccount")
+  sentMessages   OutreachMessage[]        @relation("OutreachSentViaAccount")
   searchProgress OutreachSearchProgress[]
 
   @@index([tenantId])
@@ -1541,12 +1554,12 @@ model OutreachReply {
 // forever. One row per (tenant, account, searchTerm); accountId is the
 // LinkedIn account doing the searching, not a company being searched.
 model OutreachSearchProgress {
-  id           String   @id @default(cuid())
-  tenantId     String   @map("tenant_id")
-  accountId    String   @map("account_id")
-  searchTerm   String   @map("search_term") // the exact niche/keyword string passed to build_search_url
-  lastPage     Int      @default(1) @map("last_page") // the highest page number already read for this term
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id         String   @id @default(cuid())
+  tenantId   String   @map("tenant_id")
+  accountId  String   @map("account_id")
+  searchTerm String   @map("search_term") // the exact niche/keyword string passed to build_search_url
+  lastPage   Int      @default(1) @map("last_page") // the highest page number already read for this term
+  updatedAt  DateTime @updatedAt @map("updated_at")
 
   tenant  Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   account OutreachAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)

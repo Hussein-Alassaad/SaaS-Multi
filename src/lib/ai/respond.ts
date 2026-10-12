@@ -24,6 +24,8 @@ export interface AvailableMeetingSlot {
   id: string;
   /** ISO string -- kept as a plain string (not Date) since this crosses into the Claude prompt as text either way. */
   startsAt: string;
+  /** The time as the customer should read it, in the business's timezone and the customer's language, e.g. "Tuesday 14 October, 3:00 PM". */
+  label: string;
 }
 
 interface ConversationContext {
@@ -67,7 +69,7 @@ export function buildSystemPrompt(ctx: ConversationContext): string {
     `You are having a real back-and-forth conversation, not answering each message in isolation -- remember what the customer already told you earlier in this thread and never ask for the same thing twice.`,
     `Your goals, in order: (1) answer the customer's question helpfully from the knowledge base; (2) find out, naturally and ONE question at a time, what they need and their name; (3) when they show real interest (they ask about a service, a price, availability, or how to get started), offer them a meeting with the team.`,
     ctx.availableSlots && ctx.availableSlots.length > 0
-      ? `To offer a meeting, propose ONE specific time from the real open slots listed below -- pick whichever best fits what they've said (e.g. "tomorrow afternoon" -> the soonest listed slot that afternoon). NEVER state it as confirmed: say something like "does <day/time> work for you? I'll get that confirmed by our team" -- the team still approves every meeting, so never tell the customer it's booked.\n\n## Available meeting times (tenant's local time)\n${ctx.availableSlots.map((s) => `- ${s.startsAt}`).join("\n")}`
+      ? `To offer a meeting, propose ONE specific time from the real open slots listed below -- pick whichever best fits what they've said (e.g. "tomorrow afternoon" -> the soonest listed slot that afternoon). NEVER state it as confirmed: say something like "does <day/time> work for you? I'll get that confirmed by our team" -- the team still approves every meeting, so never tell the customer it's booked.\n\n## Available meeting times (already in the business's local time -- quote them exactly as written, never convert or reformat)\n${ctx.availableSlots.map((s) => `- ${s.label}`).join("\n")}`
       : `To offer a meeting when the customer is interested, tell them a team member will contact them to arrange a time -- do not invent availability yourself (there are no open slots to offer right now).`,
     `If the customer asks to speak to a person, is upset or complaining, asks for something you cannot answer from the knowledge base, or asks for something this business does not do, tell them a team member will take it from here and set needsHuman to true.`,
     `\n## Knowledge Base\n${knowledgeBlock}`,
@@ -105,7 +107,7 @@ function buildExtractTool(availableSlots: AvailableMeetingSlot[]): Anthropic.Too
   return {
     name: "save_lead_info",
     description:
-      "Records what's been learned about this customer/lead so far from the whole conversation, whether enough is known to hand off to the human team on WhatsApp, and which meeting slot (if any) your just-drafted reply proposed. Call this on every turn, even if nothing new was learned (repeat what's already known).",
+      "Records what's been learned about this customer/lead so far from the whole conversation, whether enough is known to hand off to the human team, and which meeting slot (if any) your just-drafted reply proposed. Call this on every turn, even if nothing new was learned (repeat what's already known).",
     input_schema: {
       type: "object",
       properties: {
@@ -126,7 +128,7 @@ function buildExtractTool(availableSlots: AvailableMeetingSlot[]): Anthropic.Too
           type: ["string", "null"],
           description:
             availableSlots.length > 0
-              ? `The id of the meeting slot your reply just proposed to the customer, if any -- must be exactly one of: ${availableSlots.map((s) => s.id).join(", ")}. Null if your reply didn't propose a specific time.`
+              ? `The id of the meeting slot your reply just proposed to the customer, if any -- must be exactly one of these ids (the time each id stands for is shown after it): ${availableSlots.map((s) => `${s.id} = ${s.label}`).join("; ")}. Null if your reply didn't propose a specific time.`
               : "Always null -- there are no available slots to propose right now.",
         },
       },
