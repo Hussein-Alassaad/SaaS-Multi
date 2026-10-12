@@ -49,6 +49,8 @@ function applyChannelDefaults(existing: Awaited<ReturnType<typeof getChannels>>,
         oauthAccessToken: null,
         oauthRefreshToken: null,
         oauthExpiresAt: null,
+        externalId: null,
+        apiToken: null,
       }
   );
 }

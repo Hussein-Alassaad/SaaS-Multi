@@ -111,7 +111,7 @@ function MessageApprovalCard({ message, lang }: { message: PendingMessage; lang:
         <Badge variant="warm">{t.approvals.needsApproval}</Badge>
       </div>
 
-      <div className="mt-3 rounded-lg bg-[var(--surface-2)] p-3" dir={message.language === "AR" ? "rtl" : "ltr"}>
+      <div className="mt-3 rounded-lg bg-[var(--surface-2)] p-3" dir={message.language.startsWith("AR") ? "rtl" : "ltr"}>
         {editing ? (
           <textarea
             value={editedBody}

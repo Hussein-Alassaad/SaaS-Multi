@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useTransition } from "react";
-import { Bell, Moon, Sun, LogOut, Languages } from "lucide-react";
+import { Moon, Sun, LogOut, Languages } from "lucide-react";
+import { AlertsBell } from "./AlertsBell";
 import { useTheme } from "next-themes";
 import { logoutAction } from "@/lib/actions/auth";
 import { setUiLanguageAction } from "@/lib/actions/agency-ui-language";
@@ -31,13 +32,7 @@ export function AgencyMobileTopBar({ lang }: { lang: UiLanguage }) {
         <span className="text-sm font-semibold text-gradient">Nexaris</span>
       </div>
       <div className="flex items-center gap-1">
-        <button
-          aria-label={t.common.notifications}
-          className="relative flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-3)] hover:bg-[var(--surface-2)]"
-        >
-          <Bell className="h-4 w-4" />
-          <span className="absolute end-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[var(--status-hot)]" />
-        </button>
+        <AlertsBell lang={lang} />
         <button
           aria-label={t.common.toggleLanguage}
           onClick={handleToggleLanguage}

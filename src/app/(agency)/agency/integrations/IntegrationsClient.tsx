@@ -6,7 +6,8 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { formatDateTime } from "@/lib/utils";
-import { toggleChannelConnectionAction, disconnectOAuthChannelAction } from "@/lib/actions/agency-integrations";
+import { toggleChannelConnectionAction, disconnectOAuthChannelAction, disconnectWhatsAppAction } from "@/lib/actions/agency-integrations";
+import { WhatsAppConnect } from "./WhatsAppConnect";
 import { OAUTH_CHANNEL_PROVIDERS, type OAuthChannelProvider } from "@/lib/agency/channel-providers";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { MessageCircle, Camera, ThumbsUp, Mail } from "lucide-react";
@@ -16,6 +17,7 @@ interface ChannelRow {
   status: string;
   displayName: string | null;
   connectedAt: string | null;
+  isReal: boolean;
 }
 
 function getChannelMeta(t: ReturnType<typeof getDictionary>): Record<string, { label: string; icon: typeof MessageCircle; description: string }> {
@@ -52,7 +54,17 @@ function isOAuthProvider(provider: string): provider is OAuthChannelProvider {
   return (OAUTH_CHANNEL_PROVIDERS as readonly string[]).includes(provider);
 }
 
-export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[]; lang: UiLanguage }) {
+export function IntegrationsClient({
+  channels,
+  lang,
+  webhookUrl,
+  serverReady,
+}: {
+  channels: ChannelRow[];
+  lang: UiLanguage;
+  webhookUrl: string | null;
+  serverReady: boolean;
+}) {
   const t = getDictionary(lang);
   const CHANNEL_META = getChannelMeta(t);
   const router = useRouter();
@@ -143,12 +155,12 @@ export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[];
                 </div>
               </div>
               <p className="mt-3 text-xs text-[var(--text-4)]">{meta?.description}</p>
-              {connected && oauth && c.displayName && (
+              {connected && (oauth || c.isReal) && c.displayName && (
                 <p className="mt-2 text-[10px] text-[var(--text-5)]">
                   {t.integrations.oauthConnectAs} {c.displayName}
                 </p>
               )}
-              {connected && !oauth && c.connectedAt && (
+              {connected && !oauth && !c.isReal && c.connectedAt && (
                 <p className="mt-2 text-[10px] text-[var(--text-5)]">{t.integrations.connected} {formatDateTime(c.connectedAt)}</p>
               )}
 
@@ -172,6 +184,32 @@ export function IntegrationsClient({ channels, lang }: { channels: ChannelRow[];
                       {t.common.connect}
                     </Button>
                   </a>
+                )
+              ) : c.provider === "WHATSAPP" ? (
+                c.isReal ? (
+                  <Button
+                    className="mt-3 w-full"
+                    variant="outline"
+                    size="sm"
+                    disabled={pending}
+                    onClick={() =>
+                      startTransition(async () => {
+                        await disconnectWhatsAppAction();
+                        router.refresh();
+                      })
+                    }
+                  >
+                    {t.common.disconnect}
+                  </Button>
+                ) : (
+                  <>
+                    <WhatsAppConnect lang={lang} webhookUrl={webhookUrl} serverReady={serverReady} onDone={() => router.refresh()} />
+                    {connected && (
+                      <Button className="mt-2 w-full" variant="outline" size="sm" disabled={pending} onClick={() => handleToggle(c.provider, false)}>
+                        {t.common.disconnect}
+                      </Button>
+                    )}
+                  </>
                 )
               ) : (
                 <Button

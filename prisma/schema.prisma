@@ -134,6 +134,7 @@ model Tenant {
   meetingSlots     MeetingSlot[]
   meetingRequests  MeetingRequest[]
   knowledgeEntries KnowledgeEntry[]
+  tenantAlerts     TenantAlert[]
   featureRequests  TenantFeatureRequest[]
   aiSettings       AiSettings?
 
@@ -677,10 +678,21 @@ model Channel {
   oauthRefreshToken String? // encrypted (encryptSecret()) -- long-lived, what actually lets this app keep sending/reading without the tenant re-authorizing
   oauthExpiresAt    DateTime? // when oauthAccessToken expires -- callers refresh proactively past this, not on a 401
 
+  // WHATSAPP / INSTAGRAM / FACEBOOK real connection (added 2026-10-12).
+  // externalId is what an inbound webhook payload carries to say WHICH
+  // account the event is for (WhatsApp: phone_number_id; Instagram: the IG
+  // business account id; Facebook: the Page id) -- it routes the event to
+  // the right tenant's channel. apiToken is the long-lived Meta access token
+  // used to SEND replies, encrypted at rest (src/lib/crypto.ts). Both null
+  // for every other provider and for a channel not yet really connected.
+  externalId String?
+  apiToken   String?
+
   tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   conversations Conversation[]
 
   @@unique([tenantId, provider])
+  @@unique([provider, externalId])
   @@index([tenantId])
   @@map("channels")
 }
@@ -720,6 +732,11 @@ model Conversation {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  // Real-channel fields (added 2026-10-12).
+  externalContactId     String? // the customer's id ON the channel (WhatsApp: wa_id; Instagram/Facebook: the scoped user id) -- what a reply is addressed to
+  aiPaused              Boolean   @default(false) // a human took over: the AI stops replying until someone resumes it
+  lastCustomerMessageAt DateTime? // WhatsApp/Instagram only allow a free-form reply within 24h of this
+
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   channel       Channel       @relation(fields: [channelId], references: [id])
   nexarisClient NexarisClient @relation(fields: [nexarisClientId], references: [id], onDelete: Cascade)
@@ -734,6 +751,7 @@ model Conversation {
   @@index([tenantId, lastMessageAt]) // Live Inbox / Pipeline list: filter by tenant, sort by recency
   @@index([tenantId, stage, lastMessageAt]) // Pipeline board: filter by tenant+stage, sort by recency
   @@index([nexarisClientId, createdAt]) // Client History: filter by client, sort chronologically
+  @@index([channelId, externalContactId]) // inbound webhook: find this customer's open conversation on this channel
   @@map("conversations")
 }
 
@@ -747,6 +765,14 @@ model Message {
   approvedById   String?
   approvedAt     DateTime?
   createdAt      DateTime  @default(now())
+
+  // Real-channel fields (added 2026-10-12). `status` above is OUR workflow
+  // (approval); deliveryStatus is what the channel says happened to a message
+  // we sent. externalId is the channel's own id for the message (WhatsApp: wamid)
+  // -- unique, so a webhook retried by Meta can never create a duplicate.
+  externalId     String?   @unique
+  deliveryStatus String? // QUEUED | SENT | DELIVERED | READ | FAILED
+  failureReason  String?
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   approvedBy   User?        @relation("MessageApprovedBy", fields: [approvedById], references: [id])
@@ -793,6 +819,25 @@ model MeetingRequest {
   @@index([tenantId])
   @@index([status])
   @@map("meeting_requests")
+}
+
+// In-platform alerts for the tenant's own admins (added 2026-10-12): "a customer
+// asked for a meeting", "a customer needs a human", "a reply failed to send".
+// Distinct from Notification above, which is the PLATFORM broadcasting to tenants.
+model TenantAlert {
+  id             String    @id @default(cuid())
+  tenantId       String
+  type           String // MEETING_REQUESTED | NEEDS_ATTENTION | NEW_CONVERSATION | SEND_FAILED | AI_BUDGET
+  title          String
+  body           String
+  conversationId String?
+  readAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, readAt, createdAt])
+  @@map("tenant_alerts")
 }
 
 model KnowledgeEntry {

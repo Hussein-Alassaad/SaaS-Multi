@@ -10,7 +10,7 @@ import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { Avatar } from "@/components/ui/Avatar";
 import { timeAgo, cn } from "@/lib/utils";
-import { simulateInboundMessageAction } from "@/lib/actions/agency-inbox";
+import { simulateInboundMessageAction, sendHumanReplyAction, setConversationAiPausedAction } from "@/lib/actions/agency-inbox";
 import { getConversationThreadAction, loadMoreConversationsAction } from "@/lib/actions/agency-conversations";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { Plus, MessageCircle } from "lucide-react";
@@ -32,6 +32,8 @@ interface ThreadMessage {
   body: string;
   language: string;
   status: string;
+  deliveryStatus: string | null;
+  failureReason: string | null;
   createdAt: string;
 }
 
@@ -40,6 +42,7 @@ interface ThreadData {
   stage: string;
   status: string;
   language: string;
+  aiPaused: boolean;
   channel: { provider: string };
   client: { id: string; name: string | null; phone: string | null };
   messages: ThreadMessage[];
@@ -188,7 +191,10 @@ export function InboxClient({
                     </p>
                   </div>
                 </div>
-                <Badge variant={STAGE_VARIANT[thread.stage] ?? "neutral"}>{t.stage[thread.stage as keyof typeof t.stage] ?? thread.stage.replace(/_/g, " ")}</Badge>
+                <div className="flex items-center gap-2">
+                  {thread.aiPaused && <Badge variant="warm">{lang === "AR" ? "الذكاء الاصطناعي متوقف" : "AI paused"}</Badge>}
+                  <Badge variant={STAGE_VARIANT[thread.stage] ?? "neutral"}>{t.stage[thread.stage as keyof typeof t.stage] ?? thread.stage.replace(/_/g, " ")}</Badge>
+                </div>
               </div>
 
               <div className="space-y-3">
@@ -196,7 +202,7 @@ export function InboxClient({
                   <div
                     key={m.id}
                     className={cn("flex flex-col gap-1", m.sender === "CUSTOMER" ? "items-start" : "items-end")}
-                    dir={m.language === "AR" ? "rtl" : "ltr"}
+                    dir={m.language.startsWith("AR") ? "rtl" : "ltr"}
                   >
                     <div
                       className={cn(
@@ -213,10 +219,30 @@ export function InboxClient({
                       <span>·</span>
                       <span>{timeAgo(m.createdAt)}</span>
                       {m.status === "PENDING_APPROVAL" && <Badge variant="warm">{t.inbox.pendingApproval}</Badge>}
+                      {m.sender !== "CUSTOMER" && m.deliveryStatus && m.deliveryStatus !== "FAILED" && (
+                        <span>
+                          · {deliveryLabel(m.deliveryStatus, lang)}
+                        </span>
+                      )}
+                      {m.deliveryStatus === "FAILED" && (
+                        <span className="text-[var(--status-hot)]" title={m.failureReason ?? undefined}>
+                          · {lang === "AR" ? "فشل الإرسال" : "Not sent"}{m.failureReason ? `: ${m.failureReason}` : ""}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
+              <ReplyBox
+                key={thread.id}
+                conversationId={thread.id}
+                aiPaused={thread.aiPaused}
+                lang={lang}
+                onChanged={() => {
+                  loadThread(thread.id);
+                  router.refresh();
+                }}
+              />
             </div>
           )}
         </Card>
@@ -225,6 +251,84 @@ export function InboxClient({
       <SimulateMessageModal open={simulateOpen} onOpenChange={setSimulateOpen} lang={lang} />
     </div>
   );
+}
+
+function deliveryLabel(status: string, lang: UiLanguage): string {
+  const ar = lang === "AR";
+  switch (status) {
+    case "QUEUED":
+      return ar ? "قيد الإرسال" : "Sending";
+    case "SENT":
+      return ar ? "تم الإرسال" : "Sent";
+    case "DELIVERED":
+      return ar ? "تم التسليم" : "Delivered";
+    case "READ":
+      return ar ? "تمت القراءة" : "Read";
+    default:
+      return status;
+  }
+}
+
+/** A person answers the customer directly. Sending pauses the AI for this chat so the two don't talk over each other. */
+function ReplyBox({
+  conversationId,
+  aiPaused,
+  lang,
+  onChanged,
+}: {
+  conversationId: string;
+  aiPaused: boolean;
+  lang: UiLanguage;
+  onChanged: () => void;
+}) {
+  const ar = lang === "AR";
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  const send = () => {
+    if (!text.trim()) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await sendHumanReplyAction(conversationId, text);
+      if (res.ok) setText("");
+      else setError(res.error ?? "Failed to send.");
+      onChanged();
+    });
+  };
+
+  const togglePause = () => {
+    startTransition(async () => {
+      await setConversationAiPausedAction(conversationId, !aiPaused);
+      onChanged();
+    });
+  };
+
+  return (
+    <div className="space-y-2 border-t border-[var(--border-hairline)] pt-3">
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={2}
+        dir="auto"
+        placeholder={ar ? "اكتب ردًا بنفسك (سيتوقف الذكاء الاصطناعي عن الرد في هذه المحادثة)" : "Write a reply yourself (the AI stops answering this chat)"}
+        className="flex w-full rounded-lg border border-[var(--border-hairline-strong)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text-1)] placeholder:text-[var(--text-5)] outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-from)]"
+      />
+      {error && <p className="text-xs text-[var(--status-hot)]">{error}</p>}
+      <div className="flex items-center justify-between gap-2">
+        <Button size="sm" variant="outline" disabled={pending} onClick={togglePause}>
+          {aiPaused ? (ar ? "استئناف الذكاء الاصطناعي" : "Resume AI") : ar ? "إيقاف الذكاء الاصطناعي" : "Pause AI"}
+        </Button>
+        <Button size="sm" disabled={pending || !text.trim()} onClick={send}>
+          {pending ? t_sending(ar) : ar ? "إرسال" : "Send"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function t_sending(ar: boolean) {
+  return ar ? "جارٍ الإرسال..." : "Sending...";
 }
 
 function SimulateMessageModal({ open, onOpenChange, lang }: { open: boolean; onOpenChange: (v: boolean) => void; lang: UiLanguage }) {

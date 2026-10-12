@@ -4,6 +4,9 @@ import { withTenant } from "@/lib/db";
 import { getTenantSession } from "@/lib/auth";
 import { agencyGuardResult } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
+import { encryptSecret } from "@/lib/crypto";
+import { fetchWhatsAppNumberInfo } from "@/lib/channels/whatsapp";
 import type { ChannelProvider, OAuthChannelProvider } from "@/lib/agency/channels";
 
 /**
@@ -74,6 +77,79 @@ export async function disconnectOAuthChannelAction(provider: OAuthChannelProvide
         oauthRefreshToken: null,
         oauthExpiresAt: null,
       },
+    })
+  );
+
+  revalidatePath("/agency/integrations");
+  revalidatePath("/agency/ai-control");
+  return { ok: true as const };
+}
+
+/**
+ * Connects a REAL WhatsApp Business number (Meta Cloud API). The pair is
+ * checked against Meta first, so a typo'd id or an expired token is rejected
+ * here instead of silently never receiving anything. The token is stored
+ * encrypted (APP_ENCRYPTION_KEY) and never sent back to the browser.
+ */
+export async function connectWhatsAppAction(input: { phoneNumberId: string; accessToken: string }) {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = agencyGuardResult(session.role?.name ?? "", "integrations", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const phoneNumberId = input.phoneNumberId.trim();
+  const accessToken = input.accessToken.trim();
+  if (!/^\d{5,25}$/.test(phoneNumberId)) return { ok: false as const, error: "Phone number ID should be digits only (copy it from the Meta WhatsApp API Setup page)." };
+  if (accessToken.length < 20) return { ok: false as const, error: "Paste the full access token." };
+  if (!process.env.APP_ENCRYPTION_KEY) return { ok: false as const, error: "The server is missing APP_ENCRYPTION_KEY, so the token cannot be stored safely." };
+  if (!process.env.META_APP_SECRET || !process.env.WHATSAPP_VERIFY_TOKEN) {
+    return { ok: false as const, error: "The server is missing META_APP_SECRET or WHATSAPP_VERIFY_TOKEN, so incoming messages could not be verified." };
+  }
+
+  const tenantId = session.tenantId!;
+  const checked = await fetchWhatsAppNumberInfo(phoneNumberId, accessToken);
+  if (!checked.ok) return { ok: false as const, error: `Meta rejected these details: ${checked.error}` };
+
+  const displayName = [checked.info.verifiedName, checked.info.displayPhoneNumber].filter(Boolean).join(" · ") || phoneNumberId;
+  const data = {
+    status: "CONNECTED",
+    connectedAt: new Date(),
+    externalId: phoneNumberId,
+    apiToken: encryptSecret(accessToken),
+    displayName,
+  };
+  try {
+    await withTenant(tenantId, (tx) =>
+      tx.channel.upsert({
+        where: { tenantId_provider: { tenantId, provider: "WHATSAPP" } },
+        update: data,
+        create: { tenantId, provider: "WHATSAPP", ...data },
+      })
+    );
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      return { ok: false as const, error: "This WhatsApp number is already connected to another account." };
+    }
+    throw err;
+  }
+
+  revalidatePath("/agency/integrations");
+  revalidatePath("/agency/ai-control");
+  return { ok: true as const, displayName };
+}
+
+/** Disconnecting a real WhatsApp channel also wipes the stored token, same reasoning as disconnectOAuthChannelAction. */
+export async function disconnectWhatsAppAction() {
+  const session = await getTenantSession();
+  if (!session) return { ok: false as const, error: "Not authenticated." };
+  const permCheck = agencyGuardResult(session.role?.name ?? "", "integrations", "edit");
+  if (!permCheck.ok) return permCheck;
+
+  const tenantId = session.tenantId!;
+  await withTenant(tenantId, (tx) =>
+    tx.channel.updateMany({
+      where: { tenantId, provider: "WHATSAPP" },
+      data: { status: "DISCONNECTED", connectedAt: null, externalId: null, apiToken: null, displayName: null },
     })
   );
 

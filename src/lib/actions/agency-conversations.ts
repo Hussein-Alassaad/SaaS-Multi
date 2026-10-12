@@ -57,6 +57,7 @@ export async function getConversationThreadAction(conversationId: string) {
       stage: conversation.stage,
       status: conversation.status,
       language: conversation.language,
+      aiPaused: conversation.aiPaused,
       channel: { provider: conversation.channel.provider },
       client: {
         id: conversation.nexarisClient.id,
@@ -69,6 +70,8 @@ export async function getConversationThreadAction(conversationId: string) {
         body: m.body,
         language: m.language,
         status: m.status,
+        deliveryStatus: m.deliveryStatus,
+        failureReason: m.failureReason,
         createdAt: m.createdAt.toISOString(),
       })),
     },

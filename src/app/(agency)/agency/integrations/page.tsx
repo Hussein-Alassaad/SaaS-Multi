@@ -15,7 +15,17 @@ export default async function IntegrationsPage() {
     status: c.status,
     displayName: c.displayName,
     connectedAt: c.connectedAt ? c.connectedAt.toISOString() : null,
+    // true only for a number connected through Meta (has real credentials), not the demo toggle
+    isReal: !!c.externalId,
   }));
 
-  return <IntegrationsClient channels={rows} lang={lang} />;
+  const appUrl = (process.env.APP_URL ?? "").replace(/\/$/, "");
+  return (
+    <IntegrationsClient
+      channels={rows}
+      lang={lang}
+      webhookUrl={appUrl ? `${appUrl}/api/webhooks/whatsapp` : null}
+      serverReady={!!process.env.META_APP_SECRET && !!process.env.WHATSAPP_VERIFY_TOKEN && !!process.env.APP_ENCRYPTION_KEY}
+    />
+  );
 }

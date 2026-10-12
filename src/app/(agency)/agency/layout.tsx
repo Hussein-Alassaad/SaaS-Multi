@@ -5,6 +5,7 @@ import { AgencyMobileBottomBar } from "@/components/layout/AgencyMobileBottomBar
 import { AmbientWordmark } from "@/components/layout/AmbientWordmark";
 import { PageTransition } from "@/components/layout/PageTransition";
 import { AnnouncementBanner } from "@/components/layout/AnnouncementBanner";
+import { AlertsBell } from "@/components/layout/AlertsBell";
 import { getTenantSession } from "@/lib/auth";
 import { isRtl, type UiLanguage } from "@/lib/i18n";
 import { getEnabledSectionHrefs } from "@/lib/agency/sections";
@@ -47,6 +48,10 @@ export default async function AgencyLayout({ children }: { children: React.React
       <div className={`relative z-10 flex min-h-screen flex-col ${rtl ? "md:mr-16" : "md:ml-16"}`}>
         <AgencyMobileTopBar lang={lang} />
         <main className="flex-1 px-4 pb-20 pt-4 md:px-8 md:pb-8 md:pt-6">
+          {/* Desktop has no top bar, so the bell gets its own thin row; on mobile it lives in the top bar above. */}
+          <div className="relative z-40 mb-2 hidden justify-end md:flex">
+            <AlertsBell lang={lang} />
+          </div>
           <AnnouncementBanner
             items={announcements.map((a) => ({
               id: a.id,

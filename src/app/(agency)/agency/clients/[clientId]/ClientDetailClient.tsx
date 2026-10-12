@@ -181,7 +181,7 @@ export function ClientDetailClient({ client, lang }: { client: ClientDetail; lan
                   <div
                     key={m.id}
                     className={cn("flex flex-col gap-0.5", m.sender === "CUSTOMER" ? "items-start" : "items-end")}
-                    dir={m.language === "AR" ? "rtl" : "ltr"}
+                    dir={m.language.startsWith("AR") ? "rtl" : "ltr"}
                   >
                     <div
                       className={cn(
