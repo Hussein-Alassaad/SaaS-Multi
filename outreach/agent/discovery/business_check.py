@@ -94,6 +94,21 @@ _CREATOR_WORDS = (
 )
 
 
+def _system_for(seller_domain: str | None) -> list[dict]:
+    """The screening prompt, plus -- when the seller's line of business is known --
+    an instruction to also flag COMPETITORS (owner's instruction 2026-10-12: never
+    discover, write to or send to a company in the seller's own domain)."""
+    if not seller_domain:
+        return _SYSTEM
+    extra = (
+        "\n\nThe business doing this outreach: " + seller_domain + "\n"
+        "ALSO include a boolean field \"competitor\" in the JSON object: true if this account is a company "
+        "in the SAME line of business as that seller (it sells, installs or services the same kind of thing, "
+        "so it is the seller's competitor and not a customer), otherwise false."
+    )
+    return [{"type": "text", "text": _SYSTEM[0]["text"] + extra}]
+
+
 def _rule_based_verdict(profile: dict) -> tuple[bool, str]:
     handle = (profile.get("handle") or "").lower()
     name = profile.get("display_name") or ""
@@ -156,7 +171,9 @@ def classify(profile: dict) -> tuple[bool, str] | None:
         f"Sample post caption: {(profile.get('sample_caption') or '').strip()[:300] or '(none)'}"
     )
     try:
-        answer = claude_client.call_json(_SYSTEM, user_content, config.MODEL_ANALYSIS, max_tokens=200)
+        answer = claude_client.call_json(
+            _system_for(profile.get("seller_domain")), user_content, config.MODEL_ANALYSIS, max_tokens=200,
+        )
     except Exception as exc:  # noqa: BLE001 -- fail open, never block discovery on an AI hiccup
         _log.warning("[business_check] @%s: AI check failed (%s) -- using the strict rule-based fallback", profile.get("handle"), exc)
         _ai_down_until = time.time() + _AI_DOWN_BACKOFF_SECONDS
@@ -164,6 +181,9 @@ def classify(profile: dict) -> tuple[bool, str] | None:
 
     verdict = str(answer.get("verdict", "")).strip().lower()
     detail = f"{answer.get('category', '?')}: {answer.get('reason', '')}".strip()
+    if profile.get("seller_domain") and answer.get("competitor") is True:
+        _log.info("[business_check] @%s -> competitor (%s)", profile.get("handle"), detail)
+        return False, f"competitor: {detail}"
     _log.info("[business_check] @%s -> %s (%s)", profile.get("handle"), verdict or "invalid", detail)
     if verdict == "no":
         return False, detail

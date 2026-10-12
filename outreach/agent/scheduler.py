@@ -539,6 +539,9 @@ def _save_if_qualified_with_reasons(
     normalised = {**raw_profile, "platform": platform}
     if platform == "instagram":
         normalised["handle"] = profile_key
+        seller = _SELLER_DOMAIN_BY_BUSINESS.get(((repo.get_settings() or {}).get("business_name") or "").strip().lower())
+        if seller:
+            normalised["seller_domain"] = seller
     qualifies, reasons = qualify_profile(normalised, niche, niche_is_random=niche_is_random)
     if not qualifies:
         repo.record_seen_profile(platform, profile_key, "rejected", tenant_id=account["tenant_id"])
@@ -577,7 +580,11 @@ def _save_if_qualified_with_reasons(
         # "message drafted".
         "contact_email": _email_from_bio(raw_profile.get("bio")),
         "status": "discovered",
-        "notes": " | ".join(reasons),  # keeps the qualification reasoning on the record
+        # Keeps the qualification reasoning on the record, plus (2026-10-12) the bio, so a later
+        # competitor / Lebanese re-check can run without re-opening the profile.
+        "notes": " | ".join(reasons) + (
+            " | Bio: " + " ".join((raw_profile.get("bio") or "").split())[:240] if raw_profile.get("bio") else ""
+        ),
     })
     return True, reasons
 
@@ -1038,7 +1045,39 @@ _COMPETITOR_MARKERS_BY_BUSINESS = {
         "alarm systems", "security system", "security systems",
         "security integrator", "security integration", "burglar alarm",
         "intrusion detection", "video monitoring", "security solutions",
+        # ADDED 2026-10-12, owner's instruction ("companies like TechVision: do
+        # not discover or send, same domain as us"): Zimmar is an IT / network
+        # security firm, so IT, software and technology companies are the same
+        # domain, not prospects. TechVision Lb ("IT solutions and CCTV"),
+        # Canard.tech, Hamster POS, Logic iT, BRAIN STORE and Atlas Computer all
+        # got through because this list only covered physical security gear.
+        "it solutions", "it solution", "it services", "it company", "it support", "it consulting",
+        "managed services", "software", "pos system", "pos systems", "pos solutions", "pos software",
+        "web development", "website development", "app development", "mobile app", "computer",
+        "networking", "network solutions", "cyber", "data center", "telecom", "hardware solutions",
+        "tech solutions", "technology solutions", "systems integrat", "smart solutions", "smart home",
+        "iot ", "infrastructure solutions",
     ],
+}
+
+# What the seller sells, handed to the AI business check so it can also flag
+# competitors (owner's instruction 2026-10-12).
+_SELLER_DOMAIN_BY_BUSINESS = {
+    "zimmar": (
+        "Zimmar Tech sells IT and network security reviews (CCTV, networks, access control, backups) to "
+        "companies in Lebanon. Its competitors are IT, technology, software, POS, computer, networking, "
+        "telecom and cybersecurity companies, and security / CCTV / alarm sellers and installers."
+    ),
+}
+
+# The account's own NAME / HANDLE are checked too (the bio alone often says nothing:
+# TechVision's name and handle both say "tech"). Substring markers are long enough to
+# be safe inside a name; TOKEN markers are short words matched only as whole words.
+_COMPETITOR_NAME_MARKERS_BY_BUSINESS = {
+    "zimmar": ("tech", "computer", "software", "cyber", "telecom", "network", "cctv", "security", "surveillance"),
+}
+_COMPETITOR_NAME_TOKENS_BY_BUSINESS = {
+    "zimmar": {"pos", "it", "ict", "iot"},
 }
 
 
@@ -1063,7 +1102,7 @@ _COMPETITOR_MARKERS_BY_BUSINESS = {
 _AGENCY_EXCLUDED_BUSINESSES: set[str] = set()
 
 
-def _is_competitor(business_name: str, bio: str, industry: str | None) -> bool:
+def _is_competitor(business_name: str, bio: str, industry: str | None, lead_name: str = "") -> bool:
     """
     True if the LEAD's own bio or LinkedIn-listed industry plainly
     identifies it as a competitor of the tenant currently running discovery
@@ -1077,11 +1116,37 @@ def _is_competitor(business_name: str, bio: str, industry: str | None) -> bool:
     nothing -- fails open rather than raising, since a missing entry means
     "not yet configured," not "this tenant has no competitors."
     """
-    markers = _COMPETITOR_MARKERS_BY_BUSINESS.get((business_name or "").strip().lower())
+    tenant = (business_name or "").strip().lower()
+    markers = _COMPETITOR_MARKERS_BY_BUSINESS.get(tenant)
     if not markers:
         return False
     haystack = f" {bio.lower()} {(industry or '').lower()} "
-    return any(marker in haystack for marker in markers)
+    if any(marker in haystack for marker in markers):
+        return True
+    name = (lead_name or "").lower()
+    if name:
+        if any(m in name for m in _COMPETITOR_NAME_MARKERS_BY_BUSINESS.get(tenant, ())):
+            return True
+        tokens = set(re.findall(r"[a-z0-9]+", name))
+        if tokens & _COMPETITOR_NAME_TOKENS_BY_BUSINESS.get(tenant, set()):
+            return True
+    return False
+
+
+def _competitor_reason(lead: dict) -> str | None:
+    """
+    A reason string if this saved lead is a competitor of the tenant, else None.
+    Used as a last guard at message-writing, follow-up and SEND time (owner's
+    instruction 2026-10-12: never reach a competitor, whatever got past discovery).
+    Reads the lead's name, handle, industry and the bio kept in its notes.
+    """
+    business = ((repo.get_settings() or {}).get("business_name") or "")
+    handle = (lead.get("profile_url") or "").rstrip("/").rsplit("/", 1)[-1]
+    notes = lead.get("notes") or ""
+    bio = notes.split(" | Bio: ", 1)[1] if " | Bio: " in notes else ""
+    if _is_competitor(business, bio, lead.get("industry"), lead_name=f"{lead.get('business_name') or ''} {handle}"):
+        return "competitor: same line of business as the seller"
+    return None
 
 
 def _is_weak(found: int, limit: int) -> bool:
@@ -2188,7 +2253,8 @@ def _discover_instagram(
                 # check previously only existed on the LinkedIn side, so
                 # Zimmar's Instagram discovery had no defense against
                 # surfacing other CCTV/security-camera/alarm accounts.
-                if _is_competitor(business_name, profile.get("bio") or "", None):
+                if _is_competitor(business_name, profile.get("bio") or "", None,
+                                  lead_name=f"{profile.get('display_name') or ''} {handle}"):
                     counts["skipped_leads"].append({
                         "platform": "instagram",
                         "identifier": profile.get("display_name") or profile_url,
@@ -2784,6 +2850,10 @@ def _run_message_generation_cycle_for_tenant(limit: int | None) -> list[dict]:
         # this way, going back to September). LinkedIn stays fully active
         # for DISCOVERY and email-lookup -- this only changes what channel
         # a LinkedIn-discovered lead's message gets generated on.
+        if _competitor_reason(lead):
+            repo.update_lead(lead["id"], {"status": "rejected_competitor"})
+            results.append({"lead": lead.get("business_name"), "ok": False, "reason": "competitor -- no message written"})
+            continue
         channels = [] if lead.get("platform") == "linkedin" else [lead.get("platform")]
         if lead.get("whatsapp_found"):
             channels.append("whatsapp")
@@ -2991,6 +3061,18 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
     # daily limits are 5-15), not a real cost.
     if account_id is not None:
         messages = [m for m in messages if (repo.get_lead(m["lead_id"]) or {}).get("account_id") == account_id]
+
+    # ADDED 2026-10-12, owner's instruction: a competitor of the tenant is never
+    # contacted, whatever got through discovery or follow-up approval.
+    _sendable = []
+    for _m in messages:
+        _why = _competitor_reason(repo.get_lead(_m["lead_id"]) or {})
+        if _why:
+            repo.update_message(_m["id"], {"approval_status": "held", "hold_reason": f"Held at send time: {_why}."})
+            _progress_log.info("[sending] message=%s held at send time: %s", _m.get("id"), _why)
+            continue
+        _sendable.append(_m)
+    messages = _sendable
 
     # REAL BUG FOUND AND FIXED 2026-09-15: this function had NO daily-limit
     # check at all -- every approved+pending message got sent, however many
@@ -3311,7 +3393,7 @@ def run_followup_dispatch_poll(force: bool = False) -> dict:
             if repo.is_tenant_paused():
                 continue
             try:
-                results[tenant_id] = followup.dispatch_due_followups(limit=1)
+                results[tenant_id] = followup.dispatch_due_followups(limit=1, skip_reason=_competitor_reason)
             except Exception as exc:  # noqa: BLE001 -- one tenant must not stop the others
                 log_error("followup", exc)
     return results
@@ -3635,7 +3717,7 @@ def run_full_pipeline_cycle() -> dict:
     for tenant_id in repo.list_active_tenant_ids():
         with repo.tenant_scope(tenant_id):
             try:
-                followups_dispatched[tenant_id] = followup.dispatch_due_followups()
+                followups_dispatched[tenant_id] = followup.dispatch_due_followups(skip_reason=_competitor_reason)
             except Exception as exc:  # noqa: BLE001 -- don't lose the steps above over one bad batch
                 followups_dispatched[tenant_id] = {"ok": False, "error": str(exc)}
                 log_error("followup", exc)

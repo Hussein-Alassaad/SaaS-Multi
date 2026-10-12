@@ -300,6 +300,46 @@ check("an AI outage (empty balance, bad key, unreachable) is recognised, an ordi
 _asrc = inspect.getsource(sch._run_analysis_cycle_for_tenant)
 check("analysis lets an Instagram lead continue unanalyzed during an AI outage (fixed templates need no analysis); other failures still skip the lead",
       '_is_ai_outage(exc)' in _asrc and 'lead.get("platform") == "instagram"' in _asrc and "continue" in _asrc)
+# ADDED 2026-10-12: Zimmar's IT/technology "same domain" exclusion.
+check("IT / tech / software / POS / computer companies are treated as Zimmar's competitors (TechVision-type accounts are never discovered)",
+      all(sch._is_competitor("Zimmar", bio, None, lead_name=nm) for bio, nm in (
+          ("IT solutions and CCTV", "TechVision Lb techvisionlb"),
+          ("Hardware & Software development | Marketing", "Canard.tech canard.tech"),
+          ("One Ecosystem. Powering businesses", "Hamster POS hamster_pos"),
+          ("", "Atlas Computer Lebanon atlascomputer.lb"),
+          ("Smart Solutions for Modern Businesses: Software, POS Systems", "BRAIN STORE brainstore.lb"),
+          ("Web Development | SMM", "AXIS MEDIA axismediame"))))
+check("real non-IT Lebanese businesses are NOT flagged as competitors",
+      not any(sch._is_competitor("Zimmar", bio, None, lead_name=nm) for bio, nm in (
+          ("FMCG distributor in Lebanon", "DSGGROUP dsg_grouplb"),
+          ("Made in Lebanon energy drink", "TRIPLE WORLD triple.world"),
+          ("Delivery all over Lebanon, premium packaging", "professional packaging one professionalpackagingone"),
+          ("Shop anywhere, ship to Lebanon", "Wasel wasel_lb"),
+          ("Franchiser of multiple brands in the region", "Calia Group calia.group"),
+          ("Delivery to ALL LEBANON", "American Center Outlet americancenter_outlet"))))
+check("the competitor rule is Zimmar-only: another tenant is unaffected by the IT markers",
+      not sch._is_competitor("Some Other Tenant", "IT solutions", None, lead_name="TechVision"))
+# ADDED 2026-10-12: AI competitor judgement + guards at every stage.
+business_check._ai_down_until = 0
+_seen_sys = []
+business_check.claude_client.call_json = lambda s, u, m, max_tokens=0: (_seen_sys.append(s[0]["text"]), {"verdict": "yes", "competitor": True, "category": "IT company", "reason": "sells POS software"})[1]
+_cv = _real_classify(dict(_ig, seller_domain="Zimmar sells IT and network security reviews."))
+check("the AI check is told what the seller sells and rejects a company it flags as a competitor, even if it is a real Lebanese business",
+      _cv is not None and _cv[0] is False and _cv[1].startswith("competitor") and "ALSO include a boolean field" in _seen_sys[-1])
+_nc = _real_classify(dict(_ig))
+check("without a seller description the competitor flag is not applied (other tenants unaffected)",
+      _nc is not None and _nc[0] is True and "ALSO include a boolean field" not in _seen_sys[-1])
+business_check.claude_client.call_json = _orig_call
+business_check._ai_down_until = 0
+check("Zimmar's seller description is wired into discovery and the bio is kept in the lead's notes for later re-checks",
+      "seller_domain" in inspect.getsource(sch._save_if_qualified_with_reasons)
+      and '" | Bio: "' in inspect.getsource(sch._save_if_qualified_with_reasons)
+      and "zimmar" in sch._SELLER_DOMAIN_BY_BUSINESS)
+check("a competitor is blocked at message-writing, at follow-up dispatch AND at send time",
+      "_competitor_reason(lead)" in inspect.getsource(sch._run_message_generation_cycle_for_tenant)
+      and "_competitor_reason(repo.get_lead" in inspect.getsource(sch._run_sending_cycle_for_tenant)
+      and "skip_reason=_competitor_reason" in inspect.getsource(sch.run_followup_dispatch_poll)
+      and "skip_reason" in inspect.getsource(_fu.dispatch_due_followups))
 _li_calls = []
 business_check.classify = lambda p: _li_calls.append(1)
 qualify.qualify_profile(profile(), "trading")
@@ -1173,10 +1213,12 @@ _zim_disc_2 = _job_times(_sched2.get_jobs(), "discovery", _ZIMMAR_TENANT_ID)
 # removed (in which case every single rebuild is identical).
 _ins_send_all = [_ins_send_1, _ins_send_2]
 _ins_disc_all = [_ins_disc_1, _ins_disc_2]
+_zim_disc_all = [_zim_disc_1, _zim_disc_2]
 for _ in range(6):
     _extra_sched = sch.build_daily_schedule()
     _ins_send_all.append(_job_times(_extra_sched.get_jobs(), "sending", _INSURANCE_TENANT_ID))
     _ins_disc_all.append(_job_times(_extra_sched.get_jobs(), "discovery", _INSURANCE_TENANT_ID))
+    _zim_disc_all.append(_job_times(_extra_sched.get_jobs(), "discovery", _ZIMMAR_TENANT_ID))
 
 # Helper: total minutes-since-midnight for an (hour, minute) string pair,
 # so "is this inside the +/-10 min band around anchor X" is a plain
@@ -1250,7 +1292,7 @@ else:
           all(_ZIMMAR_DISC_START <= _mins(v) <= _ZIMMAR_DISC_END for v in _zim_disc_1.values())
           and all(_ZIMMAR_DISC_START <= _mins(v) <= _ZIMMAR_DISC_END for v in _zim_disc_2.values()))
     check("Zimmar's discovery time still RE-RANDOMIZES across independent rebuilds (spread/jitter unchanged, regression check)",
-          _zim_disc_1 != _zim_disc_2)
+          any(x != _zim_disc_all[0] for x in _zim_disc_all[1:]))
 
 # With Zimmar confined to 20:00-23:00 and Insurance confined to 23:10-03:00
 # (disjoint, non-overlapping windows -- OWNER REQUEST 2026-09-30), the two

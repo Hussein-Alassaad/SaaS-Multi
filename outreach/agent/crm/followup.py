@@ -115,7 +115,7 @@ def _has_open_followup_message(lead_id: str, channel: str) -> bool:
     )
 
 
-def dispatch_due_followups(limit: int | None = None) -> list[dict]:
+def dispatch_due_followups(limit: int | None = None, skip_reason=None) -> list[dict]:
     """
     For every follow-up whose scheduled time has arrived, generate its
     distinct follow-up message (see generate.generate_followup_message) on
@@ -150,6 +150,13 @@ def dispatch_due_followups(limit: int | None = None) -> list[dict]:
             continue
 
         channel = lead.get("platform")
+        if skip_reason is not None:
+            # e.g. the lead turned out to be a competitor of the tenant -- never follow it up.
+            why = skip_reason(lead)
+            if why:
+                repo.update_follow_up(follow_up["id"], {"status": "cancelled"})
+                results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": False, "skipped": why})
+                continue
         if channel not in _FOLLOWUP_CHANNELS:
             repo.update_follow_up(follow_up["id"], {"status": "cancelled"})
             results.append({"follow_up_id": follow_up["id"], "lead": lead.get("business_name"), "ok": False,
