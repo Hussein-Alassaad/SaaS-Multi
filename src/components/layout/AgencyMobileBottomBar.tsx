@@ -20,7 +20,6 @@ const NAV_KEY_MAP: Record<string, keyof ReturnType<typeof getDictionary>["nav"]>
   "/agency/knowledge-base": "knowledgeBase",
   "/agency/integrations": "integrations",
   "/agency/analytics": "analytics",
-  "/agency/feature-requests": "featureRequests",
   "/agency/team": "team",
   "/agency/settings": "settings",
 };

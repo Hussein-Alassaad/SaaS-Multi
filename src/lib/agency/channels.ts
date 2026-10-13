@@ -25,15 +25,18 @@ export async function readChannelsWithDefaults(tx: Prisma.TransactionClient, ten
   return applyChannelDefaults(existing, tenantId);
 }
 
-/** Ensures a Channel row exists for every provider so the UI always has all 5 to show/connect. */
+/** Ensures a Channel row exists for every provider so the UI always has all 3 to show/connect. */
 export async function getChannelsWithDefaults(tenantId: string) {
   const existing = await getChannels(tenantId);
   return applyChannelDefaults(existing, tenantId);
 }
 
+// Gmail / Outlook are no longer offered: the agent replies on WhatsApp, Instagram and Facebook only, and nothing reads or sends email.
+const SHOWN_PROVIDERS = CHANNEL_PROVIDERS.filter((p) => p === "WHATSAPP" || p === "INSTAGRAM" || p === "FACEBOOK");
+
 function applyChannelDefaults(existing: Awaited<ReturnType<typeof getChannels>>, tenantId: string) {
   const byProvider = new Map(existing.map((c) => [c.provider, c]));
-  return CHANNEL_PROVIDERS.map(
+  return SHOWN_PROVIDERS.map(
     (provider) =>
       byProvider.get(provider) ?? {
         id: `unconnected-${provider}`,
