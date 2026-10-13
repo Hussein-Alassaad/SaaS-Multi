@@ -13,9 +13,9 @@ async function getTenantTimezone(tenantId: string) {
 }
 
 function confirmationText(language: string, label: string): string {
-  if (language.startsWith("AR")) return `تم تأكيد موعدكم يوم ${label}. بانتظاركم!`;
-  if (language === "ARABIZI") return `Mawedna mta2akkad: ${label}. Metshawwe2in nehke ma3ak!`;
-  return `Your meeting is confirmed for ${label}. We look forward to speaking with you!`;
+  if (language.startsWith("AR")) return `تم تأكيد موعد المكالمة يوم ${label}. رح يتصل فيك فريقنا على هالرقم.`;
+  if (language === "ARABIZI") return `Mawed el mkelme mta2akkad: ${label}. Ra7 yettasel fik fari2na 3a hal ra2em.`;
+  return `Your call is confirmed for ${label}. Our team will phone you on this number.`;
 }
 
 export async function createMeetingSlotAction(startsAt: string, durationMin: number) {

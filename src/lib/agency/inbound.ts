@@ -36,6 +36,14 @@ export type InboundResult =
 
 const HISTORY_LIMIT = 30;
 
+/** Accepts what a customer types ('70 123 456', '+961 70 123456'); returns null unless it looks like a phone number. */
+export function normalizePhone(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  const digits = raw.replace(/[^\d]/g, "");
+  if (digits.length < 7 || digits.length > 15) return undefined;
+  return raw.trim().startsWith("+") ? `+${digits}` : digits;
+}
+
 function isUniqueViolation(err: unknown) {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 }
@@ -188,6 +196,7 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
     history: history.map((m) => ({ sender: m.sender as "CUSTOMER" | "AI" | "HUMAN", body: m.body })),
     language: replyLanguage,
     clientName: client.name,
+    clientPhone: client.phone,
     knowledgeEntries: selectKnowledge(knowledge, input.body).map((k) => ({ title: k.title, body: k.body })),
     settings,
     tenantId,
@@ -212,6 +221,8 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
       data: {
         name: extracted.name ?? client.name,
         needs: extracted.needs ?? client.needs,
+        // Instagram/Facebook give no phone number; when the customer types one for the call, keep it (never overwrite a known one).
+        phone: client.phone ? undefined : normalizePhone(extracted.phone),
         tag: extracted.readyForHandoff && client.tag === "REPLIED" ? "INTERESTED" : undefined,
       },
     });
@@ -242,7 +253,7 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
           tenantId,
           type: "MEETING_REQUESTED",
           title: `Meeting offered: ${slotLabels.get(extracted.proposedSlotId!) ?? "a time"}`,
-          body: `${who} was offered this time and is waiting. Open Meetings to confirm it.`,
+          body: `${who} was offered this time. Call on: ${client.phone ?? normalizePhone(extracted.phone) ?? "number not given yet (ask in the chat)"}. Open Meetings to confirm it.`,
           conversationId: conversation.id,
         });
       });

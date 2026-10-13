@@ -808,6 +808,7 @@ model MeetingRequest {
   status          String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | APPROVED | REJECTED | COMPLETED | CANCELED
   decidedById     String?
   decidedAt       DateTime?
+  reminderSentAt  DateTime? // set once the 'your call is in an hour' reminder was handled (sent, or skipped because the reply window had closed)
   createdAt       DateTime  @default(now())
 
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)

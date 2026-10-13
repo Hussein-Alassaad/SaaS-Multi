@@ -33,6 +33,8 @@ interface ConversationContext {
   history: ConversationTurn[];
   language: ReplyLanguage;
   clientName: string | null;
+  /** The customer's phone number if we already have it (always true on WhatsApp, never on Instagram/Facebook until they give it). */
+  clientPhone?: string | null;
   knowledgeEntries: { title: string; body: string }[];
   settings: AiSettings;
   tenantId?: string;
@@ -67,10 +69,16 @@ export function buildSystemPrompt(ctx: ConversationContext): string {
     `Write the way a real person chats: short messages (usually 1-3 sentences), plain text, no markdown or bullet lists, at most one emoji and only when it fits.`,
     `Never invent pricing, services, opening hours, or policies -- only use what's in the knowledge base below. If the answer is not there, say you will check with the team (do not guess) and set needsHuman to true.`,
     `You are having a real back-and-forth conversation, not answering each message in isolation -- remember what the customer already told you earlier in this thread and never ask for the same thing twice.`,
+    `You are an automated assistant. Do not bring this up yourself, but if the customer asks whether they are talking to a person or a bot, answer honestly that you are the business's automated assistant and that a team member can take over at any time. Never claim to be a human.`,
     `Your goals, in order: (1) answer the customer's question helpfully from the knowledge base; (2) find out, naturally and ONE question at a time, what they need and their name; (3) when they show real interest (they ask about a service, a price, availability, or how to get started), offer them a meeting with the team.`,
     ctx.availableSlots && ctx.availableSlots.length > 0
       ? `To offer a meeting, propose ONE specific time from the real open slots listed below -- pick whichever best fits what they've said (e.g. "tomorrow afternoon" -> the soonest listed slot that afternoon). NEVER state it as confirmed: say something like "does <day/time> work for you? I'll get that confirmed by our team" -- the team still approves every meeting, so never tell the customer it's booked.\n\n## Available meeting times (already in the business's local time -- quote them exactly as written, never convert or reformat)\n${ctx.availableSlots.map((s) => `- ${s.label}`).join("\n")}`
       : `To offer a meeting when the customer is interested, tell them a team member will contact them to arrange a time -- do not invent availability yourself (there are no open slots to offer right now).`,
+    `The meeting is a PHONE CALL: a team member calls the customer at the agreed time. ${
+      ctx.clientPhone
+        ? "We already have the customer's phone number, so do not ask for it; just say the team will call them."
+        : "We do NOT have the customer's phone number yet. When you offer a time, also ask which number the team should call (one question, in the same message), and set phone when they give it."
+    }`,
     `If the customer asks to speak to a person, is upset or complaining, asks for something you cannot answer from the knowledge base, or asks for something this business does not do, tell them a team member will take it from here and set needsHuman to true.`,
     `\n## Knowledge Base\n${knowledgeBlock}`,
     ctx.settings.qualificationRules ? `\n## Qualification rules\n${ctx.settings.qualificationRules}` : "",
@@ -86,6 +94,8 @@ export interface ExtractedLeadInfo {
   readyForHandoff: boolean;
   /** true when a person should take over: the customer asked for one, is upset, or asked something the knowledge base cannot answer. */
   needsHuman: boolean;
+  /** The phone number the customer gave for the call, exactly as written, or null if they have not given one. */
+  phone: string | null;
   /** Set only when the just-drafted reply proposed a specific meeting time to the customer -- the id of the MeetingSlot from ctx.availableSlots that was offered. Null otherwise. Creating the actual (still-pending-approval) MeetingRequest from this is the caller's job, not this module's -- see simulateInboundMessageAction. */
   proposedSlotId: string | null;
 }
@@ -120,6 +130,10 @@ function buildExtractTool(availableSlots: AvailableMeetingSlot[]): Anthropic.Too
           type: "boolean",
           description: "True once enough is known to be a useful lead for the human team (roughly: what they want, and either a name or contact hint).",
         },
+        phone: {
+          type: ["string", "null"],
+          description: "A phone number the customer gave for the team to call them on, exactly as they wrote it. Null if they have not given one in this conversation.",
+        },
         needsHuman: {
           type: "boolean",
           description: "True if a person should take over now: the customer asked for one, is upset or complaining, or asked something the knowledge base cannot answer.",
@@ -132,7 +146,7 @@ function buildExtractTool(availableSlots: AvailableMeetingSlot[]): Anthropic.Too
               : "Always null -- there are no available slots to propose right now.",
         },
       },
-      required: ["name", "needs", "readyForHandoff", "needsHuman", "proposedSlotId"],
+      required: ["name", "needs", "readyForHandoff", "needsHuman", "phone", "proposedSlotId"],
     },
   };
 }
@@ -148,7 +162,7 @@ function stubReply(ctx: ConversationContext): { body: string; extracted: Extract
     ctx.language === "EN"
       ? `${greeting} [Draft placeholder reply -- will be replaced by a real AI response once the API key is connected]`
       : `${greeting}، شكراً لتواصلك معنا. [مسودة رد تجريبية -- سيتم استبدالها بردّ الذكاء الاصطناعي الفعلي بعد ربط مفتاح API]`;
-  return { body, extracted: { name: ctx.clientName, needs: null, readyForHandoff: false, needsHuman: false, proposedSlotId: null } };
+  return { body, extracted: { name: ctx.clientName, needs: null, readyForHandoff: false, needsHuman: false, phone: null, proposedSlotId: null } };
 }
 
 export async function generateAiReply(ctx: ConversationContext): Promise<AiReplyResult> {
@@ -218,7 +232,7 @@ export async function generateAiReply(ctx: ConversationContext): Promise<AiReply
             : null;
         extracted = rawExtracted
           ? { ...rawExtracted, proposedSlotId }
-          : { name: ctx.clientName, needs: null, readyForHandoff: false, needsHuman: false, proposedSlotId: null };
+          : { name: ctx.clientName, needs: null, readyForHandoff: false, needsHuman: false, phone: null, proposedSlotId: null };
       } catch (err) {
         await logError({
           source: "ai.extract_lead_info",
@@ -226,7 +240,7 @@ export async function generateAiReply(ctx: ConversationContext): Promise<AiReply
           tenantId: ctx.tenantId,
           context: { conversationId: ctx.conversationId },
         });
-        extracted = { name: ctx.clientName, needs: null, readyForHandoff: false, needsHuman: false, proposedSlotId: null };
+        extracted = { name: ctx.clientName, needs: null, readyForHandoff: false, needsHuman: false, phone: null, proposedSlotId: null };
       }
     } catch (err) {
       console.error("Claude API call failed, falling back to stub reply", err);

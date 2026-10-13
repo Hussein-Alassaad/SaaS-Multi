@@ -160,7 +160,7 @@ export function MeetingsClient({
                 <div>
                   <p className="text-base font-semibold text-[var(--text-1)]">{formatDateTime(r.slotStartsAt)}</p>
                   <p className="text-xs text-[var(--text-4)]">
-                    {r.clientName ?? r.clientPhone ?? t.meetings.unknown} · {t.channel[r.channelProvider as keyof typeof t.channel] ?? r.channelProvider} ·{" "}
+                    {r.clientName ?? t.meetings.unknown} · <span dir="ltr">{r.clientPhone ?? (ar ? "الرقم غير معروف بعد" : "number not given yet")}</span> · {t.channel[r.channelProvider as keyof typeof t.channel] ?? r.channelProvider} ·{" "}
                     <Link className="underline" href={`/agency/inbox?conversation=${r.conversationId}`}>
                       {ar ? "فتح المحادثة" : "Open chat"}
                     </Link>
