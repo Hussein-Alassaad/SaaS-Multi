@@ -10,10 +10,15 @@ import { config as loadEnv } from "dotenv";
 // pushed to it via the `pretest` script (scripts/push-test-db.mjs), which
 // derives the same URL from DATABASE_URL the same way this file does.
 loadEnv();
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is not set (checked .env) -- tests need a real Postgres connection string.");
+// Tests MUST use the session-mode connection (DIRECT_DATABASE_URL, port 5432), never the transaction pooler (DATABASE_URL,
+// port 6543). Prisma sets search_path=test on each connection it opens; behind the transaction pooler that connection is
+// shared with everything else, so after a test run other clients (the outreach agent's SQL, which does not qualify table
+// names) kept landing in the empty `test` schema -- "relation does not exist" / foreign-key errors in production
+// (seen 2026-10-12/13 during discovery). Session mode gives each test client its own server connection.
+if (!process.env.DIRECT_DATABASE_URL) {
+  throw new Error("DIRECT_DATABASE_URL is not set (checked .env) -- tests need the session-mode Postgres connection string.");
 }
-const testDbUrl = new URL(process.env.DATABASE_URL);
+const testDbUrl = new URL(process.env.DIRECT_DATABASE_URL);
 testDbUrl.searchParams.set("schema", "test");
 process.env.DATABASE_URL = testDbUrl.toString();
 (process.env as { NODE_ENV: string }).NODE_ENV = "test";
