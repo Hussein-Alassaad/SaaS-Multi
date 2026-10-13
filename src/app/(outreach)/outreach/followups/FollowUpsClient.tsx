@@ -30,13 +30,20 @@ function EmptyState() {
 export function FollowUpsClient({
   tenantId,
   initialLeads,
+  initialFollowedUp,
   initialGuidance,
 }: {
   tenantId: string;
   initialLeads: FollowUpLead[];
+  initialFollowedUp: FollowUpLead[];
   initialGuidance: string;
 }) {
   const [leads, setLeads] = useState(initialLeads);
+  const [followedUp, setFollowedUp] = useState(initialFollowedUp);
+  // "new" = never followed up (the working list); "done" = already followed up at least once, kept apart so they are not pushed twice.
+  const [tab, setTab] = useState<"new" | "done">("new");
+  const shown = tab === "new" ? leads : followedUp;
+  const eligibleCount = leads.filter((l) => l.platform === "instagram" && !l.followUpInProgress).length;
   const [isPending, startTransition] = useTransition();
   const [justScheduled, setJustScheduled] = useState<number | null>(null);
   const { showToast } = useToast();
@@ -92,6 +99,7 @@ export function FollowUpsClient({
         return;
       }
       setLeads((prev) => prev.filter((l) => l.id !== lead.id));
+      setFollowedUp((prev) => prev.filter((l) => l.id !== lead.id));
       showToast({ title: "Excluded", description: `${lead.businessName || "This lead"} won't be contacted again.`, variant: "success" });
     });
   };
@@ -122,8 +130,8 @@ export function FollowUpsClient({
           Follow <span className="text-gradient">Up</span>
         </h1>
         <p className="mt-1 text-sm text-[var(--text-4)]">
-          Every lead that's been messaged but hasn't replied yet. Follow-up messages go through the normal
-          Approval Queue before anything sends.
+          Leads we messaged that haven't replied and that we have never followed up. Anyone already followed up
+          once moves to the second tab. Follow-up messages go through the normal Approval Queue before anything sends.
         </p>
       </motion.header>
 
@@ -159,14 +167,31 @@ export function FollowUpsClient({
         )}
       </div>
 
-      {leads.length > 0 && (
+      <div className="mt-4 flex gap-2">
+        {([
+          ["new", `Not followed up (${leads.length})`],
+          ["done", `Already followed up (${followedUp.length})`],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+              tab === key ? "bg-accent-gradient text-white" : "bg-[var(--surface-2)] text-[var(--text-3)] hover:bg-[var(--surface-3)]"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "new" && eligibleCount > 0 && (
         <motion.button
           whileTap={{ scale: 0.98 }}
           onClick={followUpAll}
           disabled={isPending}
           className="mt-4 rounded-xl bg-accent-gradient px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-[var(--accent-from)]/20 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isPending ? "Scheduling…" : `Follow Up All (${leads.length})`}
+          {isPending ? "Scheduling…" : `Follow Up All (${eligibleCount})`}
         </motion.button>
       )}
 
@@ -176,11 +201,11 @@ export function FollowUpsClient({
         </p>
       )}
 
-      {leads.length === 0 && <EmptyState />}
+      {shown.length === 0 && (tab === "new" ? <EmptyState /> : <p className="mt-10 text-center text-xs text-[var(--text-5)]">Nobody has been followed up yet.</p>)}
 
       <div className="mt-6 space-y-3">
         <AnimatePresence mode="popLayout">
-          {leads.map((lead) => (
+          {shown.map((lead) => (
             <motion.div
               key={lead.id}
               layout
@@ -215,6 +240,12 @@ export function FollowUpsClient({
                 <span>
                   {lead.contactCount} contact{lead.contactCount === 1 ? "" : "s"} so far
                 </span>
+                {tab === "done" && lead.lastFollowUpAt && (
+                  <span>
+                    Followed up {lead.followUpsSent}× · last {new Date(lead.lastFollowUpAt).toLocaleDateString()}
+                  </span>
+                )}
+                {tab === "new" && lead.followUpInProgress && <span className="text-[var(--accent-from)]">Follow-up on its way</span>}
               </div>
               <button
                 onClick={() => excludeLead(lead)}

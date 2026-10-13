@@ -11,7 +11,8 @@ export default async function OutreachFollowUpsPage() {
     getFollowUpGuidanceAction(),
   ]);
   const leads = result.ok ? result.leads : [];
+  const followedUp = result.ok ? result.followedUp : [];
   const initialGuidance = guidanceResult.ok ? guidanceResult.guidance : "";
 
-  return <FollowUpsClient tenantId={tenantId} initialLeads={leads} initialGuidance={initialGuidance} />;
+  return <FollowUpsClient tenantId={tenantId} initialLeads={leads} initialFollowedUp={followedUp} initialGuidance={initialGuidance} />;
 }

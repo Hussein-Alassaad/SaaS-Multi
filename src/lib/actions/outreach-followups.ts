@@ -39,6 +39,11 @@ export interface FollowUpLead {
   firstContactedAt: string | null;
   score: number | null;
   temperature: string | null;
+  /** How many follow-up messages have actually been SENT to this lead. 0 = never followed up. */
+  followUpsSent: number;
+  lastFollowUpAt: string | null;
+  /** A follow-up is scheduled, or written and waiting for approval/sending -- not sent yet. */
+  followUpInProgress: boolean;
 }
 
 export async function getNotRepliedLeadsAction() {
@@ -53,6 +58,8 @@ export async function getNotRepliedLeadsAction() {
         tenantId: session.tenantId!,
         status: "contacted",
         doNotContact: false,
+        // Instagram is the only live outreach channel (LinkedIn and email are switched off), so only Instagram leads can be followed up.
+        platform: "instagram",
       },
       select: {
         id: true,
@@ -62,22 +69,40 @@ export async function getNotRepliedLeadsAction() {
         firstContactedAt: true,
         score: true,
         temperature: true,
+        messages: {
+          where: { isFollowup: true, isReply: false },
+          select: { sendStatus: true, sentAt: true, approvalStatus: true },
+        },
+        followUps: { where: { status: "scheduled" }, select: { id: true } },
       },
       orderBy: { firstContactedAt: "asc" },
     })
   );
 
-  const serialized: FollowUpLead[] = leads.map((l) => ({
-    id: l.id,
-    businessName: l.businessName,
-    platform: l.platform,
-    contactCount: l.contactCount,
-    firstContactedAt: l.firstContactedAt?.toISOString() ?? null,
-    score: l.score,
-    temperature: l.temperature,
-  }));
+  const all: FollowUpLead[] = leads.map((l) => {
+    const sent = l.messages.filter((m) => m.sendStatus === "sent");
+    const lastSent = sent.map((m) => m.sentAt).filter((d): d is Date => !!d).sort((a, b) => b.getTime() - a.getTime())[0];
+    const waiting = l.messages.some((m) => !["sent", "failed"].includes(m.sendStatus) && m.approvalStatus !== "rejected");
+    return {
+      id: l.id,
+      businessName: l.businessName,
+      platform: l.platform,
+      contactCount: l.contactCount,
+      firstContactedAt: l.firstContactedAt?.toISOString() ?? null,
+      score: l.score,
+      temperature: l.temperature,
+      followUpsSent: sent.length,
+      lastFollowUpAt: lastSent?.toISOString() ?? null,
+      followUpInProgress: waiting || l.followUps.length > 0,
+    };
+  });
 
-  return { ok: true as const, leads: serialized };
+  // The Follow Up page shows leads we have never followed up; the ones already followed up once live in their own tab.
+  return {
+    ok: true as const,
+    leads: all.filter((l) => l.followUpsSent === 0),
+    followedUp: all.filter((l) => l.followUpsSent > 0).sort((a, b) => (b.lastFollowUpAt ?? "").localeCompare(a.lastFollowUpAt ?? "")),
+  };
 }
 
 /**
@@ -146,6 +171,8 @@ export async function followUpAllAction() {
         // row per lead per press, i.e. two follow-up messages per lead.
         platform: "instagram",
         followUps: { none: { status: "scheduled" } },
+        // Only leads we have never followed up: one already followed up once is not pushed again by this button.
+        messages: { none: { isFollowup: true, isReply: false, sendStatus: "sent" } },
       },
       select: { id: true },
     });
