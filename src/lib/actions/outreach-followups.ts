@@ -31,8 +31,8 @@ import { revalidatePath } from "next/cache";
  * the Python agent still enforces it as before).
  */
 
-/** A lead becomes due for a follow-up once this long has passed since we first messaged it -- not straight after sending. */
-export const FOLLOW_UP_AFTER_MS = 24 * 60 * 60 * 1000;
+/** A lead becomes due for a follow-up once this long has passed since we first messaged it -- not straight after sending. (Not exported: a "use server" file may only export async functions.) */
+const FOLLOW_UP_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export interface FollowUpLead {
   id: string;
