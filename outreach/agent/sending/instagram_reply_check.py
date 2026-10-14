@@ -27,6 +27,7 @@ silently drift out of sync on how a thread is located.
 from __future__ import annotations
 
 import datetime as dt
+import difflib
 import re
 import time
 
@@ -214,7 +215,7 @@ def _read_thread_messages(page: Page) -> list[dict]:
             continue
         box = el.bounding_box()
         if box:
-            boxes.append({"left": box["x"], "text": text})
+            boxes.append({"left": box["x"], "right": box["x"] + box["width"], "text": text})
 
     return boxes
 
@@ -369,6 +370,26 @@ def check_instagram_replies(deadline_ts: float | None = None) -> list[dict]:
     return results
 
 
+# ADDED 2026-10-14, REAL BUG (Bashir Choucair, shown in Reply Here as a "reply" that was our own first message). Direction of
+# a bubble we cannot match by content used to be guessed from its LEFT edge against the average left edge of our known
+# bubbles. Our bubbles are RIGHT-aligned, so a wide bubble (our long pitch) has a much smaller left edge than a short one
+# (our "Just following up..." line) and looked like it came from the lead. The right edge is the stable signal: every bubble
+# we sent ends at the same right edge whatever its width, while the lead's bubbles are left-aligned and end well short of it.
+_RIGHT_EDGE_TOLERANCE_PX = 14
+# A bubble whose text is nearly identical to a message we sent is ours even if a character or a dash differs (the live bubble
+# of an older template can differ slightly from the body stored for it).
+_SAME_MESSAGE_SIMILARITY = 0.85
+
+
+def _looks_like_known_message(normalized: str, known: set[str]) -> bool:
+    if len(normalized) < 40:
+        return False
+    for k in known:
+        if len(k) >= 40 and difflib.SequenceMatcher(None, normalized, k, autojunk=False).ratio() >= _SAME_MESSAGE_SIMILARITY:
+            return True
+    return False
+
+
 def _sync_thread_messages(lead: dict, account: dict, live_messages: list[dict]) -> tuple[int, int]:
     """
     Real gap fixed 2026-09-07: Reply Here only ever displayed
@@ -493,16 +514,24 @@ def _sync_thread_messages(lead: dict, account: dict, live_messages: list[dict]) 
         b["left"] for b in live_messages if _normalized(b["text"]) in known_outgoing and "left" in b
     ]
 
+    confirmed_us_rights = sorted(
+        b["right"] for b in live_messages if _normalized(b["text"]) in known_outgoing and b.get("right") is not None
+    )
+
     new_replies = 0
     new_outgoing = 0
     for msg in live_messages:
         text = msg["text"]
         normalized = _normalized(text)
 
-        if normalized in known_outgoing:
+        if normalized in known_outgoing or _looks_like_known_message(normalized, known_outgoing):
             direction = "us"
+            known_outgoing.add(normalized)  # same message, slightly different rendering: already on file, never backfilled
         elif normalized in known_incoming:
             direction = "lead"
+        elif confirmed_us_rights and msg.get("right") is not None:
+            us_right = confirmed_us_rights[len(confirmed_us_rights) // 2]
+            direction = "us" if abs(msg["right"] - us_right) <= _RIGHT_EDGE_TOLERANCE_PX else "lead"
         elif confirmed_us_lefts and "left" in msg:
             avg_us_left = sum(confirmed_us_lefts) / len(confirmed_us_lefts)
             direction = "lead" if msg["left"] < avg_us_left else "us"

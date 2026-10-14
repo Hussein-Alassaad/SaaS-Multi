@@ -1799,6 +1799,52 @@ check("the scroll search is bounded even if the list never ends",
 check("Reply Here's send path finds older chats with the same scrolling click (it had the same recycled-row bug)",
       "click_conversation(page, match_text)" in _inspect.getsource(instagram_send.send_reply))
 
+# 2026-10-14 (Bashir Choucair): our own first message, rendered as a WIDE right-aligned bubble that differs slightly from the
+# stored body, was classified as a lead's reply because its LEFT edge was smaller than our short follow-up bubble's. Direction
+# now uses the RIGHT edge (all our bubbles end at the same x), and a near-identical bubble is treated as our known message.
+_ig_repo_before_b = instagram_reply_check.repo
+_ig_handle_before_b = instagram_reply_check.handle_reply_detected
+_fabricated_b = []
+try:
+    instagram_reply_check.handle_reply_detected = lambda *a, **k: _fabricated_b.append(k.get("body") or (a[2] if len(a) > 2 else None))
+    _old_text = "Hi Bashir
+
+Here's something worth knowing: your CCTV system isn't just cameras watching your building — it holds real data. Footage, access logs, sometimes client information too. We're Zimmar Tech and we have done this for 100+ companies so far."
+    _stored = "Hi Bashir
+
+Here is something worth knowing. Your CCTV system holds real data, not just footage of your building. Footage, access logs, sometimes client info too. We are Zimmar Tech and we have done this for over 100 companies so far."
+    _fake_bashir = _FakeReplyRepo(existing_replies=[], existing_messages=[
+        {"channel": "instagram", "body": _stored},
+        {"channel": "instagram", "body": "Hi Bashir,
+
+Just following up on my last message. Are you interested or not?"},
+    ])
+    instagram_reply_check.repo = _fake_bashir
+    _live_b = [
+        {"text": _old_text, "left": 150.0, "right": 1080.0},   # our long pitch: wide, right-aligned
+        {"text": "Hi Bashir,Just following up on my last message. Are you interested or not?", "left": 420.0, "right": 1080.0},  # our short follow-up
+    ]
+    _nr, _no = instagram_reply_check._sync_thread_messages({"id": "lead-bashir"}, {"id": "acc1"}, _live_b)
+    check("our own wide first message (slightly different from the stored body) is NOT recorded as a lead reply",
+          _nr == 0 and not _fabricated_b)
+
+    _fake_pos = _FakeReplyRepo(existing_replies=[], existing_messages=[
+        {"channel": "instagram", "body": "Hi Rami, short opener"},
+        {"channel": "instagram", "body": "Hi Rami, Just following up. Are you interested or not?"},
+    ])
+    instagram_reply_check.repo = _fake_pos
+    _live_p = [
+        {"text": "Hi Rami, short opener", "left": 700.0, "right": 1080.0},
+        {"text": "Hi Rami, Just following up. Are you interested or not?", "left": 450.0, "right": 1080.0},
+        {"text": "An unrelated brand new wide message from someone typed at length about many different topics here", "left": 120.0, "right": 900.0},  # left-aligned: the lead
+    ]
+    _nr2, _no2 = instagram_reply_check._sync_thread_messages({"id": "lead-pos"}, {"id": "acc1"}, _live_p)
+    check("a genuinely new left-aligned bubble is still detected as the lead's reply (right-edge rule does not hide real replies)",
+          _nr2 == 1 and len(_fabricated_b) == 1)
+finally:
+    instagram_reply_check.repo = _ig_repo_before_b
+    instagram_reply_check.handle_reply_detected = _ig_handle_before_b
+
 print()
 if failures:
     print("VERIFICATION FAILED (%d): %s" % (len(failures), failures))
