@@ -1807,17 +1807,11 @@ _ig_handle_before_b = instagram_reply_check.handle_reply_detected
 _fabricated_b = []
 try:
     instagram_reply_check.handle_reply_detected = lambda *a, **k: _fabricated_b.append(k.get("body") or (a[2] if len(a) > 2 else None))
-    _old_text = "Hi Bashir
-
-Here's something worth knowing: your CCTV system isn't just cameras watching your building — it holds real data. Footage, access logs, sometimes client information too. We're Zimmar Tech and we have done this for 100+ companies so far."
-    _stored = "Hi Bashir
-
-Here is something worth knowing. Your CCTV system holds real data, not just footage of your building. Footage, access logs, sometimes client info too. We are Zimmar Tech and we have done this for over 100 companies so far."
+    _old_text = "Hi Bashir\n\nHere's something worth knowing: your CCTV system isn't just cameras watching your building — it holds real data. Footage, access logs, sometimes client information too. We're Zimmar Tech and we have done this for 100+ companies so far."
+    _stored = "Hi Bashir\n\nHere is something worth knowing. Your CCTV system holds real data, not just footage of your building. Footage, access logs, sometimes client info too. We are Zimmar Tech and we have done this for over 100 companies so far."
     _fake_bashir = _FakeReplyRepo(existing_replies=[], existing_messages=[
         {"channel": "instagram", "body": _stored},
-        {"channel": "instagram", "body": "Hi Bashir,
-
-Just following up on my last message. Are you interested or not?"},
+        {"channel": "instagram", "body": "Hi Bashir,\n\nJust following up on my last message. Are you interested or not?"},
     ])
     instagram_reply_check.repo = _fake_bashir
     _live_b = [
