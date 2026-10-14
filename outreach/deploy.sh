@@ -1744,6 +1744,58 @@ check("a real Instagram BUSINESS account is still not flagged as personal (regre
            "has_website": True, "post_count": 40, "recent_activity": True,
            "follower_or_headcount": 3000}, "")[0])
 
+# 2026-10-14: Instagram's inbox list is virtualized (only ~10 rows exist in the page at once; older chats appear and are
+# recycled again as you scroll). The reply check used to wait for a row and click it a moment later, by which time it had
+# been recycled -- "Locator.click: Timeout 10000ms exceeded" on the same older leads every poll. _click_conversation()
+# scrolls the list and clicks the instant the row is on screen. Simulated page: the row is on screen only during some scroll positions.
+class _FakeIgLocator:
+    def __init__(self, page): self.page = page
+    @property
+    def first(self): return self
+    def is_visible(self): return self.page.row_on_screen()
+    def scroll_into_view_if_needed(self, timeout=None): pass
+    def click(self, timeout=None):
+        if self.page.click_failures > 0:
+            self.page.click_failures -= 1
+            raise RuntimeError("Locator.click: Timeout exceeded (row recycled)")
+        self.page.clicked += 1
+
+class _FakeIgMouse:
+    def __init__(self, page): self.page = page
+    def move(self, x, y): pass
+    def wheel(self, dx, dy): self.page.scrolls += 1
+
+class _FakeIgPage:
+    def __init__(self, visible_scrolls, click_failures=0, list_length=None):
+        self.visible_scrolls, self.click_failures, self.list_length = set(visible_scrolls), click_failures, list_length
+        self.scrolls = 0
+        self.clicked = 0
+        self.mouse = _FakeIgMouse(self)
+    def row_on_screen(self): return self.scrolls in self.visible_scrolls
+    def locator(self, selector, has_text=None): return _FakeIgLocator(self)
+    def wait_for_selector(self, *a, **k): pass
+    def wait_for_timeout(self, ms): pass
+    def evaluate(self, js):
+        # the visible rows change with every scroll until the end of the list, then stay the same
+        pos = self.scrolls if self.list_length is None else min(self.scrolls, self.list_length)
+        return "rows-at-%d" % pos
+
+_igp = _FakeIgPage(visible_scrolls={4})
+check("reply check scrolls the virtualized inbox until the older chat is on screen, then clicks it once",
+      instagram_reply_check._click_conversation(_igp, "MOPIVU") is True and _igp.clicked == 1 and _igp.scrolls == 4)
+_igp = _FakeIgPage(visible_scrolls={0})
+check("a chat already at the top is clicked without scrolling",
+      instagram_reply_check._click_conversation(_igp, "Angy") is True and _igp.scrolls == 0)
+_igp = _FakeIgPage(visible_scrolls={2, 3}, click_failures=1)
+check("a row recycled between the visibility check and the click is not an error: it keeps scrolling and clicks it next time it shows",
+      instagram_reply_check._click_conversation(_igp, "Voltmax") is True and _igp.clicked == 1)
+_igp = _FakeIgPage(visible_scrolls=set(), list_length=6)
+check("a chat that is not in the inbox returns False once the end of the list is reached (not an exception, not 45 scrolls)",
+      instagram_reply_check._click_conversation(_igp, "Nobody") is False and _igp.scrolls <= 6 + 4 and _igp.clicked == 0)
+_igp = _FakeIgPage(visible_scrolls=set())
+check("the scroll search is bounded even if the list never ends",
+      instagram_reply_check._click_conversation(_igp, "Nobody") is False and _igp.scrolls <= instagram_reply_check._MAX_LIST_SCROLL_STEPS)
+
 print()
 if failures:
     print("VERIFICATION FAILED (%d): %s" % (len(failures), failures))
