@@ -274,15 +274,21 @@ We are Zimmar Tech. We run full security checks for facilities and security comp
 
 Worth a quick look at your setup?"""
 
-_ZIMMAR_TEMPLATE_INSTAGRAM = """Hi {greeting_name} \U0001F44B
+# REPLACED 2026-10-14, owner's exact text (Instagram is the only live outreach channel, so only this template changed;
+# the LinkedIn and email ones above/below are untouched and unused). {greeting_name} is the business name, as before.
+_ZIMMAR_TEMPLATE_INSTAGRAM = """Hi {greeting_name}
 
-Here is something worth knowing. Your CCTV system holds real data, not just footage of your building. Access logs, sometimes client info too. Most of these still use the default login, on the same network as everything else.
+Quick question: do you know who can watch your cameras right now, from their phone, at home?
 
-That one weak point can cause real damage. Stolen or leaked footage, a way into your main systems, unexpected downtime, or legal trouble. There is also a quieter risk. Employees watching footage they should not, or deleting it when something goes wrong, with no one checking who has access. Most companies only find out after it already happened.
+Most businesses still run their CCTV on the default password. In practice, anyone who finds it can watch your staff and customers live, copy footage, or delete it, usually the day you need it most (a theft, a dispute, an insurance claim).
 
-We are Zimmar Tech. We run full security checks for facilities and security companies, cameras, network, access, backups, all of it. We have done this for over 100 companies so far.
+It’s also often on the same network as your cash register, computers, and other systems.
 
-Want us to take a quick look at {company_name}'s setup?"""
+We’re Zimmar Tech. We help businesses lock this down quickly, and we’ve reviewed 100+ setups so far.
+
+We can run a free 15-minute check on yours, and you’ll know exactly where you stand. If it’s fine, we’ll tell you.
+
+Want us to do it this week?"""
 
 # ADDED 2026-10-07, real bug found and fixed live: this channel never had
 # its own template. generate_message()'s email path (scheduler.py's
