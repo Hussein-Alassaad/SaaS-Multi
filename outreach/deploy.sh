@@ -1796,6 +1796,9 @@ _igp = _FakeIgPage(visible_scrolls=set())
 check("the scroll search is bounded even if the list never ends",
       instagram_reply_check._click_conversation(_igp, "Nobody") is False and _igp.scrolls <= instagram_reply_check._MAX_LIST_SCROLL_STEPS)
 
+check("Reply Here's send path finds older chats with the same scrolling click (it had the same recycled-row bug)",
+      "click_conversation(page, match_text)" in _inspect.getsource(instagram_send.send_reply))
+
 print()
 if failures:
     print("VERIFICATION FAILED (%d): %s" % (len(failures), failures))

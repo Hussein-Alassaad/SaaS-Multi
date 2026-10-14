@@ -37,6 +37,8 @@ from agent.core.session import ProxyIpMismatch, SessionManager
 from agent.crm.reply_detection import handle_reply_detected
 from agent.db import repositories as repo
 from agent.sending.instagram_send import (
+    _MAX_LIST_SCROLL_STEPS,
+    click_conversation as _click_conversation,
     INSTAGRAM_INBOX_URL,
     CONVERSATION_LIST_ITEM_SELECTOR,
     _raise_if_logged_out,
@@ -83,66 +85,6 @@ def _has_instagram_sent(lead_id: str) -> bool:
         m.get("channel") == "instagram" and m.get("send_status") == "sent"
         for m in repo.messages_for_lead(lead_id)
     )
-
-
-# ADDED 2026-10-14. ROOT CAUSE of the "Locator.click: Timeout 10000ms exceeded" errors on older chats (MOPIVU, La Vie
-# Restaurant & Venue, Voltmax, Franco Banetti, Engineering guru, Factories with Mahdi -- the same ones on every poll):
-# Instagram's inbox list is VIRTUALIZED. Only ~10 rows exist in the page at a time; older chats are not in the DOM at all
-# until you scroll to them, and scrolling recycles the rows again. Live-confirmed 2026-10-14: at the top of the inbox
-# "MOPIVU" matched 0 elements, after a few scroll steps it matched 1, and two steps later it was gone again. The old code
-# waited for the row, then clicked it a moment later -- by which time the row had been recycled, so the click timed out
-# (twice, on a fresh page load each time, which is why retrying never helped). Fix: scroll the list like a person would
-# and click the moment the row is on screen, in one step, so there is no gap for the row to disappear in.
-_LIST_SCROLL_X, _LIST_SCROLL_Y = 270, 600  # inside the conversation list column
-_LIST_SCROLL_STEP_PX = 600
-_MAX_LIST_SCROLL_STEPS = 45
-_LIST_SCROLL_WAIT_MS = 1_200
-
-
-def _visible_rows_signature(page: Page) -> str:
-    """The text of the rows currently on screen -- used to notice when scrolling stops changing anything (end of list)."""
-    try:
-        return str(page.evaluate(
-            """() => Array.from(document.querySelectorAll("div[role='button']"))
-                .filter(e => e.getBoundingClientRect().height > 50)
-                .map(e => (e.innerText || '').slice(0, 40)).join('|')"""
-        ))
-    except Exception:  # noqa: BLE001 -- a failed read just means "can't tell", scrolling carries on
-        return ""
-
-
-def _click_conversation(page: Page, business_name: str) -> bool:
-    """
-    Scrolls the inbox list until the lead's row is on screen and clicks it immediately. True if it was clicked, False if
-    the end of the list was reached without finding it (a real "no such chat", same meaning as before).
-    """
-    # The list needs a moment to render at all; wait for any row (this is what the old per-lead wait_for also did).
-    try:
-        page.wait_for_selector(CONVERSATION_LIST_ITEM_SELECTOR, state="visible", timeout=15_000)
-    except Exception:  # noqa: BLE001 -- an empty inbox / slow load: fall through, the loop below finds nothing and returns False
-        pass
-    unchanged = 0
-    previous = None
-    for step in range(_MAX_LIST_SCROLL_STEPS + 1):
-        item = page.locator(CONVERSATION_LIST_ITEM_SELECTOR, has_text=business_name).first
-        try:
-            if item.is_visible():
-                item.scroll_into_view_if_needed(timeout=3_000)
-                item.click(timeout=3_000)
-                return True
-        except Exception:  # noqa: BLE001 -- the row was recycled between the check and the click; keep scrolling
-            pass
-        if step == _MAX_LIST_SCROLL_STEPS:
-            break
-        signature = _visible_rows_signature(page)
-        unchanged = unchanged + 1 if signature == previous else 0
-        if unchanged >= 3:
-            break  # three scrolls in a row showed the same rows: that is the end of the list
-        previous = signature
-        page.mouse.move(_LIST_SCROLL_X, _LIST_SCROLL_Y)
-        page.mouse.wheel(0, _LIST_SCROLL_STEP_PX)
-        page.wait_for_timeout(_LIST_SCROLL_WAIT_MS)
-    return False
 
 
 def _open_thread_for_lead(page: Page, account: dict, business_name: str) -> bool:
