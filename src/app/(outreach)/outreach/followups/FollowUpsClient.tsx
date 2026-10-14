@@ -31,11 +31,13 @@ export function FollowUpsClient({
   tenantId,
   initialLeads,
   initialFollowedUp,
+  notDueYet,
   initialGuidance,
 }: {
   tenantId: string;
   initialLeads: FollowUpLead[];
   initialFollowedUp: FollowUpLead[];
+  notDueYet: number;
   initialGuidance: string;
 }) {
   const [leads, setLeads] = useState(initialLeads);
@@ -130,8 +132,8 @@ export function FollowUpsClient({
           Follow <span className="text-gradient">Up</span>
         </h1>
         <p className="mt-1 text-sm text-[var(--text-4)]">
-          Leads we messaged that haven't replied and that we have never followed up. Anyone already followed up
-          once moves to the second tab. Follow-up messages go through the normal Approval Queue before anything sends.
+          Leads we messaged more than a day ago that haven't replied and that we have never followed up, oldest first.
+          Anyone already followed up once moves to the second tab. Follow-up messages go through the normal Approval Queue before anything sends.
         </p>
       </motion.header>
 
@@ -183,6 +185,12 @@ export function FollowUpsClient({
           </button>
         ))}
       </div>
+
+      {tab === "new" && notDueYet > 0 && (
+        <p className="mt-2 text-[11px] text-[var(--text-5)]">
+          {notDueYet} more lead{notDueYet === 1 ? "" : "s"} messaged in the last 24 hours will appear here once a day has passed.
+        </p>
+      )}
 
       {tab === "new" && eligibleCount > 0 && (
         <motion.button

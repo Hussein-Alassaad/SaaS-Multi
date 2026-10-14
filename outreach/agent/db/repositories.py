@@ -1253,8 +1253,11 @@ def due_follow_ups(now_iso: str, tenant_id: str | None = None) -> list[Row]:
     with get_cursor(commit=False) as cur:
         cur.execute(
             """
-            SELECT * FROM outreach_follow_ups
-            WHERE tenant_id = %s AND enabled = true AND status = 'scheduled' AND scheduled_for <= %s
+            SELECT f.* FROM outreach_follow_ups f
+            LEFT JOIN outreach_leads l ON l.id = f.lead_id
+            WHERE f.tenant_id = %s AND f.enabled = true AND f.status = 'scheduled' AND f.scheduled_for <= %s
+            -- Oldest first: the lead we messaged longest ago is followed up (and so sent) first.
+            ORDER BY l.first_contacted_at ASC NULLS LAST, f.created_at ASC
             """,
             (tenant_id, now_iso),
         )

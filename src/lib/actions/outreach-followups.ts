@@ -31,6 +31,9 @@ import { revalidatePath } from "next/cache";
  * the Python agent still enforces it as before).
  */
 
+/** A lead becomes due for a follow-up once this long has passed since we first messaged it -- not straight after sending. */
+export const FOLLOW_UP_AFTER_MS = 24 * 60 * 60 * 1000;
+
 export interface FollowUpLead {
   id: string;
   businessName: string | null;
@@ -97,10 +100,15 @@ export async function getNotRepliedLeadsAction() {
     };
   });
 
-  // The Follow Up page shows leads we have never followed up; the ones already followed up once live in their own tab.
+  // The Follow Up page shows leads we have never followed up AND that were first messaged at least a day ago (oldest
+  // first, so the longest-waiting go first); the ones already followed up once live in their own tab.
+  const dueCutoff = Date.now() - FOLLOW_UP_AFTER_MS;
+  const neverFollowedUp = all.filter((l) => l.followUpsSent === 0);
+  const isDue = (l: FollowUpLead) => !!l.firstContactedAt && new Date(l.firstContactedAt).getTime() <= dueCutoff;
   return {
     ok: true as const,
-    leads: all.filter((l) => l.followUpsSent === 0),
+    leads: neverFollowedUp.filter(isDue),
+    notDueYet: neverFollowedUp.length - neverFollowedUp.filter(isDue).length,
     followedUp: all.filter((l) => l.followUpsSent > 0).sort((a, b) => (b.lastFollowUpAt ?? "").localeCompare(a.lastFollowUpAt ?? "")),
   };
 }
@@ -171,10 +179,13 @@ export async function followUpAllAction() {
         // row per lead per press, i.e. two follow-up messages per lead.
         platform: "instagram",
         followUps: { none: { status: "scheduled" } },
+        // Not straight after sending: only leads first messaged at least a day ago, oldest first.
+        firstContactedAt: { lte: new Date(Date.now() - FOLLOW_UP_AFTER_MS) },
         // Only leads we have never followed up: one already followed up once is not pushed again by this button.
         messages: { none: { isFollowup: true, isReply: false, sendStatus: "sent" } },
       },
       select: { id: true },
+      orderBy: { firstContactedAt: "asc" },
     });
     if (leads.length === 0) return { scheduled: 0 };
 
