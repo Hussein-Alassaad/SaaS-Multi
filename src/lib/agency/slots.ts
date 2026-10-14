@@ -11,7 +11,9 @@
 
 import type { Prisma } from "@prisma/client";
 
-export const DEFAULT_TIMEZONE = "UTC";
+// Used when a workspace has no (valid) timezone saved. Beirut, because that is where this platform's customers are; a workspace
+// elsewhere sets its own in Settings > Localization.
+export const DEFAULT_TIMEZONE = "Asia/Beirut";
 
 /** Falls back to UTC for a timezone name Intl does not know, so a typo in Settings cannot break replies. */
 export function safeTimezone(tz: string | null | undefined): string {

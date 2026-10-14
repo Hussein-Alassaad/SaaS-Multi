@@ -14,9 +14,10 @@ describe("timezone conversion", () => {
     expect(parseLocalInput("2026-10-14T15:00", "Asia/Beirut")?.toISOString()).toBe("2026-10-14T12:00:00.000Z");
     expect(parseLocalInput("garbage", "Asia/Beirut")).toBeNull();
   });
-  it("falls back to UTC for an unknown timezone instead of throwing", () => {
-    expect(safeTimezone("Not/AZone")).toBe("UTC");
-    expect(safeTimezone(null)).toBe("UTC");
+  it("falls back to Beirut for an unknown or missing timezone instead of throwing", () => {
+    expect(safeTimezone("Not/AZone")).toBe("Asia/Beirut");
+    expect(safeTimezone(null)).toBe("Asia/Beirut");
+    expect(safeTimezone("UTC")).toBe("UTC"); // an explicit choice is respected
   });
   it("finds the local calendar day, not the UTC one", () => {
     // 22:30 UTC on the 14th is already 01:30 on the 15th in Beirut

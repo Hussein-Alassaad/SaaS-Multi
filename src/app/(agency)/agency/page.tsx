@@ -8,6 +8,8 @@ import { getAgencyDashboardPageData } from "@/lib/agency/dashboard";
 import { getTenantSession } from "@/lib/auth";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import Link from "next/link";
+import { getSetupChecklist } from "@/lib/agency/setup";
+import { SetupChecklist } from "@/components/agency/SetupChecklist";
 
 export default async function AgencyDashboardPage() {
   const session = await getTenantSession();
@@ -17,6 +19,7 @@ export default async function AgencyDashboardPage() {
 
   // One withTenant() scope for both reads -- see getAgencyDashboardPageData.
   const { kpis, recentConversations } = await getAgencyDashboardPageData(tenantId, 6);
+  const setupItems = await getSetupChecklist(tenantId);
 
   return (
     <div className="space-y-6">
@@ -24,6 +27,8 @@ export default async function AgencyDashboardPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-[var(--text-1)]">{t.dashboard.title}</h1>
         <p className="text-sm text-[var(--text-4)] mt-1">{t.dashboard.subtitle}</p>
       </div>
+
+      <SetupChecklist items={setupItems} lang={lang} />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
         <KpiCard label={t.dashboard.kpiNewMessages} value={kpis.newMessagesToday.toString()} icon={<MessageSquare className="h-3.5 w-3.5" />} highlight />
