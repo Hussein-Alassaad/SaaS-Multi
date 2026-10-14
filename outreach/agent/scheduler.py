@@ -3440,11 +3440,8 @@ def run_reply_detection_poll(force: bool = False) -> dict:
     for tenant_id in repo.list_active_tenant_ids():
         with repo.tenant_scope(tenant_id):
             tenant_result: dict = {}
-            try:
-                tenant_result["whatsapp"] = whatsapp_reply_check.check_whatsapp_replies()
-            except Exception as exc:  # noqa: BLE001 -- e.g. WhatsAppNotConfigured; don't lose the other channels
-                tenant_result["whatsapp"] = {"ok": False, "error": str(exc)}
-                log_error("reply_check", exc, channel="whatsapp")
+            # WhatsApp reply check removed 2026-10-14 (owner request): outreach is Instagram-only, WhatsApp was never
+            # configured for it (no Twilio credentials), and every poll logged a "Missing Twilio credentials" error.
             try:
                 tenant_result["linkedin"] = linkedin_reply_check.check_linkedin_replies()
             except Exception as exc:  # noqa: BLE001 -- e.g. unverified selector mismatch; don't lose the other channels
