@@ -13,7 +13,8 @@ import { recordAiUsage } from "@/lib/ai/usage";
 
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
 
-export type ReplyLanguage = "AR" | "AR_MA" | "AR_LB" | "ARABIZI" | "EN";
+import type { ReplyLanguage } from "@/lib/agency/language";
+export type { ReplyLanguage };
 
 export interface ConversationTurn {
   sender: "CUSTOMER" | "AI" | "HUMAN";
@@ -45,7 +46,9 @@ interface ConversationContext {
 
 const LANGUAGE_NAME: Record<ReplyLanguage, string> = {
   AR: "Modern Standard Arabic (فصحى)",
-  AR_MA: "Moroccan Darija (الدارجة المغربية)",
+  AR_MA: "Moroccan Darija (الدارجة المغربية), written in Arabic script, mixing in French words where Moroccans naturally do",
+  ARABIZI_MA: "Moroccan Darija written in Latin letters with numbers (e.g. 'salam, bghit n3rf chhal'), mixing in French words the way Moroccans do, exactly the way the customer is writing it",
+  FR: "French (français), natural and polite, the way a Moroccan business writes to its customers",
   AR_LB: "Lebanese Arabic dialect (اللهجة اللبنانية), written in Arabic script",
   ARABIZI: "Lebanese Arabic written in Latin letters with numbers (Arabizi, e.g. 'kifak, shu bade'), exactly the way the customer is writing it",
   EN: "English",
@@ -110,8 +113,12 @@ export interface AiReplyResult {
 
 // Only money / commitment words force a human to approve a reply. "meeting" and "موعد" used to be here too, but offering a
 // meeting is now the agent's main job -- the team still approves every MeetingRequest before it is final.
-const SENSITIVE_KEYWORDS_AR = ["سعر", "تكلفة", "كلفة", "بكم", "دفع", "عقد", "خصم", "فاتورة"];
-const SENSITIVE_KEYWORDS_EN = ["price", "cost", "payment", "contract", "discount", "invoice", "se3er", "s3er", "quote"];
+const SENSITIVE_KEYWORDS_AR = ["سعر", "تكلفة", "كلفة", "بكم", "دفع", "عقد", "خصم", "فاتورة", "ثمن", "تمن", "بشحال", "شحال", "تخفيض"];
+// Latin script: English, Lebanese/Moroccan Arabizi and French money words ("chhal" = how much, "taman" = price in Darija).
+const SENSITIVE_KEYWORDS_EN = [
+  "price", "cost", "payment", "contract", "discount", "invoice", "se3er", "s3er", "quote",
+  "chhal", "ch7al", "shhal", "taman", "prix", "tarif", "devis", "combien", "facture", "paiement", "remise", "réduction", "reduction",
+];
 
 function buildExtractTool(availableSlots: AvailableMeetingSlot[]): Anthropic.Tool {
   return {
@@ -292,15 +299,26 @@ export async function generateAiReply(ctx: ConversationContext): Promise<AiReply
  */
 const DARIJA_MARKERS = [
   "بزاف", "واخا", "دابا", "غادي", "زوين", "شحال", "فين", "كيفاش", "ديال", "باش", "هاد",
+  "بغيت", "بغينا", "علاش", "مزيان", "لاباس", "عافاك", "عفاك", "كاين", "كاينة", "فاش", "دياله", "ديالي", "ديالك", "شنو", "مشكل", "نمرة", "خويا", "ماكاينش", "بشحال", "حيت",
 ];
 
+// Only words that are Lebanese-specific. Generic ones ("مرحبا", "ماشي", "وين", "اهلين") are used all over the Arab world, and the
+// first client is Moroccan, so they no longer decide the dialect on their own.
 const LEBANESE_MARKERS = [
-  "شو", "كتير", "بدي", "بدنا", "هلق", "هلأ", "ليش", "وين", "عم ", "منيح", "كيفك", "كيفكن", "هيك", "دغري", "بكرا", "تكرم", "مرحبا", "اهلين", "أهلين", "ماشي", "لسا", "شي ",
+  "شو", "كتير", "بدي", "بدنا", "هلق", "هلأ", "ليش", "منيح", "كيفك", "كيفكن", "هيك", "دغري", "بكرا", "لسا",
 ];
 
 // Arabic written in Latin letters: digits stand in for Arabic letters (3 = ع, 7 = ح, 2 = ء, 5 = خ, 9 = ص, 8 = غ) and some words are unmistakable.
-const ARABIZI_WORDS = /\b(kifak|kifik|kifkon|shu|chou|bade|badi|badde|mnih|mneh|ktir|kteer|aywa|ayw[ae]h?|habibi|habibti|yalla|marhaba|ahla|ahlan|ya3ni|lesh|leh|wen|w[ei]n|hallaq|halla2|bokra|shokran|tekram|tfaddal|inshallah|mish|msh)\b/i;
+const ARABIZI_WORDS = /\b(salam|slm|kifak|kifik|kifkon|shu|chou|bade|badi|badde|mnih|mneh|ktir|kteer|aywa|ayw[ae]h?|habibi|habibti|yalla|marhaba|ahla|ahlan|ya3ni|lesh|leh|wen|w[ei]n|hallaq|halla2|bokra|shokran|tekram|tfaddal|inshallah|mish|msh)\b/i;
 const ARABIZI_DIGIT_WORD = /[a-z]+[235789][a-z]*|[a-z]*[235789][a-z]+/i;
+
+// Moroccan Darija in Latin letters: words Lebanese Arabizi does not use.
+const DARIJA_LATIN_WORDS = /\b(salam|slm|bghit|bghina|bghiti|chhal|ch7al|shhal|bch7al|wakha|wach|mzyan|mezyan|labas|lbas|kifach|kifash|daba|3afak|afak|bzaf|bzzaf|khoya|hadchi|dyal|dyali|dyalk|ghadi|kayn|kayna|kaynin|mabghitch|fayn|sa7a|ana|nta|nti|taman|hna|hnaya|mrehba|merhba)\b/i;
+// Words that make a Latin-script message Darija rather than just "some Arabizi": ones Lebanese Arabizi would not use.
+const DARIJA_LATIN_STRONG = /\b(bghit|bghina|bghiti|chhal|ch7al|shhal|bch7al|wakha|wach|mzyan|mezyan|labas|lbas|kifach|kifash|daba|3afak|bzaf|bzzaf|khoya|hadchi|dyal|dyali|dyalk|ghadi|kayn|kayna|kaynin|mabghitch|fayn|taman)\b/i;
+
+// French is widely used for business in Morocco. Only words that are not also English.
+const FRENCH_WORDS = /\b(bonjour|bonsoir|salut|merci|svp|s'il vous pla[i\u00EE]t|s'il te pla[i\u00EE]t|je voudrais|je veux|je cherche|j'aimerais|combien|prix|tarifs?|devis|rendez-vous|disponible|horaires?|besoin|vous|votre|vos|avez|pouvez|pourriez|est-ce que|oui|aujourd'hui|demain|ce soir)\b/i;
 
 export function detectLanguage(text: string): ReplyLanguage {
   const arabicPattern = /[\u0600-\u06FF]/;
@@ -309,6 +327,10 @@ export function detectLanguage(text: string): ReplyLanguage {
     if (LEBANESE_MARKERS.some((marker) => text.includes(marker))) return "AR_LB";
     return "AR";
   }
+  // Latin script, most specific first: Moroccan Darija ("salam bghit rendez-vous" is Darija, even with a French word in it),
+  // then Lebanese-style Arabizi, then French, then English.
+  if (DARIJA_LATIN_STRONG.test(text) || (/\bsalam\b/i.test(text) && DARIJA_LATIN_WORDS.test(text.replace(/\bsalam\b/i, "")))) return "ARABIZI_MA";
   if (ARABIZI_WORDS.test(text) || (ARABIZI_DIGIT_WORD.test(text) && /\b(el|ya|ma|fi|3a|bi|la)\b/i.test(text))) return "ARABIZI";
+  if (FRENCH_WORDS.test(text) || (/[\u00E9\u00E8\u00EA\u00E0\u00E7\u00F9\u00E2\u00EE\u00F4\u00FB]/i.test(text) && /\b(je|le|la|les|un|une|pour|est|et|de|des|du)\b/i.test(text))) return "FR";
   return "EN";
 }

@@ -14,6 +14,7 @@ import {
 import { approveMeetingRequestAction, rejectMeetingRequestAction } from "@/lib/actions/agency-meetings";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { Check, X, Pencil, CalendarClock, MessageSquare, CheckCircle2 } from "lucide-react";
+import { isArabicScript } from "@/lib/agency/language";
 
 interface PendingMessage {
   id: string;
@@ -111,7 +112,7 @@ function MessageApprovalCard({ message, lang }: { message: PendingMessage; lang:
         <Badge variant="warm">{t.approvals.needsApproval}</Badge>
       </div>
 
-      <div className="mt-3 rounded-lg bg-[var(--surface-2)] p-3" dir={message.language.startsWith("AR") ? "rtl" : "ltr"}>
+      <div className="mt-3 rounded-lg bg-[var(--surface-2)] p-3" dir={isArabicScript(message.language) ? "rtl" : "ltr"}>
         {editing ? (
           <textarea
             value={editedBody}

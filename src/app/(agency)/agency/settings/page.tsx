@@ -28,6 +28,7 @@ export default async function SettingsPage() {
         qualificationRules: aiSettings.qualificationRules,
         approvalRequired: aiSettings.approvalRequired,
         model: aiSettings.model,
+        dialect: aiSettings.dialect,
       }}
       companySettings={
         companyResult.ok

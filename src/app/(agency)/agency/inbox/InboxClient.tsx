@@ -14,6 +14,7 @@ import { simulateInboundMessageAction, sendHumanReplyAction, setConversationAiPa
 import { getConversationThreadAction, loadMoreConversationsAction } from "@/lib/actions/agency-conversations";
 import { getDictionary, type UiLanguage } from "@/lib/i18n";
 import { Plus, MessageCircle } from "lucide-react";
+import { isArabicScript } from "@/lib/agency/language";
 
 interface ConversationRow {
   id: string;
@@ -202,7 +203,7 @@ export function InboxClient({
                   <div
                     key={m.id}
                     className={cn("flex flex-col gap-1", m.sender === "CUSTOMER" ? "items-start" : "items-end")}
-                    dir={m.language.startsWith("AR") ? "rtl" : "ltr"}
+                    dir={isArabicScript(m.language) ? "rtl" : "ltr"}
                   >
                     <div
                       className={cn(

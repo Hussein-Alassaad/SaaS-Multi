@@ -18,7 +18,7 @@ export interface LocalizationSettingsForm {
 
 const DEFAULT: LocalizationSettingsForm = {
   defaultLanguage: "en",
-  timezone: "UTC",
+  timezone: "Africa/Casablanca",
   dateFormat: "MM/DD/YYYY",
   numberFormat: "en-US",
 };
@@ -76,7 +76,7 @@ export function LocalizationTab({ settings }: { settings: LocalizationSettingsFo
           <div>
             <label className="mb-1.5 block text-xs font-medium text-[var(--text-3)]">Timezone (IANA)</label>
             <Input
-              placeholder="Asia/Beirut"
+              placeholder="Africa/Casablanca"
               value={form.timezone}
               onChange={(e) => setForm((f) => ({ ...f, timezone: e.target.value }))}
             />

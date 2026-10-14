@@ -14,6 +14,7 @@ interface AiSettingsForm {
   qualificationRules: string;
   approvalRequired: boolean;
   model: string;
+  dialect: string;
 }
 
 export function SettingsTabs({

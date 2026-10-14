@@ -6,16 +6,11 @@ import { agencyGuardResult } from "@/lib/agency-permissions";
 import { revalidatePath } from "next/cache";
 import { deliverMessage } from "@/lib/channels/dispatch";
 import { formatSlotLabel, parseLocalInput, safeTimezone, type SlotLabelLanguage } from "@/lib/agency/slots";
+import { confirmationText } from "@/lib/agency/language";
 
 async function getTenantTimezone(tenantId: string) {
   const row = await withTenant(tenantId, (tx) => tx.localizationSettings.findUnique({ where: { tenantId }, select: { timezone: true } }));
   return safeTimezone(row?.timezone);
-}
-
-function confirmationText(language: string, label: string): string {
-  if (language.startsWith("AR")) return `تم تأكيد موعد المكالمة يوم ${label}. رح يتصل فيك فريقنا على هالرقم.`;
-  if (language === "ARABIZI") return `Mawed el mkelme mta2akkad: ${label}. Ra7 yettasel fik fari2na 3a hal ra2em.`;
-  return `Your call is confirmed for ${label}. Our team will phone you on this number.`;
 }
 
 export async function createMeetingSlotAction(startsAt: string, durationMin: number) {

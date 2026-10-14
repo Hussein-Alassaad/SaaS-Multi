@@ -11,9 +11,9 @@
 
 import type { Prisma } from "@prisma/client";
 
-// Used when a workspace has no (valid) timezone saved. Beirut, because that is where this platform's customers are; a workspace
-// elsewhere sets its own in Settings > Localization.
-export const DEFAULT_TIMEZONE = "Asia/Beirut";
+// Used when a workspace has no (valid) timezone saved. Morocco, where the first client is; a workspace elsewhere sets its own in
+// Settings > Localization. (Intl knows Morocco's Ramadan clock change, so nothing special is needed.)
+export const DEFAULT_TIMEZONE = "Africa/Casablanca";
 
 /** Falls back to UTC for a timezone name Intl does not know, so a typo in Settings cannot break replies. */
 export function safeTimezone(tz: string | null | undefined): string {
@@ -67,7 +67,7 @@ export function localDateOf(instant: Date, tz: string): Date {
   return new Date(Date.UTC(get("year"), get("month") - 1, get("day")));
 }
 
-export type SlotLabelLanguage = "AR" | "AR_MA" | "AR_LB" | "ARABIZI" | "EN";
+export type SlotLabelLanguage = import("@/lib/agency/language").ReplyLanguage;
 
 /**
  * How a time is written to the customer: "Tuesday 14 October, 3:00 PM" in
@@ -76,14 +76,15 @@ export type SlotLabelLanguage = "AR" | "AR_MA" | "AR_LB" | "ARABIZI" | "EN";
  */
 export function formatSlotLabel(startsAt: Date, tz: string, language: SlotLabelLanguage): string {
   const arabic = language === "AR" || language === "AR_MA" || language === "AR_LB";
-  return new Intl.DateTimeFormat(arabic ? "ar-u-nu-latn" : "en-GB", {
+  const locale = arabic ? "ar-u-nu-latn" : language === "FR" || language === "ARABIZI_MA" ? "fr-FR" : "en-GB";
+  return new Intl.DateTimeFormat(locale, {
     timeZone: safeTimezone(tz),
     weekday: "long",
     day: "numeric",
     month: "long",
     hour: "numeric",
     minute: "2-digit",
-    hour12: true,
+    hour12: locale !== "fr-FR", // French writes 15:00, not 3:00 PM
   }).format(startsAt);
 }
 

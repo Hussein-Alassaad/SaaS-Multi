@@ -16,6 +16,7 @@ import { checkAiBudget } from "@/lib/ai/usage";
 import { logError } from "@/lib/error-log";
 import { createAlertIn } from "@/lib/agency/alerts";
 import { deliverMessage } from "@/lib/channels/dispatch";
+import { applyDialect } from "@/lib/agency/language";
 import { ensureMeetingSlots, formatSlotLabel, safeTimezone, spreadAcrossDays } from "@/lib/agency/slots";
 
 export interface InboundInput {
@@ -190,7 +191,8 @@ export async function processInboundMessage(input: InboundInput): Promise<Inboun
     return { ok: true, conversationId: conversation.id, aiReplied: false };
   }
 
-  const replyLanguage = settings.allowEnglish ? language : "AR";
+  // English can be switched off; the workspace dialect (e.g. Moroccan) settles ambiguous Arabic. A French or Arabizi customer is answered in kind.
+  const replyLanguage = applyDialect(language === "EN" && !settings.allowEnglish ? "AR" : language, settings.dialect);
   const slotLabels = new Map(openSlots.map((s) => [s.id, formatSlotLabel(s.startsAt, timezone, replyLanguage)]));
   const aiReply = await generateAiReply({
     history: history.map((m) => ({ sender: m.sender as "CUSTOMER" | "AI" | "HUMAN", body: m.body })),

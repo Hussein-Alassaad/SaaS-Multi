@@ -16,6 +16,7 @@ interface AiSettingsForm {
   qualificationRules: string;
   approvalRequired: boolean;
   model: string;
+  dialect: string;
 }
 
 const MODEL_OPTIONS = [{ value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" }];
@@ -72,6 +73,25 @@ export function SettingsClient({ settings, lang }: { settings: AiSettingsForm; l
               onValueChange={(v) => setForm((f) => ({ ...f, primaryLanguage: v }))}
               options={LANGUAGE_OPTIONS}
             />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--text-3)]">
+              {lang === "AR" ? "اللهجة العربية" : "Arabic dialect"}
+            </label>
+            <Select
+              value={form.dialect}
+              onValueChange={(v) => setForm((f) => ({ ...f, dialect: v }))}
+              options={[
+                { value: "AUTO", label: lang === "AR" ? "تلقائي (حسب كلام الزبون)" : "Automatic (follow the customer)" },
+                { value: "MOROCCAN", label: lang === "AR" ? "الدارجة المغربية" : "Moroccan Darija" },
+                { value: "LEBANESE", label: lang === "AR" ? "اللبنانية" : "Lebanese" },
+              ]}
+            />
+            <p className="mt-1 text-[11px] text-[var(--text-5)]">
+              {lang === "AR"
+                ? "تُستعمل عندما لا يتضح من كلام الزبون. الفرنسية والإنجليزية يُجاب عنهما بنفس اللغة."
+                : "Used when the customer's wording does not make it obvious. French and English are answered in kind."}
+            </p>
           </div>
           <Toggle
             checked={form.allowEnglish}

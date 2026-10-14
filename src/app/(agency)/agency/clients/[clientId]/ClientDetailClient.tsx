@@ -12,6 +12,7 @@ import { updateClientTagAction, updateClientNotesAction } from "@/lib/actions/ag
 import { loadMoreClientHistoryAction } from "@/lib/actions/agency-clients";
 import { getDictionary, isRtl, type UiLanguage } from "@/lib/i18n";
 import { ArrowLeft, ArrowRight, MessageSquare, CalendarClock } from "lucide-react";
+import { isArabicScript } from "@/lib/agency/language";
 
 interface ClientMessage {
   id: string;
@@ -181,7 +182,7 @@ export function ClientDetailClient({ client, lang }: { client: ClientDetail; lan
                   <div
                     key={m.id}
                     className={cn("flex flex-col gap-0.5", m.sender === "CUSTOMER" ? "items-start" : "items-end")}
-                    dir={m.language.startsWith("AR") ? "rtl" : "ltr"}
+                    dir={isArabicScript(m.language) ? "rtl" : "ltr"}
                   >
                     <div
                       className={cn(

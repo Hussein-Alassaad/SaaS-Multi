@@ -18,17 +18,12 @@ import { createAlertIn } from "@/lib/agency/alerts";
 import { deliverMessage } from "@/lib/channels/dispatch";
 import { isWithinCustomerServiceWindow } from "@/lib/channels/whatsapp";
 import { formatSlotLabel, safeTimezone, type SlotLabelLanguage } from "@/lib/agency/slots";
+import { reminderText } from "@/lib/agency/language";
 
 const REMINDER_LEAD_MS = 65 * 60 * 1000; // sent when the call is within ~an hour; a minute-level clock keeps it near 60
 export const UNANSWERED_AFTER_MS = 10 * 60 * 1000;
 const UNANSWERED_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 export const UNANSWERED_TITLE = "A customer is waiting for an answer";
-
-function reminderText(language: string, label: string): string {
-  if (language.startsWith("AR")) return `تذكير: رح يتصل فيك فريقنا خلال حوالي ساعة، ${label}.`;
-  if (language === "ARABIZI") return `Tazkir: ra7 yettasel fik fari2na kharej nahw sa3a, ${label}.`;
-  return `Reminder: our team will phone you in about an hour, ${label}.`;
-}
 
 export async function sendMeetingReminders(now = new Date()): Promise<{ sent: number; skipped: number }> {
   const due = await withPlatformAccess((tx) =>

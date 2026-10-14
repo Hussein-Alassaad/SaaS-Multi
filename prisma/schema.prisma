@@ -903,6 +903,10 @@ model AiSettings {
   meetingHorizonDays  Int       @default(7)
   meetingSlotsThrough DateTime? // last local calendar day (as UTC midnight) already generated
 
+  // Which Arabic the AI answers in when the customer's own wording does not make it obvious (added 2026-10-14, the first
+  // client is Moroccan). AUTO = guess from the words used; MOROCCAN = Darija; LEBANESE = Lebanese.
+  dialect String @default("AUTO") // AUTO | MOROCCAN | LEBANESE
+
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@map("ai_settings")

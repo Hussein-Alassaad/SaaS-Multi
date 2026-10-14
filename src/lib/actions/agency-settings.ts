@@ -12,11 +12,16 @@ export async function updateAiSettingsAction(input: {
   qualificationRules: string;
   approvalRequired: boolean;
   model: string;
+  dialect?: string;
 }) {
   const session = await getTenantSession();
   if (!session) return { ok: false as const, error: "Not authenticated." };
   const permCheck = agencyGuardResult(session.role?.name ?? "", "settings", "edit");
   if (!permCheck.ok) return permCheck;
+
+  if (input.dialect !== undefined && !["AUTO", "MOROCCAN", "LEBANESE"].includes(input.dialect)) {
+    return { ok: false as const, error: "Unknown dialect." };
+  }
 
   await withTenant(session.tenantId!, (tx) =>
     tx.aiSettings.upsert({
