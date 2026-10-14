@@ -881,6 +881,12 @@ def cold_sends_today_for_account(account_id: str, day_start_iso: str, tenant_id:
             SELECT COUNT(*) AS n FROM outreach_messages
             WHERE tenant_id = %s AND sent_via_account_id = %s AND send_status = 'sent'
               AND is_reply = false AND sent_at >= %s
+              -- A message to a lead that had ALREADY replied is a conversation, not a cold send: it must not use up one of
+              -- the day's 25 first-contact slots (a hand-typed 04:40 message did, so the agent stopped at 24 on 2026-10-13/14).
+              AND NOT EXISTS (
+                  SELECT 1 FROM outreach_replies r
+                  WHERE r.lead_id = outreach_messages.lead_id AND r.replied_at <= outreach_messages.sent_at
+              )
             """,
             (tenant_id, account_id, day_start_iso),
         )
@@ -907,6 +913,12 @@ def cold_sends_today_for_account_by_followup(
             SELECT COUNT(*) AS n FROM outreach_messages
             WHERE tenant_id = %s AND sent_via_account_id = %s AND send_status = 'sent'
               AND is_reply = false AND is_followup = %s AND sent_at >= %s
+              -- A message to a lead that had ALREADY replied is a conversation, not a cold send: it must not use up one of
+              -- the day's 25 first-contact slots (a hand-typed 04:40 message did, so the agent stopped at 24 on 2026-10-13/14).
+              AND NOT EXISTS (
+                  SELECT 1 FROM outreach_replies r
+                  WHERE r.lead_id = outreach_messages.lead_id AND r.replied_at <= outreach_messages.sent_at
+              )
             """,
             (tenant_id, account_id, is_followup, day_start_iso),
         )
