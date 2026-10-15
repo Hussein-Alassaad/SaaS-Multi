@@ -34,9 +34,14 @@ Manual test trigger (what "Hussein can trigger a run" means in Phase 2):
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
+import os
 import random
 import re
+import signal
+import subprocess
+import sys
 import time
 
 from zoneinfo import ZoneInfo
@@ -3412,6 +3417,43 @@ def _followup_dispatch_in_window(now: dt.datetime) -> bool:
     return _FOLLOWUP_WINDOW_MINUTES[0] <= minute_of_day < _FOLLOWUP_WINDOW_MINUTES[1]
 
 
+# ADDED 2026-10-15, real incident: one reply poll hung inside a browser call at 12:55 and held the single browser slot for 11+
+# hours (the 18:00 discovery, the last follow-up and every health check all failed to get it). See
+# agent/sending/instagram_reply_runner.py. The Instagram reply check now runs in its own process with a hard time limit; if it
+# overruns, the whole process group is killed, which closes its browser and releases the slot (an OS file lock) at once.
+_REPLY_CHECK_GRACE_SECONDS = 180
+
+
+def _run_isolated(cmd: list[str], timeout_seconds: float) -> tuple[int, str]:
+    """Runs cmd in its own process group; returns (exit code, stdout). Kills the whole group and raises TimeoutError on overrun."""
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True,
+    )
+    try:
+        out, _ = proc.communicate(timeout=max(1.0, timeout_seconds))
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        raise TimeoutError(f"killed after {int(timeout_seconds)}s")
+    return proc.returncode, out or ""
+
+
+def _run_instagram_reply_check_isolated(tenant_id: str, deadline_ts: float) -> object:
+    from agent.sending.instagram_reply_runner import RESULT_MARKER
+
+    budget = max(60.0, deadline_ts - time.time()) + _REPLY_CHECK_GRACE_SECONDS
+    code, out = _run_isolated(
+        [sys.executable, "-m", "agent.sending.instagram_reply_runner", tenant_id, str(deadline_ts)], budget,
+    )
+    if RESULT_MARKER in out:
+        return json.loads(out.rsplit(RESULT_MARKER, 1)[1].strip().splitlines()[0])
+    tail = out.strip().splitlines()[-1] if out.strip() else "no output"
+    raise RuntimeError(f"reply check process exited with code {code} and no result: {tail[:200]}")
+
+
 def run_reply_detection_poll(force: bool = False) -> dict:
     """
     Real gap fixed 2026-09-07: check_linkedin_replies()/check_instagram_
@@ -3448,7 +3490,7 @@ def run_reply_detection_poll(force: bool = False) -> dict:
                 tenant_result["linkedin"] = {"ok": False, "error": str(exc)}
                 log_error("reply_check", exc, channel="linkedin")
             try:
-                tenant_result["instagram"] = instagram_reply_check.check_instagram_replies(deadline_ts=deadline_ts)
+                tenant_result["instagram"] = _run_instagram_reply_check_isolated(tenant_id, deadline_ts)
             except Exception as exc:  # noqa: BLE001 -- e.g. unverified selector mismatch; don't lose the other channels
                 tenant_result["instagram"] = {"ok": False, "error": str(exc)}
                 log_error("reply_check", exc, channel="instagram")

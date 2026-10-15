@@ -291,7 +291,7 @@ check("the reply poll's next hard stop is 07:55 before sending and 17:55 before 
       and sch._reply_poll_deadline(_bt(7, 55)) == _bt(17, 55) and sch._reply_poll_deadline(_bt(13, 37)) == _bt(17, 55)
       and sch._reply_poll_deadline(_bt(17, 56)) == _qdt.datetime(2026, 10, 11, 7, 55))
 check("every reply poll is bounded by that deadline and the Instagram check actually honors it between leads",
-      "deadline_ts=deadline_ts" in inspect.getsource(sch.run_reply_detection_poll)
+      "deadline_ts" in inspect.getsource(sch.run_reply_detection_poll)  # since 2026-10-15 handed to the isolated runner, which is also killed at the deadline
       and "time.time() >= deadline_ts" in inspect.getsource(instagram_reply_check.check_instagram_replies))
 # ADDED 2026-10-12: analysis must not stall Instagram leads when the AI is down.
 check("an AI outage (empty balance, bad key, unreachable) is recognised, an ordinary error is not",
@@ -1838,6 +1838,25 @@ try:
 finally:
     instagram_reply_check.repo = _ig_repo_before_b
     instagram_reply_check.handle_reply_detected = _ig_handle_before_b
+
+# 2026-10-15: a reply poll hung for 11+ hours holding the browser slot. The Instagram reply check now runs in its own process
+# with a hard limit and is killed (slot released by the OS) if it overruns.
+import time as _t2
+from agent import scheduler as _sch
+_t0 = _t2.time()
+try:
+    _sch._run_isolated([sys.executable, "-c", "import time; time.sleep(120)"], 2)
+    _killed = False
+except TimeoutError:
+    _killed = True
+check("an isolated process that overruns its limit is killed promptly instead of hanging the agent", _killed and _t2.time() - _t0 < 10)
+_rc, _out = _sch._run_isolated([sys.executable, "-c", "print('hello')"], 20)
+check("an isolated process that finishes normally returns its output", _rc == 0 and "hello" in _out)
+check("the reply poll runs the Instagram check through the isolated runner (not in a thread that cannot be stopped)",
+      "_run_instagram_reply_check_isolated(tenant_id, deadline_ts)" in _inspect.getsource(_sch.run_reply_detection_poll)
+      and "check_instagram_replies(deadline_ts=deadline_ts)" not in _inspect.getsource(_sch.run_reply_detection_poll))
+import agent.sending.instagram_reply_runner as _runner
+check("the runner module exists with a result marker the scheduler can parse", bool(_runner.RESULT_MARKER))
 
 print()
 if failures:
