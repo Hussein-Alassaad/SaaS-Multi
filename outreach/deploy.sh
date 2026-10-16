@@ -1916,6 +1916,25 @@ _ws, _we = sch._sending_window_minutes(True)
 check("Website Offer window fits 25 new + 15 follow-ups (39 gaps at the 6-minute floor) from the latest start, and ends before Zimmar's 18:00 discovery",
       _we - (_ws + sch._RUN_TIME_JITTER_MINUTES) >= 39 * sch._SEND_GAP_MIN_SECONDS / 60 and _we + 5 <= sch._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES)
 _hs = sch._DISCOVERY_HARD_STOP_MINUTES_BY_BUSINESS
+from agent.discovery import instagram as _ig_disc
+import json as _json_t
+class _FakePage:
+    def __init__(self, reply): self.reply = reply
+    def evaluate(self, js, tag):
+        if isinstance(self.reply, Exception): raise self.reply
+        return self.reply
+_tagjson = _json_t.dumps({"data": {"top": {"sections": [{"layout_content": {"fill_items": [
+    {"media": {"code": "AAA", "user": {"username": "shop_one"}}}, {"media": {"code": "BBB", "user": {"username": "shop_two"}}},
+    {"media": {"code": "AAA", "user": {"username": "shop_one"}}}, {"media": {"pk": "no-code", "user": {"username": "x"}}}]}}]}}})
+check("when the hashtag page renders nothing, the tag-info endpoint supplies the posts (in order, no repeats, same shape as the page reader)",
+      _ig_disc.fetch_tag_posts_via_api(_FakePage([200, _tagjson]), "Lebanese Cosmetics") == [{"post_url": "/p/AAA/"}, {"post_url": "/p/BBB/"}])
+check("the fallback returns [] (never raises) on an error status, bad JSON, a browser error or an empty hashtag",
+      _ig_disc.fetch_tag_posts_via_api(_FakePage([429, "x"]), "a") == [] and _ig_disc.fetch_tag_posts_via_api(_FakePage([200, "not json"]), "a") == []
+      and _ig_disc.fetch_tag_posts_via_api(_FakePage(RuntimeError("boom")), "a") == [] and _ig_disc.fetch_tag_posts_via_api(_FakePage([200, _tagjson]), "!!!") == [])
+check("Instagram discovery uses the fallback only after the page itself returned nothing",
+      "page_posts = instagram.extract_hashtag_results(page)" in inspect.getsource(sch._discover_instagram)
+      and "if not page_posts:" in inspect.getsource(sch._discover_instagram)
+      and "fetch_tag_posts_via_api" in inspect.getsource(sch._discover_instagram))
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

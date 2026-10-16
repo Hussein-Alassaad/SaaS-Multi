@@ -2178,7 +2178,13 @@ def _discover_instagram(
         # exception already does.
         _raise_if_instagram_logged_out(page, account)
         page.wait_for_timeout(10_000)
-        for post in instagram.extract_hashtag_results(page):
+        page_posts = instagram.extract_hashtag_results(page)
+        if not page_posts:
+            # The search page can fail to render for the whole night (2026-10-16); the tag-info endpoint still answers.
+            page_posts = instagram.fetch_tag_posts_via_api(page, search_niche)
+            if page_posts:
+                _progress_log.info("[%s] Instagram: hashtag page empty for %r, used the tag-info endpoint instead (%d posts)", account.get("label"), search_niche, len(page_posts))
+        for post in page_posts:
             url = post.get("post_url")
             if url and url not in seen_urls:
                 seen_urls.add(url)

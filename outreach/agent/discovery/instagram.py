@@ -69,6 +69,7 @@ not DOM locators, for exactly the semantic-vs-auto-generated reason above.
 from __future__ import annotations
 
 import html
+import json
 import re
 
 from playwright.sync_api import Page
@@ -184,6 +185,47 @@ def extract_hashtag_results(page: Page) -> list[dict]:
         results.append({"post_url": url})
 
     return results
+
+
+# ADDED 2026-10-17, real incident: from the evening of 2026-10-16 Instagram's hashtag/search PAGE failed for the logged-in agent session
+# ("Page couldn't load", title unchanged after 15s) on every hashtag, so the 18:07 discovery found 0 raw posts in all 20 rounds and
+# saved nothing. The same session still browses normally, and Instagram's own tag-info endpoint (the one its web app calls) kept
+# answering 200 with ~30 recent/top posts per tag, usernames included. Used only as a fallback when the page gives nothing.
+_TAG_INFO_JS = """async (tag) => {
+  const r = await fetch('/api/v1/tags/web_info/?tag_name=' + encodeURIComponent(tag),
+    {headers: {'x-ig-app-id': '936619743392459'}, credentials: 'include'});
+  return [r.status, await r.text()];
+}"""
+
+
+def _collect_post_codes(node, found: list[str]) -> None:
+    """Walks the tag-info JSON and collects the code of every media object (it has a `code` and a `user`/`owner`), in order."""
+    if isinstance(node, dict):
+        code = node.get("code")
+        if isinstance(code, str) and code and (node.get("user") or node.get("owner")):
+            found.append(code)
+        for value in node.values():
+            _collect_post_codes(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            _collect_post_codes(value, found)
+
+
+def fetch_tag_posts_via_api(page: Page, niche: str) -> list[dict]:
+    """Fallback for a hashtag page that renders nothing: same result shape as extract_hashtag_results. [] on any failure."""
+    tag = "".join(ch for ch in niche if ch.isalnum()).lower()
+    if not tag:
+        return []
+    try:
+        status, text = page.evaluate(_TAG_INFO_JS, tag)
+        if status != 200:
+            return []
+        codes: list[str] = []
+        _collect_post_codes(json.loads(text), codes)
+    except Exception:  # noqa: BLE001 -- a fallback must never turn an empty night into a crashed one
+        return []
+    seen: set[str] = set()
+    return [{"post_url": f"/p/{c}/"} for c in codes if not (c in seen or seen.add(c))]
 
 
 def resolve_post_to_profile_url(page: Page, post_url: str) -> str | None:
