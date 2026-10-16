@@ -236,12 +236,12 @@ check("the hourly reply poll SKIPS during the sending window and the 40 min befo
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((7, 20), (8, 11), (10, 0), (12, 29), (12, 44))))
 check("the hourly reply poll SKIPS during the discovery window and the 40 min before it (17:20-04:00, including after midnight)",
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((17, 20), (18, 3), (21, 0), (23, 59), (0, 30), (3, 59))))
-check("the hourly reply poll still RUNS in the free gaps (04:00-07:19, 12:45-13:19 and 13:50-17:19 when no sending cycle is running)",
-      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 45), (13, 19), (13, 50), (15, 55), (16, 30), (17, 19))))
-check("the hourly reply poll SKIPS around the Website Offer sending start (13:20-13:49)",
-      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((13, 20), (13, 35), (13, 49))))
+check("the hourly reply poll still RUNS in the free gaps (04:00-07:19 and 13:20-17:19 when no sending cycle is running)",
+      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (13, 20), (14, 0), (15, 55), (16, 30), (17, 19))))
+check("the hourly reply poll SKIPS from the morning sending straight through to the Website Offer sending start (07:20-13:19)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((12, 45), (12, 59), (13, 0), (13, 15), (13, 19))))
 sch._sending_cycles_running = 1
-check("the hourly reply poll SKIPS for as long as a sending cycle is really running, at any hour (the Website Offer window is 13:30-17:45)",
+check("the hourly reply poll SKIPS for as long as a sending cycle is really running, at any hour (the Website Offer window is 13:00-17:50)",
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((14, 30), (15, 55), (16, 30), (17, 10))))
 sch._sending_cycles_running = 0
 _orig_inner_send = sch._run_account_sending_cycle
@@ -302,9 +302,9 @@ check("generate_followup_message returns the fixed Zimmar text without calling t
 # ADDED 2026-10-11: the reply poll must never block sending/discovery.
 check("a job waits up to 45 minutes for the browser slot instead of giving up after 5 (owner: when the reply check finishes, everything continues)",
       sess._GLOBAL_SESSION_LOCK_TIMEOUT_SECONDS == 45 * 60)
-check("the reply poll's next hard stop is 07:55 before sending, 13:25 before the afternoon sending and 17:55 before discovery, rolling to tomorrow's 07:55",
+check("the reply poll's next hard stop is 07:55 before sending, 12:55 before the afternoon sending and 17:55 before discovery, rolling to tomorrow's 07:55",
       sch._reply_poll_deadline(_bt(4, 37)) == _bt(7, 55) and sch._reply_poll_deadline(_bt(7, 54)) == _bt(7, 55)
-      and sch._reply_poll_deadline(_bt(7, 55)) == _bt(13, 25) and sch._reply_poll_deadline(_bt(13, 24)) == _bt(13, 25)
+      and sch._reply_poll_deadline(_bt(7, 55)) == _bt(12, 55) and sch._reply_poll_deadline(_bt(12, 54)) == _bt(12, 55)
       and sch._reply_poll_deadline(_bt(13, 37)) == _bt(17, 55)
       and sch._reply_poll_deadline(_bt(17, 56)) == _qdt.datetime(2026, 10, 11, 7, 55))
 check("every reply poll is bounded by that deadline and the Instagram check actually honors it between leads",
@@ -1909,15 +1909,23 @@ check("Website Offer's competitor rules catch a web designer and a digital agenc
       and not sch._is_competitor("Website Offer", "Fresh coffee and pastries in Hamra, Beirut", None, "Cafe Roma"))
 check("Zimmar's own sending window and recovery time are unchanged (08:00-12:30, recovery 12:35)",
       sch._sending_window_minutes(False) == (8 * 60, 12 * 60 + 30) and divmod(sch._sending_window_minutes(False)[1] + 5, 60) == (12, 35))
-check("Website Offer sends in the afternoon (13:30-17:45) after Zimmar's morning window and discovers (21:00) after Zimmar's evening run",
-      sch._sending_window_minutes(True) == (13 * 60 + 30, 17 * 60 + 45) and sch._WEBSITE_DISCOVERY_START_MINUTES == 21 * 60
+check("Website Offer sends in the afternoon (13:00-17:50) after Zimmar's morning window and discovers (22:00) after Zimmar's evening run",
+      sch._sending_window_minutes(True) == (13 * 60, 17 * 60 + 50) and sch._WEBSITE_DISCOVERY_START_MINUTES == 22 * 60
       and sch._WEBSITE_SENDING_WINDOW_START_MINUTES > sch._SENDING_WINDOW_END_MINUTES)
 _ws, _we = sch._sending_window_minutes(True)
 check("Website Offer window fits 25 new + 15 follow-ups (39 gaps at the 6-minute floor) from the latest start, and ends before Zimmar's 18:00 discovery",
       _we - (_ws + sch._RUN_TIME_JITTER_MINUTES) >= 39 * sch._SEND_GAP_MIN_SECONDS / 60 and _we + 5 <= sch._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES)
-check("Website Offer discovery starts after Zimmar's latest possible end and its time cap finishes before the 00:30 message writing",
-      sch._WEBSITE_DISCOVERY_START_MINUTES >= sch._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES + sch._RUN_TIME_JITTER_MINUTES + sch._PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS / 60
-      and sch._WEBSITE_DISCOVERY_START_MINUTES + sch._RUN_TIME_JITTER_MINUTES + sch._PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS / 60 <= 24 * 60 + 30)
+_hs = sch._DISCOVERY_HARD_STOP_MINUTES_BY_BUSINESS
+check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
+      _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
+      and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)
+def _left(name, h, m):
+    now = _qdt.datetime(2026, 10, 16, h, m, tzinfo=sch.ZoneInfo(sch.config.TIMEZONE))
+    return round(sch._discovery_deadline(name, now) - sch.time.monotonic())
+check("Zimmar discovery started at 18:00 may run until 21:45 (3h45), Website Offer started at 22:15 until midnight (1h45)",
+      abs(_left("Zimmar", 18, 0) - (3 * 3600 + 45 * 60)) <= 2 and abs(_left("Website Offer", 22, 15) - (1 * 3600 + 45 * 60)) <= 2)
+check("a manual or make-up run far from those hours, and other tenants, keep the plain 2.5h cap",
+      abs(_left("Zimmar", 1, 0) - 9000) <= 2 and abs(_left("Zimmar", 22, 30) - 9000) <= 2 and abs(_left("Website Offer", 10, 0) - 9000) <= 2 and abs(_left("Insurance", 18, 0) - 9000) <= 2)
 
 print()
 if failures:

@@ -2113,14 +2113,14 @@ def _discover_instagram(
     # rejected ended the run at 0 with search attempts still unused. One
     # loop now does search -> visit -> qualify per round and only starts
     # another round if the SAVED count is still short.
-    _discovery_started_at = time.monotonic()
+    _discovery_deadline_at = _discovery_deadline(business_name)
     for attempt in range(_MAX_SEARCH_ATTEMPTS):
         if counts["instagram_saved"] >= target:
             break
         # ADDED 2026-10-04, owner's explicit request: same time cap and
         # same reasoning as _discover_linkedin's own copy -- see
         # _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS's comment.
-        if time.monotonic() - _discovery_started_at >= _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS:
+        if time.monotonic() >= _discovery_deadline_at:
             _progress_log.info(
                 "[%s] Instagram: time cap reached (%d saved so far) -- yielding to the next account",
                 account.get("label"), counts["instagram_saved"],
@@ -2199,6 +2199,8 @@ def _discover_instagram(
         for post_index, post in enumerate(posts):
             if counts["instagram_saved"] >= target:
                 break
+            if time.monotonic() >= _discovery_deadline_at:
+                break  # hard stop reached mid-round; the round loop above logs it and ends the run
             if round_visited >= _TAG_ABANDON_AFTER_VISITS and counts["instagram_saved"] == round_saved_before:
                 _progress_log.info(
                     "[%s] Instagram round %d/%d: abandoning %r -- %d profile visits, 0 saved (low-yield tag)",
@@ -3373,10 +3375,10 @@ def run_reply_send_cycle() -> list[dict]:
 #   discovery  18:00-04:00  -> quiet 17:20-04:00 (covers Zimmar's 18:00-23:00
 #                              window and Insurance's 23:00-04:00 window)
 # Replies are then checked 04:00-07:20 and 12:30-17:20.
-#   website offer sending starts 13:30-13:45 -> quiet 13:20-13:50, then the poll skips for as long as a sending cycle is actually
-#                              running (_sending_cycles_running) instead of for a fixed window, because that campaign's window
-#                              (13:30-17:45) is sized for 40 sends but today's 10 finish in about an hour.
-_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (13 * 60 + 20, 13 * 60 + 50), (17 * 60 + 20, 28 * 60))
+#   website offer sending starts 13:00-13:15 -> quiet continues from 12:45 to 13:20, then the poll skips for as long as a sending
+#                              cycle is actually running (_sending_cycles_running) instead of for a fixed window, because that
+#                              campaign's window (13:00-17:50) is sized for 40 sends but today's 10 finish in about an hour.
+_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 13 * 60 + 20), (17 * 60 + 20, 28 * 60))
 _sending_cycles_running = 0
 _sending_cycles_lock = threading.Lock()
 # 2026-10-11: sending window now ends 12:30, so the morning quiet window runs to
@@ -3386,7 +3388,7 @@ _sending_cycles_lock = threading.Lock()
 # Hard stops (Beirut minutes after midnight): the reply poll must be completely
 # finished by 07:55 (sending opens 08:00) and 17:55 (discovery opens 18:00), no
 # matter how many leads it still has to check.
-_REPLY_POLL_HARD_STOP_MINUTES = (7 * 60 + 55, 13 * 60 + 25, 17 * 60 + 55)
+_REPLY_POLL_HARD_STOP_MINUTES = (7 * 60 + 55, 12 * 60 + 55, 17 * 60 + 55)
 
 
 def _reply_poll_deadline(now: dt.datetime) -> dt.datetime:
@@ -4003,6 +4005,22 @@ _INSURANCE_DISCOVERY_WINDOW_END_MINUTES = 27 * 60 + 59  # 03:59 Beirut, next cal
 # the same way running out of _MAX_SEARCH_ATTEMPTS already does.
 _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS = 2.5 * 60 * 60
 
+# OWNER REQUEST 2026-10-16: fixed clock hard stops instead of the 2.5h cap for the two Instagram campaigns -- Zimmar stops at 21:45
+# (started 18:00), Website Offer at 24:00 (started 22:00). Beirut minutes after midnight; 24:00 means midnight at the end of the day.
+# A manual or make-up run far from these hours (the stop is more than 5h away or already past) keeps the plain 2.5h cap.
+_DISCOVERY_HARD_STOP_MINUTES_BY_BUSINESS = {"zimmar": 21 * 60 + 45, "website offer": 24 * 60}
+
+
+def _discovery_deadline(business_name: str | None, now: dt.datetime | None = None) -> float:
+    """time.monotonic() value after which a discovery loop must stop."""
+    now = now or dt.datetime.now(ZoneInfo(config.TIMEZONE))
+    stop = _DISCOVERY_HARD_STOP_MINUTES_BY_BUSINESS.get((business_name or "").strip().lower())
+    if stop is not None:
+        left = (now.replace(hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(minutes=stop) - now).total_seconds()
+        if 0 < left <= 5 * 3600:
+            return time.monotonic() + left
+    return time.monotonic() + _PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS
+
 # Sending recovery, added 2026-09-20 -- see build_daily_schedule()'s own
 # "SECOND, DAILY safety net" comment for the real incident this fixes.
 # MOVED 2026-10-10 from 18:00 to 12:00 and narrowed to "nothing at all was
@@ -4211,13 +4229,13 @@ def _insurance_jittered_minutes(hour: int, minute: int) -> tuple[int, int]:
 # (13:00) and before the afternoon reply poll. All Beirut minutes after midnight.
 _WEBSITE_OFFER_BUSINESS = "website offer"
 _WEBSITE_MIN_FOLLOWERS = 300  # owner's choice for this campaign (Instagram discovery otherwise has no size floor)
-# Sized for the future volume (owner 2026-10-16): 25 new + up to 15 follow-ups = 40 sends at 6-8 min gaps. 13:30 (+0..15 min) to
-# 17:45 leaves 240+ minutes, the 6-minute-gap floor needs 234. With today's 10/day cap it simply ends about an hour after it starts.
-# Ends before Zimmar's 18:00 discovery. Discovery 21:00 (+0..15) starts after Zimmar's latest possible end (18:15 + 2.5h cap =
-# 20:45) and its own 2.5h cap ends by 23:45, before the 00:30 message writing.
-_WEBSITE_SENDING_WINDOW_START_MINUTES = 13 * 60 + 30
-_WEBSITE_SENDING_WINDOW_END_MINUTES = 17 * 60 + 45
-_WEBSITE_DISCOVERY_START_MINUTES = 21 * 60
+# Sized for the future volume (owner 2026-10-16): 25 new + up to 15 follow-ups = 40 sends at 6-8 min gaps. 13:00 (+0..15 min) to
+# 17:50 leaves 275+ minutes, the 6-minute-gap floor needs 234. With today's 10/day cap it simply ends about an hour after it starts.
+# Starts after Zimmar's 12:30 sending end and ends before Zimmar's 18:00 discovery. Discovery 22:00 (+0..15) starts after Zimmar's
+# 21:45 hard stop and has its own hard stop at 24:00, before the 00:30 message writing (see _DISCOVERY_HARD_STOP_MINUTES_BY_BUSINESS).
+_WEBSITE_SENDING_WINDOW_START_MINUTES = 13 * 60
+_WEBSITE_SENDING_WINDOW_END_MINUTES = 17 * 60 + 50
+_WEBSITE_DISCOVERY_START_MINUTES = 22 * 60
 
 
 def _is_website_offer_business(business_name: str | None) -> bool:
