@@ -42,6 +42,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from zoneinfo import ZoneInfo
@@ -549,6 +550,7 @@ def _save_if_qualified_with_reasons(
             normalised["seller_domain"] = seller
         if _is_website_offer_business((repo.get_settings() or {}).get("business_name")):
             normalised["require_no_website"] = True
+            normalised["min_followers"] = _WEBSITE_MIN_FOLLOWERS
     qualifies, reasons = qualify_profile(normalised, niche, niche_is_random=niche_is_random)
     if not qualifies:
         repo.record_seen_profile(platform, profile_key, "rejected", tenant_id=account["tenant_id"])
@@ -3371,7 +3373,12 @@ def run_reply_send_cycle() -> list[dict]:
 #   discovery  18:00-04:00  -> quiet 17:20-04:00 (covers Zimmar's 18:00-23:00
 #                              window and Insurance's 23:00-04:00 window)
 # Replies are then checked 04:00-07:20 and 12:30-17:20.
-_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (13 * 60 + 20, 15 * 60 + 55), (17 * 60 + 20, 28 * 60))
+#   website offer sending starts 13:30-13:45 -> quiet 13:20-13:50, then the poll skips for as long as a sending cycle is actually
+#                              running (_sending_cycles_running) instead of for a fixed window, because that campaign's window
+#                              (13:30-17:45) is sized for 40 sends but today's 10 finish in about an hour.
+_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (13 * 60 + 20, 13 * 60 + 50), (17 * 60 + 20, 28 * 60))
+_sending_cycles_running = 0
+_sending_cycles_lock = threading.Lock()
 # 2026-10-11: sending window now ends 12:30, so the morning quiet window runs to
 # 12:45 (a send that starts at 12:29 may still be finishing).
 
@@ -3390,6 +3397,8 @@ def _reply_poll_deadline(now: dt.datetime) -> dt.datetime:
 
 
 def _reply_poll_should_skip(now: dt.datetime) -> bool:
+    if _sending_cycles_running > 0:
+        return True
     minute_of_day = now.hour * 60 + now.minute
     return any(
         start <= minute_of_day < end or start <= minute_of_day + 24 * 60 < end
@@ -3642,6 +3651,18 @@ def run_approval_reminder_check() -> dict:
 
 
 def run_account_sending_cycle(tenant_id: str, account_id: str, limit: int | None = None) -> list[dict]:
+    """Runs one account's sending cycle and tells the reply poll to stay out of the browser while it does (see _REPLY_POLL_QUIET_WINDOWS)."""
+    global _sending_cycles_running
+    with _sending_cycles_lock:
+        _sending_cycles_running += 1
+    try:
+        return _run_account_sending_cycle(tenant_id, account_id, limit)
+    finally:
+        with _sending_cycles_lock:
+            _sending_cycles_running -= 1
+
+
+def _run_account_sending_cycle(tenant_id: str, account_id: str, limit: int | None = None) -> list[dict]:
     """
     Cold-outreach sending for ONE account, scoped to messages whose lead
     belongs to it -- the per-account counterpart to run_sending_cycle()
@@ -4189,9 +4210,14 @@ def _insurance_jittered_minutes(hour: int, minute: int) -> tuple[int, int]:
 # gets its own times: discovery after Zimmar's evening run, sending in the afternoon after Zimmar's morning sending ends
 # (13:00) and before the afternoon reply poll. All Beirut minutes after midnight.
 _WEBSITE_OFFER_BUSINESS = "website offer"
+_WEBSITE_MIN_FOLLOWERS = 300  # owner's choice for this campaign (Instagram discovery otherwise has no size floor)
+# Sized for the future volume (owner 2026-10-16): 25 new + up to 15 follow-ups = 40 sends at 6-8 min gaps. 13:30 (+0..15 min) to
+# 17:45 leaves 240+ minutes, the 6-minute-gap floor needs 234. With today's 10/day cap it simply ends about an hour after it starts.
+# Ends before Zimmar's 18:00 discovery. Discovery 21:00 (+0..15) starts after Zimmar's latest possible end (18:15 + 2.5h cap =
+# 20:45) and its own 2.5h cap ends by 23:45, before the 00:30 message writing.
 _WEBSITE_SENDING_WINDOW_START_MINUTES = 13 * 60 + 30
-_WEBSITE_SENDING_WINDOW_END_MINUTES = 15 * 60 + 45
-_WEBSITE_DISCOVERY_START_MINUTES = 20 * 60 + 40
+_WEBSITE_SENDING_WINDOW_END_MINUTES = 17 * 60 + 45
+_WEBSITE_DISCOVERY_START_MINUTES = 21 * 60
 
 
 def _is_website_offer_business(business_name: str | None) -> bool:

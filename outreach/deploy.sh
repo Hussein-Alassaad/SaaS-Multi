@@ -236,10 +236,24 @@ check("the hourly reply poll SKIPS during the sending window and the 40 min befo
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((7, 20), (8, 11), (10, 0), (12, 29), (12, 44))))
 check("the hourly reply poll SKIPS during the discovery window and the 40 min before it (17:20-04:00, including after midnight)",
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((17, 20), (18, 3), (21, 0), (23, 59), (0, 30), (3, 59))))
-check("the hourly reply poll still RUNS in the free gaps (04:00-07:19, 12:45-13:19 and 15:55-17:19)",
-      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 45), (13, 19), (15, 55), (16, 30), (17, 19))))
-check("the hourly reply poll SKIPS during the Website Offer afternoon sending window (13:20-15:55)",
-      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((13, 20), (14, 30), (15, 54))))
+check("the hourly reply poll still RUNS in the free gaps (04:00-07:19, 12:45-13:19 and 13:50-17:19 when no sending cycle is running)",
+      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (12, 45), (13, 19), (13, 50), (15, 55), (16, 30), (17, 19))))
+check("the hourly reply poll SKIPS around the Website Offer sending start (13:20-13:49)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((13, 20), (13, 35), (13, 49))))
+sch._sending_cycles_running = 1
+check("the hourly reply poll SKIPS for as long as a sending cycle is really running, at any hour (the Website Offer window is 13:30-17:45)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((14, 30), (15, 55), (16, 30), (17, 10))))
+sch._sending_cycles_running = 0
+_orig_inner_send = sch._run_account_sending_cycle
+def _boom_send(*a, **k): raise RuntimeError("boom")
+sch._run_account_sending_cycle = _boom_send
+try:
+    sch.run_account_sending_cycle("t", "a")
+except RuntimeError:
+    pass
+sch._run_account_sending_cycle = _orig_inner_send
+check("a finished or crashed sending cycle gives the browser back to the reply poll (counter released)",
+      sch._sending_cycles_running == 0 and not sch._reply_poll_should_skip(_bt(15, 30)))
 check("run_reply_detection_poll can still be forced past the quiet windows",
       "force" in inspect.signature(sch.run_reply_detection_poll).parameters)
 # ADDED 2026-10-10: Instagram-only, 08:00-11:50 sending.
@@ -978,7 +992,7 @@ finally:
     sch.repo = _real_repo
 
 check("run_account_sending_cycle() re-reads account status at RUN time, not just at schedule-build (regression check)",
-      "get_account" in _inspect.getsource(sch.run_account_sending_cycle))
+      "get_account" in _inspect.getsource(sch._run_account_sending_cycle))
 check("_run_sending_cycle_for_tenant() also gates on account status (defense in depth, regression check)",
       'status") != "active"' in _inspect.getsource(sch._run_sending_cycle_for_tenant))
 
@@ -1882,15 +1896,28 @@ _nw = {"platform": "instagram", "display_name": "Cafe Roma", "bio": "Fresh coffe
 check("Website Offer rejects a business that already has a website linked, but only for that campaign",
       qualify.qualify_profile({**_nw, "require_no_website": True}, "")[0] is False
       and "already has a website" in qualify.qualify_profile({**_nw, "require_no_website": True}, "")[1][0])
+_small = {**_nw, "has_website": False, "follower_or_headcount": 120, "require_no_website": True, "min_followers": 300}
+_small_ok = qualify.qualify_profile({**_small, "min_followers": None}, "")
+_small_rej = qualify.qualify_profile(_small, "")
+check("Website Offer rejects a business under 300 followers, keeps an unreadable count, and the floor is off for other campaigns",
+      _small_rej[0] is False and "minimum of 300" in _small_rej[1][0] and "minimum of" not in " ".join(_small_ok[1])
+      and sch._WEBSITE_MIN_FOLLOWERS == 300
+      and not (qualify.qualify_profile({**_small, "follower_or_headcount": None}, "")[1] or [""])[0].startswith("Hard reject: None"))
 check("Website Offer's competitor rules catch a web designer and a digital agency, and leave a cafe alone",
       sch._is_competitor("Website Offer", "Web design and development studio in Beirut", None, "Pixel Studio")
       and sch._is_competitor("Website Offer", "Digital marketing agency, social media", None, "Brand Hub")
       and not sch._is_competitor("Website Offer", "Fresh coffee and pastries in Hamra, Beirut", None, "Cafe Roma"))
 check("Zimmar's own sending window and recovery time are unchanged (08:00-12:30, recovery 12:35)",
       sch._sending_window_minutes(False) == (8 * 60, 12 * 60 + 30) and divmod(sch._sending_window_minutes(False)[1] + 5, 60) == (12, 35))
-check("Website Offer sends in the afternoon (13:30-15:45) after Zimmar's morning window and discovers after Zimmar's evening run",
-      sch._sending_window_minutes(True) == (13 * 60 + 30, 15 * 60 + 45) and sch._WEBSITE_DISCOVERY_START_MINUTES == 20 * 60 + 40
+check("Website Offer sends in the afternoon (13:30-17:45) after Zimmar's morning window and discovers (21:00) after Zimmar's evening run",
+      sch._sending_window_minutes(True) == (13 * 60 + 30, 17 * 60 + 45) and sch._WEBSITE_DISCOVERY_START_MINUTES == 21 * 60
       and sch._WEBSITE_SENDING_WINDOW_START_MINUTES > sch._SENDING_WINDOW_END_MINUTES)
+_ws, _we = sch._sending_window_minutes(True)
+check("Website Offer window fits 25 new + 15 follow-ups (39 gaps at the 6-minute floor) from the latest start, and ends before Zimmar's 18:00 discovery",
+      _we - (_ws + sch._RUN_TIME_JITTER_MINUTES) >= 39 * sch._SEND_GAP_MIN_SECONDS / 60 and _we + 5 <= sch._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES)
+check("Website Offer discovery starts after Zimmar's latest possible end and its time cap finishes before the 00:30 message writing",
+      sch._WEBSITE_DISCOVERY_START_MINUTES >= sch._ZIMMAR_DISCOVERY_WINDOW_START_MINUTES + sch._RUN_TIME_JITTER_MINUTES + sch._PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS / 60
+      and sch._WEBSITE_DISCOVERY_START_MINUTES + sch._RUN_TIME_JITTER_MINUTES + sch._PER_ACCOUNT_DISCOVERY_TIME_CAP_SECONDS / 60 <= 24 * 60 + 30)
 
 print()
 if failures:

@@ -586,6 +586,11 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
     # ADDED 2026-10-16 (Website Offer campaign): it sells a website, so a business that already links one is not a prospect.
     if profile.get("require_no_website") and profile.get("has_website"):
         return False, ["Hard reject: already has a website linked (this campaign only targets businesses without one)"]
+    # Owner's size floor for that campaign (300 followers). Only a known, lower count rejects; an unreadable count is kept.
+    _min_followers = profile.get("min_followers")
+    _followers = profile.get("follower_or_headcount")
+    if _min_followers and _followers is not None and _followers < _min_followers:
+        return False, [f"Hard reject: {_followers} followers is below this campaign's minimum of {_min_followers}"]
 
     # OWNER REQUEST 2026-10-07: Instagram gets its own, completely separate,
     # much simpler path -- see _has_foreign_evidence's own comment for the
