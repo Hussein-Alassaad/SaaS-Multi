@@ -547,6 +547,8 @@ def _save_if_qualified_with_reasons(
         seller = _SELLER_DOMAIN_BY_BUSINESS.get(((repo.get_settings() or {}).get("business_name") or "").strip().lower())
         if seller:
             normalised["seller_domain"] = seller
+        if _is_website_offer_business((repo.get_settings() or {}).get("business_name")):
+            normalised["require_no_website"] = True
     qualifies, reasons = qualify_profile(normalised, niche, niche_is_random=niche_is_random)
     if not qualifies:
         repo.record_seen_profile(platform, profile_key, "rejected", tenant_id=account["tenant_id"])
@@ -1040,6 +1042,13 @@ def _mentions_foreign_location(bio: str, configured_location: str) -> str | None
 # tenant gets this for free the moment its own markers are added here,
 # with no scheduler.py code change needed elsewhere.
 _COMPETITOR_MARKERS_BY_BUSINESS = {
+    # ADDED 2026-10-16: Website Offer sells websites, so web designers, developers and digital agencies are competitors.
+    "website offer": [
+        "web design", "website design", "web designer", "web development", "website development", "web developer",
+        "web agency", "web studio", "digital agency", "digital marketing", "marketing agency", "seo ", "social media agency",
+        "software", "app development", "mobile app", "it solutions", "it services", "ecommerce solutions", "shopify",
+        "wordpress", "ui/ux", "ui ux", "branding agency", "graphic design", "creative agency",
+    ],
     "partners insurance consultancy": [
         "insurance", "insurer", "reinsurance", "assurance company",
         "takaful", "underwriter", "underwriting",
@@ -1068,6 +1077,11 @@ _COMPETITOR_MARKERS_BY_BUSINESS = {
 # What the seller sells, handed to the AI business check so it can also flag
 # competitors (owner's instruction 2026-10-12).
 _SELLER_DOMAIN_BY_BUSINESS = {
+    "website offer": (
+        "Website Offer builds professional websites for small and medium businesses in Lebanon and offers each one a free "
+        "ready-made website to look at. Its competitors are web designers, web developers, software and app companies, "
+        "digital, marketing, social media and branding agencies, and anyone else who sells websites."
+    ),
     "zimmar": (
         "Zimmar Tech sells IT and network security reviews (CCTV, networks, access control, backups) to "
         "companies in Lebanon. Its competitors are IT, technology, software, POS, computer, networking, "
@@ -1079,9 +1093,11 @@ _SELLER_DOMAIN_BY_BUSINESS = {
 # TechVision's name and handle both say "tech"). Substring markers are long enough to
 # be safe inside a name; TOKEN markers are short words matched only as whole words.
 _COMPETITOR_NAME_MARKERS_BY_BUSINESS = {
+    "website offer": ("webdesign", "web design", "webdev", "web dev", "software", "seo"),
     "zimmar": ("tech", "computer", "software", "cyber", "telecom", "network", "cctv", "security", "surveillance"),
 }
 _COMPETITOR_NAME_TOKENS_BY_BUSINESS = {
+    "website offer": {"web", "seo", "ui", "ux"},
     "zimmar": {"pos", "it", "ict", "iot"},
 }
 
@@ -3175,8 +3191,9 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
     # the same clock or it would compute a nonsense deadline on a server
     # running in UTC or any other timezone.
     _tz_now = dt.datetime.now(ZoneInfo(config.TIMEZONE))
+    _window_end_minutes = _sending_window_minutes(_is_website_offer_tenant(tenant_id) if tenant_id else False)[1]
     window_end_today = _tz_now.replace(
-        hour=_SENDING_WINDOW_END_MINUTES // 60, minute=_SENDING_WINDOW_END_MINUTES % 60, second=0, microsecond=0,
+        hour=_window_end_minutes // 60, minute=_window_end_minutes % 60, second=0, microsecond=0,
     )
     seconds_left_in_window = max(0, (window_end_today - _tz_now).total_seconds())
     non_linkedin_count = sum(1 for m in messages if m.get("channel") != "linkedin")
@@ -3354,7 +3371,7 @@ def run_reply_send_cycle() -> list[dict]:
 #   discovery  18:00-04:00  -> quiet 17:20-04:00 (covers Zimmar's 18:00-23:00
 #                              window and Insurance's 23:00-04:00 window)
 # Replies are then checked 04:00-07:20 and 12:30-17:20.
-_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (17 * 60 + 20, 28 * 60))
+_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (13 * 60 + 20, 15 * 60 + 55), (17 * 60 + 20, 28 * 60))
 # 2026-10-11: sending window now ends 12:30, so the morning quiet window runs to
 # 12:45 (a send that starts at 12:29 may still be finishing).
 
@@ -3362,7 +3379,7 @@ _REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 12 * 60 + 45), (17 * 60 + 20, 28 * 60
 # Hard stops (Beirut minutes after midnight): the reply poll must be completely
 # finished by 07:55 (sending opens 08:00) and 17:55 (discovery opens 18:00), no
 # matter how many leads it still has to check.
-_REPLY_POLL_HARD_STOP_MINUTES = (7 * 60 + 55, 17 * 60 + 55)
+_REPLY_POLL_HARD_STOP_MINUTES = (7 * 60 + 55, 13 * 60 + 25, 17 * 60 + 55)
 
 
 def _reply_poll_deadline(now: dt.datetime) -> dt.datetime:
@@ -4168,6 +4185,30 @@ def _insurance_jittered_minutes(hour: int, minute: int) -> tuple[int, int]:
     return divmod(total_minutes, 60)
 
 
+# ADDED 2026-10-16: second campaign, "Website Offer" (free website + 5 minute meeting). The single browser slot is shared, so it
+# gets its own times: discovery after Zimmar's evening run, sending in the afternoon after Zimmar's morning sending ends
+# (13:00) and before the afternoon reply poll. All Beirut minutes after midnight.
+_WEBSITE_OFFER_BUSINESS = "website offer"
+_WEBSITE_SENDING_WINDOW_START_MINUTES = 13 * 60 + 30
+_WEBSITE_SENDING_WINDOW_END_MINUTES = 15 * 60 + 45
+_WEBSITE_DISCOVERY_START_MINUTES = 20 * 60 + 40
+
+
+def _is_website_offer_business(business_name: str | None) -> bool:
+    return (business_name or "").strip().lower() == _WEBSITE_OFFER_BUSINESS
+
+
+def _is_website_offer_tenant(tenant_id: str) -> bool:
+    return _is_website_offer_business((repo.get_settings(tenant_id) or {}).get("business_name"))
+
+
+def _sending_window_minutes(website_offer: bool) -> tuple[int, int]:
+    """(start, end) of the cold-sending window in Beirut minutes: Zimmar's morning window, or the Website Offer afternoon one."""
+    if website_offer:
+        return _WEBSITE_SENDING_WINDOW_START_MINUTES, _WEBSITE_SENDING_WINDOW_END_MINUTES
+    return _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_MINUTES
+
+
 def _is_insurance_tenant(tenant_id: str) -> bool:
     """
     True if `tenant_id` is Insurance's own tenant -- resolved by
@@ -4315,6 +4356,13 @@ def build_daily_schedule() -> BackgroundScheduler:
             _insurance_tenant_cache[tenant_id] = _is_insurance_tenant(tenant_id)
         return _insurance_tenant_cache[tenant_id]
 
+    _website_tenant_cache: dict[str, bool] = {}
+
+    def _is_website(tenant_id: str) -> bool:
+        if tenant_id not in _website_tenant_cache:
+            _website_tenant_cache[tenant_id] = _is_website_offer_tenant(tenant_id)
+        return _website_tenant_cache[tenant_id]
+
     # DISCOVERY -- OWNER REQUEST 2026-09-30: fully sequential per tenant.
     # Zimmar's accounts spread across 20:00-23:00 Beirut; Insurance's spread
     # across 23:10-03:00 Beirut. Each tenant is spread independently within
@@ -4324,7 +4372,8 @@ def build_daily_schedule() -> BackgroundScheduler:
     # separate (tenant_id, tenant_tz, account, hour, minute) lists up front
     # rather than computing hour/minute inline in a single mixed loop, so
     # each tenant's own enumerate() index is unambiguous.
-    _zimmar_accounts = [e for e in scheduled_accounts if not _is_insurance(e[0])]
+    _zimmar_accounts = [e for e in scheduled_accounts if not _is_insurance(e[0]) and not _is_website(e[0])]
+    _website_accounts = [e for e in scheduled_accounts if _is_website(e[0])]
     _insurance_accounts = [e for e in scheduled_accounts if _is_insurance(e[0])]
     _discovery_schedule: list[tuple[str, str, dict, int, int]] = []
     for index, (tenant_id, tenant_tz, account) in enumerate(_zimmar_accounts):
@@ -4352,6 +4401,13 @@ def build_daily_schedule() -> BackgroundScheduler:
         )
         _discovery_schedule.append((tenant_id, tenant_tz, account, hour, minute))
 
+    for index, (tenant_id, tenant_tz, account) in enumerate(_website_accounts):
+        # After Zimmar's evening discovery (18:00, up to ~2.5h), one slot per account 75 minutes apart.
+        hour, minute = divmod(
+            _WEBSITE_DISCOVERY_START_MINUTES + index * 75 + random.randint(0, _RUN_TIME_JITTER_MINUTES), 60,
+        )
+        _discovery_schedule.append((tenant_id, tenant_tz, account, hour % 24, minute))
+
     for tenant_id, tenant_tz, account, hour, minute in _discovery_schedule:
 
         def _run_discovery_for_this_account(tenant_id: str = tenant_id, account_id: str = account["id"]) -> None:
@@ -4376,7 +4432,8 @@ def build_daily_schedule() -> BackgroundScheduler:
     # Email is sent entirely by the Next.js/Resend pipeline (see
     # sendIfEmailChannel), never by this Python agent, so an email account
     # simply has nothing for this cycle to do.
-    for index, (tenant_id, tenant_tz, account) in enumerate(sending_accounts):
+    # Website Offer accounts last, so Zimmar's own account keeps index 0 (the 08:00 start) whatever order the pool lists them in.
+    for index, (tenant_id, tenant_tz, account) in enumerate(sorted(sending_accounts, key=lambda e: _is_website(e[0]))):
         if _is_insurance(tenant_id):
             # EXPLICIT OWNER REQUEST (2026-09-16), Insurance only -- anchored
             # 10:00 Beirut (before the owner's stated 11:00 upper bound; see
@@ -4389,6 +4446,12 @@ def build_daily_schedule() -> BackgroundScheduler:
             send_hour, send_minute = _insurance_jittered_minutes(
                 _INSURANCE_SENDING_HOUR, _INSURANCE_SENDING_MINUTE
             )
+        elif _is_website(tenant_id):
+            # Website Offer: afternoon window, after Zimmar's morning sending (ends ~13:00) -- see _WEBSITE_SENDING_WINDOW_*.
+            send_hour, send_minute = divmod(
+                _WEBSITE_SENDING_WINDOW_START_MINUTES + random.randint(0, _RUN_TIME_JITTER_MINUTES), 60,
+            )
+            send_hour %= 24
         elif index == 0:
             # OWNER REQUEST 2026-10-07: the first sending account in the
             # window starts right at its own open (8:00 Beirut +/-15 min),
@@ -4405,7 +4468,7 @@ def build_daily_schedule() -> BackgroundScheduler:
             send_hour %= 24
         else:
             send_hour, send_minute = _spread_within_window(
-                index, len(sending_accounts),
+                index, len([e for e in sending_accounts if not _is_website(e[0])]),
                 _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_MINUTES,
             )
 
@@ -4444,10 +4507,9 @@ def build_daily_schedule() -> BackgroundScheduler:
         if tz is not None:
             now_local = dt.datetime.now(tz)
             today_slot = now_local.replace(hour=send_hour, minute=send_minute, second=0, microsecond=0)
-            window_start = now_local.replace(hour=_SENDING_WINDOW_START_HOUR, minute=0, second=0, microsecond=0)
-            window_end = now_local.replace(
-                hour=_SENDING_WINDOW_END_MINUTES // 60, minute=_SENDING_WINDOW_END_MINUTES % 60, second=0, microsecond=0,
-            )
+            _win_start_min, _win_end_min = _sending_window_minutes(_is_website(tenant_id))
+            window_start = now_local.replace(hour=_win_start_min // 60, minute=_win_start_min % 60, second=0, microsecond=0)
+            window_end = now_local.replace(hour=_win_end_min // 60, minute=_win_end_min % 60, second=0, microsecond=0)
             if window_start <= now_local < window_end and now_local > today_slot:
                 catch_up_at = now_local + dt.timedelta(seconds=10 + index * 30)
                 scheduler.add_job(
@@ -4494,7 +4556,11 @@ def build_daily_schedule() -> BackgroundScheduler:
 
         scheduler.add_job(
             _run_recovery_sending_for_this_account,
-            trigger=CronTrigger(hour=_SENDING_RECOVERY_HOUR, minute=_SENDING_RECOVERY_MINUTE, timezone=tenant_tz),
+            trigger=CronTrigger(
+                hour=(_sending_window_minutes(_is_website(tenant_id))[1] + 5) // 60,
+                minute=(_sending_window_minutes(_is_website(tenant_id))[1] + 5) % 60,
+                timezone=tenant_tz,
+            ),
             id=f"sending-recovery-{tenant_id}-{account['id']}",
             name=f"End-of-day recovery (send today's leftover quota if the morning window was missed entirely): tenant {tenant_id} / {account['label']}",
             replace_existing=True,

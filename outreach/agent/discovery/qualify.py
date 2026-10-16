@@ -583,6 +583,10 @@ def qualify_profile(profile: dict, niche: str = "", niche_is_random: bool = Fals
     contributed to the decision, in the order they were checked, so a skipped
     profile's record shows exactly why, not just a bare rejection.
     """
+    # ADDED 2026-10-16 (Website Offer campaign): it sells a website, so a business that already links one is not a prospect.
+    if profile.get("require_no_website") and profile.get("has_website"):
+        return False, ["Hard reject: already has a website linked (this campaign only targets businesses without one)"]
+
     # OWNER REQUEST 2026-10-07: Instagram gets its own, completely separate,
     # much simpler path -- see _has_foreign_evidence's own comment for the
     # full reasoning (165 of 167 candidates one real night were killed by

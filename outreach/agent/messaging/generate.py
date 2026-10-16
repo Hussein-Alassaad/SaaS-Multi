@@ -341,6 +341,20 @@ def _zimmar_fixed_template(lead: dict, channel: str) -> str:
     )
 
 
+# ADDED 2026-10-16, owner's second campaign ("Website Offer"): a free website prepared for businesses that have none, plus a
+# 5 minute meeting. Same posture as Zimmar's: literal owner-approved text, no AI. Matched on business_name like the others.
+_WEBSITE_OFFER_BUSINESS_NAME = "Website Offer"
+
+_WEBSITE_OFFER_TEMPLATE_INSTAGRAM = """Hi {greeting_name}
+
+We noticed {company_name} does not have a website yet, so we prepared one for you, free.
+
+It is a professional website, clean and friendly for your customers. They can find you, see what you offer and contact you easily.
+
+Take a look, and if you like it, we can talk about getting it live. If not, no problem at all.
+
+Can we have a quick 5 minute meeting this week to show it to you?"""
+
 # FIXED template for MJivity (3D/CGI creative studio outreach), agreed with
 # the owner 2026-09-12 -- same "literal text the owner approved" posture as
 # Zimmar/Insurance above. Instagram-only for now: MJivity's LinkedIn
@@ -419,6 +433,10 @@ def generate_message(lead: dict, channel: str, message_style: str, model: str | 
         body = _insurance_fixed_template(lead)
     elif business_name == _ZIMMAR_BUSINESS_NAME:
         body = _zimmar_fixed_template(lead, channel)
+    elif business_name == _WEBSITE_OFFER_BUSINESS_NAME:
+        body = _WEBSITE_OFFER_TEMPLATE_INSTAGRAM.format(
+            greeting_name=_greeting_name(lead), company_name=_company_name_in_sentence(lead),
+        )
     elif business_name == _MJIVITY_BUSINESS_NAME and channel == "instagram":
         body = _mjivity_fixed_template(lead, channel)
     else:
@@ -470,7 +488,7 @@ def generate_followup_message(
     """
     model = model or config.MODEL_MESSAGES
     business_name, business_description = _business_identity()
-    if business_name == _ZIMMAR_BUSINESS_NAME:
+    if business_name in (_ZIMMAR_BUSINESS_NAME, _WEBSITE_OFFER_BUSINESS_NAME):
         return _ZIMMAR_FOLLOWUP_TEMPLATE.format(greeting_name=_greeting_name(lead))
     system = prompts.cacheable_system(
         build_system_prompt(channel, message_style, business_name, business_description, is_followup=True)
