@@ -1,5 +1,6 @@
 "use server";
 
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { SignJWT } from "jose";
 import { withTenant } from "@/lib/db";
@@ -135,11 +136,11 @@ export async function getReplyThreadsAction() {
   // (nothing was lost in the database). Conversations that have an answer are never cut off now; only the "contacted, no reply
   // yet" list keeps its cap.
   const leads = await withTenant(session.tenantId!, async (tx) => {
-    const load = (statuses: string[], take: number) =>
+    const load = (statusFilter: Prisma.OutreachLeadWhereInput, take: number) =>
     tx.outreachLead.findMany({
       where: {
         tenantId: session.tenantId!,
-        status: { in: statuses },
+        ...statusFilter,
       },
       select: {
         id: true,
@@ -176,8 +177,12 @@ export async function getReplyThreadsAction() {
       // since the UI has no "load more" affordance to page through yet.
       take,
     });
-    const answered = await load(["replied", "interested", "meeting_booked"], 2000);
-    const waiting = await load(["contacted"], 200);
+    // A lead the owner closed or marked lost still shows here when it has written back, so its conversation is never lost.
+    const answered = await load(
+      { OR: [{ status: { in: ["replied", "interested", "meeting_booked"] } }, { status: { in: ["deal_closed", "lost"] }, replies: { some: {} } }] },
+      2000,
+    );
+    const waiting = await load({ status: "contacted" }, 200);
     return [...answered, ...waiting];
   });
 

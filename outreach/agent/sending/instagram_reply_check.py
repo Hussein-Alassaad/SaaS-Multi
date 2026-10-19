@@ -266,7 +266,9 @@ def check_instagram_replies(deadline_ts: float | None = None) -> list[dict]:
     """
     results = []
     leads = [
-        lead for lead in repo.leads_by_status("contacted") + repo.leads_by_status("replied")
+        # interested / meeting_booked added 2026-10-19: a lead the owner moves forward is exactly the one still talking, and it
+        # used to drop out of reply detection the moment it was moved.
+        lead for status in ("contacted", "replied", "interested", "meeting_booked") for lead in repo.leads_by_status(status)
         if lead.get("platform") == "instagram"
     ]
     if not leads:

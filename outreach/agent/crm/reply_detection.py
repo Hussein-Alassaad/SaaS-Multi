@@ -47,6 +47,9 @@ from agent.crm import followup, pipeline
 from agent.db import repositories as repo
 
 
+_HUMAN_ADVANCED_STAGES = ("interested", "meeting_booked", "deal_closed")
+
+
 def handle_reply_detected(
     lead_id: str,
     *,
@@ -75,6 +78,11 @@ def handle_reply_detected(
         "body": body,
         "replied_at": replied_at.isoformat(),
     })
-    lead = pipeline.move_stage(lead_id, "replied", changed_by="agent")
     followup.cancel_pending(lead_id)
-    return lead
+    # FIXED 2026-10-19: this used to move EVERY lead back to "replied", so a lead the owner had already moved to interested /
+    # meeting booked / deal closed was silently dropped back a stage by its next message. The reply is recorded either way; the
+    # stage only advances when the lead is still earlier than "replied" (or was marked lost, where a new message is worth seeing).
+    current = repo.get_lead(lead_id)
+    if current and current.get("status") in _HUMAN_ADVANCED_STAGES:
+        return current
+    return pipeline.move_stage(lead_id, "replied", changed_by="agent")

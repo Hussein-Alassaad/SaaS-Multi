@@ -1949,6 +1949,27 @@ check("...and the older leads are visited in a slice that moves every hour, so n
       and "order_leads_for_check(leads" in _rc_src and "_MAX_RUN_SECONDS" in _rc_src)
 check("the reply check logs its progress and where it stopped (so a slow or killed run is visible)",
       "reply check: deadline reached after" in _rc_src and "reply check: lead %d of %d" in _rc_src)
+from agent.crm import reply_detection as _rd, pipeline as _pl, followup as _fu
+_rd_calls = {"moved": [], "status": "interested"}
+_o = (_rd.repo.insert_reply, _rd.repo.get_lead, _pl.move_stage, _fu.cancel_pending)
+_rd.repo.insert_reply = lambda row: None
+_rd.repo.get_lead = lambda lead_id: {"id": lead_id, "status": _rd_calls["status"]}
+_pl.move_stage = lambda lead_id, to, changed_by="agent": (_rd_calls["moved"].append(to), {"id": lead_id, "status": to})[1]
+_fu.cancel_pending = lambda lead_id: None
+import datetime as _rdt
+_res = {}
+for _st in ("interested", "meeting_booked", "deal_closed", "contacted", "lost"):
+    _rd_calls["status"] = _st
+    _rd_calls["moved"].clear()
+    _rd.handle_reply_detected("L1", channel="instagram", body="hi", replied_at=_rdt.datetime(2026, 10, 19, 10, 0))
+    _res[_st] = list(_rd_calls["moved"])
+_rd.repo.insert_reply, _rd.repo.get_lead, _pl.move_stage, _fu.cancel_pending = _o
+check("a new reply is recorded for a lead the owner already moved to interested / meeting booked / deal closed WITHOUT dropping it back to replied",
+      _res["interested"] == [] and _res["meeting_booked"] == [] and _res["deal_closed"] == [])
+check("...while a contacted (or lost) lead that writes back still moves to replied",
+      _res["contacted"] == ["replied"] and _res["lost"] == ["replied"])
+check("the Instagram reply check keeps watching leads the owner moved to interested / meeting booked",
+      "interested" in _rc_src or "interested" in _insp_rc.getsource(instagram_reply_check))
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)
