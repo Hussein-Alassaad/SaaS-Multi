@@ -130,11 +130,16 @@ export async function getReplyThreadsAction() {
   const permCheck = outreachGuardResult(session.role?.name ?? "", "replies", "view");
   if (!permCheck.ok) return permCheck;
 
-  const leads = await withTenant(session.tenantId!, (tx) =>
+  // FIXED 2026-10-19: this used to take the 200 most recently updated leads across ALL four statuses together. Each day's ~40 new
+  // "contacted" leads pushed older answered conversations past 200, so about 18 real replies silently vanished from this page
+  // (nothing was lost in the database). Conversations that have an answer are never cut off now; only the "contacted, no reply
+  // yet" list keeps its cap.
+  const leads = await withTenant(session.tenantId!, async (tx) => {
+    const load = (statuses: string[], take: number) =>
     tx.outreachLead.findMany({
       where: {
         tenantId: session.tenantId!,
-        status: { in: ["contacted", "replied", "interested", "meeting_booked"] },
+        status: { in: statuses },
       },
       select: {
         id: true,
@@ -169,9 +174,12 @@ export async function getReplyThreadsAction() {
       // active threads is already far more than a human would scroll
       // through in this inbox view; capped here rather than paginated
       // since the UI has no "load more" affordance to page through yet.
-      take: 200,
-    })
-  );
+      take,
+    });
+    const answered = await load(["replied", "interested", "meeting_booked"], 2000);
+    const waiting = await load(["contacted"], 200);
+    return [...answered, ...waiting];
+  });
 
   const threads: ReplyThreadLead[] = leads.map((lead) => {
     const outbound: ThreadMessage[] = lead.messages.map((m) => ({

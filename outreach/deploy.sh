@@ -1935,6 +1935,20 @@ check("Instagram discovery uses the fallback only after the page itself returned
       "page_posts = instagram.extract_hashtag_results(page)" in inspect.getsource(sch._discover_instagram)
       and "if not page_posts:" in inspect.getsource(sch._discover_instagram)
       and "fetch_tag_posts_via_api" in inspect.getsource(sch._discover_instagram))
+import inspect as _insp_rc
+_rc_src = _insp_rc.getsource(instagram_reply_check.check_instagram_replies)
+_rc_leads = [{"id": i, "updated_at": ("2026-10-%02d 10:00:00" % (1 + i % 28)) if i % 7 else None} for i in range(200)]
+_rc_ord = instagram_reply_check.order_leads_for_check(_rc_leads, 5)
+_rc_head = _rc_ord[:instagram_reply_check._HEAD_SIZE]
+check("the Instagram reply check visits the newest-activity leads first, so fresh replies are never starved by the old tail",
+      all(str(_rc_head[i].get("updated_at") or "") >= str(_rc_head[i + 1].get("updated_at") or "") for i in range(len(_rc_head) - 1))
+      and sorted(l["id"] for l in _rc_ord) == list(range(200))
+      and min(str(l.get("updated_at") or "") for l in _rc_head) >= max(str(l.get("updated_at") or "") for l in _rc_ord[instagram_reply_check._HEAD_SIZE:]))
+check("...and the older leads are visited in a slice that moves every hour, so none is skipped forever",
+      [l["id"] for l in instagram_reply_check.order_leads_for_check(_rc_leads, 1)[60:]] != [l["id"] for l in instagram_reply_check.order_leads_for_check(_rc_leads, 2)[60:]]
+      and "order_leads_for_check(leads" in _rc_src and "_MAX_RUN_SECONDS" in _rc_src)
+check("the reply check logs its progress and where it stopped (so a slow or killed run is visible)",
+      "reply check: deadline reached after" in _rc_src and "reply check: lead %d of %d" in _rc_src)
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

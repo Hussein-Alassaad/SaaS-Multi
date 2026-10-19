@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime as dt
 import difflib
+import logging
 import re
 import time
 
@@ -79,6 +80,28 @@ from agent.sending.instagram_send import (
 _SIDEBAR_PROMPT_TEXT = "Your note"
 _THREAD_MESSAGE_SELECTOR = "div[role='presentation']"
 _THREAD_MESSAGE_BODY_SELECTOR = "div[dir='auto']"
+
+
+_log = logging.getLogger("agent.reply_check")
+
+
+# FIXED 2026-10-19, owner report "new replies did not appear": a check takes ~33s per lead and there are ~240 leads, and the query had no
+# ORDER BY, so every poll walked the same arbitrary order and used its whole window (about 3h50, only two polls a day) without
+# reaching the newest leads -- exactly the ones most likely to have just replied. Now: the newest-activity leads are always checked
+# first, one poll is capped at _MAX_RUN_SECONDS so the next hourly poll can start and look at them again, and the older leads are
+# visited in a slice that moves every hour so none is skipped forever.
+_HEAD_SIZE = 60
+_TAIL_STEP = 25
+_MAX_RUN_SECONDS = 50 * 60
+
+
+def order_leads_for_check(leads: list[dict], hour_slot: int) -> list[dict]:
+    ordered = sorted(leads, key=lambda lead: str(lead.get("updated_at") or ""), reverse=True)
+    head, tail = ordered[:_HEAD_SIZE], ordered[_HEAD_SIZE:]
+    if tail:
+        shift = (hour_slot * _TAIL_STEP) % len(tail)
+        tail = tail[shift:] + tail[:shift]
+    return head + tail
 
 
 def _has_instagram_sent(lead_id: str) -> bool:
@@ -249,14 +272,22 @@ def check_instagram_replies(deadline_ts: float | None = None) -> list[dict]:
     if not leads:
         return results
 
+    leads = order_leads_for_check(leads, int(time.time() // 3600))
+    _started = time.time()
+    # One poll never runs longer than _MAX_RUN_SECONDS, so the next hourly poll can start and look at the newest leads again.
+    deadline_ts = min(deadline_ts, _started + _MAX_RUN_SECONDS) if deadline_ts is not None else _started + _MAX_RUN_SECONDS
+
     accounts_by_id = {}
     with SessionManager() as sessions:
-        for lead in leads:
+        for lead_index, lead in enumerate(leads):
             # ADDED 2026-10-11: hard stop so this poll can never still be holding
             # the single browser slot when a sending or discovery window opens.
             # Leads not reached are simply checked on the next poll.
             if deadline_ts is not None and time.time() >= deadline_ts:
+                _log.info("reply check: deadline reached after %d of %d leads (%ds)", lead_index, len(leads), time.time() - _started)
                 break
+            if lead_index % 10 == 0:
+                _log.info("reply check: lead %d of %d, %ds elapsed", lead_index, len(leads), time.time() - _started)
             if not _has_instagram_sent(lead["id"]):
                 continue
 

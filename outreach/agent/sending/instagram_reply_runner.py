@@ -13,6 +13,7 @@ Prints the results as JSON after a marker line so the scheduler can read them ou
 from __future__ import annotations
 
 import json
+import logging
 import sys
 
 RESULT_MARKER = "@@REPLY_CHECK_RESULT@@"
@@ -20,6 +21,8 @@ RESULT_MARKER = "@@REPLY_CHECK_RESULT@@"
 
 def main(argv: list[str]) -> int:
     tenant_id, deadline_ts = argv[1], float(argv[2])
+    # Progress goes to a file: the scheduler only keeps this process's output when it finishes, and a killed run loses it.
+    logging.basicConfig(filename="/tmp/reply_check_runner.log", level=logging.INFO, format="%(asctime)s %(message)s")
     from agent.db.repositories import tenant_scope
     from agent.sending import instagram_reply_check
 
