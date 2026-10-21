@@ -3169,7 +3169,7 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
                 already_sent_followup = repo.cold_sends_today_for_account_by_followup(
                     account_id, day_start, is_followup=True, tenant_id=tenant_id
                 )
-                remaining_followup = max(0, _INSTAGRAM_FOLLOWUP_DAILY_LIMIT - already_sent_followup)
+                remaining_followup = max(0, _instagram_followup_limit(tenant_id) - already_sent_followup)
 
                 messages = first_contact[:remaining_first] + followups[:remaining_followup]
             else:
@@ -3384,7 +3384,7 @@ def run_reply_send_cycle() -> list[dict]:
 #   website offer sending starts 13:00-13:15 -> quiet continues from 12:45 to 13:20, then the poll skips for as long as a sending
 #                              cycle is actually running (_sending_cycles_running) instead of for a fixed window, because that
 #                              campaign's window (13:00-17:50) is sized for 40 sends but today's 10 finish in about an hour.
-_REPLY_POLL_QUIET_WINDOWS = ((7 * 60 + 20, 13 * 60 + 20), (17 * 60 + 20, 28 * 60))
+_REPLY_POLL_QUIET_WINDOWS = ((6 * 60 + 10, 13 * 60 + 20), (17 * 60 + 20, 28 * 60))
 _sending_cycles_running = 0
 _sending_cycles_lock = threading.Lock()
 # 2026-10-11: sending window now ends 12:30, so the morning quiet window runs to
@@ -3394,7 +3394,7 @@ _sending_cycles_lock = threading.Lock()
 # Hard stops (Beirut minutes after midnight): the reply poll must be completely
 # finished by 07:55 (sending opens 08:00) and 17:55 (discovery opens 18:00), no
 # matter how many leads it still has to check.
-_REPLY_POLL_HARD_STOP_MINUTES = (7 * 60 + 55, 12 * 60 + 55, 17 * 60 + 55)
+_REPLY_POLL_HARD_STOP_MINUTES = (6 * 60 + 25, 12 * 60 + 55, 17 * 60 + 55)
 
 
 def _reply_poll_deadline(now: dt.datetime) -> dt.datetime:
@@ -3844,7 +3844,7 @@ _DOWNSTREAM_MINUTE = 30
 # 08:00 sending window opens -- gives both cases a second chance same
 # morning instead of waiting a full extra day, and reviewers still get an
 # hour to approve anything freshly drafted before sending starts.
-_DOWNSTREAM_SECOND_HOUR = 7
+_DOWNSTREAM_SECOND_HOUR = 6  # moved from 07:00 on 2026-10-17: sending now opens at 06:30
 _DOWNSTREAM_SECOND_MINUTE = 0
 
 # How often run_reply_send_cycle() polls for tenant-written replies waiting
@@ -3920,7 +3920,14 @@ _SEND_GAP_MAX_SECONDS = 8 * 60
 # first-contact daily limit (ig_daily_limit, currently 10) -- see
 # _run_sending_cycle_for_tenant's own comment on why they're split instead
 # of competing for one shared counter.
-_INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 15  # owner 2026-10-11: 15 follow-ups/day, on top of (separate from) the 25 new-lead sends
+_INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 15  # owner 2026-10-11: 15 follow-ups/day, on top of (separate from) the new-lead sends
+# Per campaign, keyed by lowercase business name; anything not listed uses the default above. Zimmar: 20 (owner 2026-10-17).
+_INSTAGRAM_FOLLOWUP_LIMIT_BY_BUSINESS = {"zimmar": 20}
+
+
+def _instagram_followup_limit(tenant_id: str | None) -> int:
+    name = ((repo.get_settings(tenant_id) or {}).get("business_name") or "").strip().lower() if tenant_id else ""
+    return _INSTAGRAM_FOLLOWUP_LIMIT_BY_BUSINESS.get(name, _INSTAGRAM_FOLLOWUP_DAILY_LIMIT)
 
 # Two non-overlapping daily windows, Beirut time. Sending 08:00-12:00
 # (owner's original 2026-09-16 design, unchanged). Discovery widened
@@ -3951,11 +3958,14 @@ _INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 15  # owner 2026-10-11: 15 follow-ups/day, on 
 # (analysis -> message generation), so a lead found at night has its
 # message generated the same night and is ready for approval before the
 # next morning's sending window.
-_SENDING_WINDOW_START_HOUR = 8
+# OWNER REQUEST 2026-10-17: Zimmar went to 30 new + 20 follow-ups = 50 sends a day. At 6-8 minute gaps plus the time each send takes
+# that is about 6h10, which does not fit 08:00-12:30, so the window now opens at 06:30 (+0..15 min) and closes at 12:50, before
+# Website Offer's 13:00 start. Expressed in minutes.
+_SENDING_WINDOW_START_MINUTES = 6 * 60 + 30
 # OWNER REQUEST 2026-10-10: sending runs 08:00 (+/-15 min start) to 11:50
 # Beirut. EXTENDED 2026-10-11 to 12:30 (owner) so 25 new-lead messages plus 15
 # follow-ups (40 sends at 6-8 min gaps) fit. Expressed in minutes.
-_SENDING_WINDOW_END_MINUTES = 12 * 60 + 30
+_SENDING_WINDOW_END_MINUTES = 12 * 60 + 50
 
 # OWNER REQUEST 2026-10-10: Instagram-only outreach. Email messages are no
 # longer generated at all (not even for an Instagram lead whose bio carries an
@@ -4036,7 +4046,7 @@ def _discovery_deadline(business_name: str | None, now: dt.datetime | None = Non
 # slot while the 18:12 discovery gave up). 12:00 is just after the morning
 # window closes and before the evening discovery, so it collides with neither.
 _SENDING_RECOVERY_HOUR = 12
-_SENDING_RECOVERY_MINUTE = 35  # after the 12:30 window end (2026-10-11)
+_SENDING_RECOVERY_MINUTE = 55  # after the 12:50 window end (2026-10-17)
 
 
 # Minutes-since-midnight ranges that _spread_within_window() must never
@@ -4256,7 +4266,7 @@ def _sending_window_minutes(website_offer: bool) -> tuple[int, int]:
     """(start, end) of the cold-sending window in Beirut minutes: Zimmar's morning window, or the Website Offer afternoon one."""
     if website_offer:
         return _WEBSITE_SENDING_WINDOW_START_MINUTES, _WEBSITE_SENDING_WINDOW_END_MINUTES
-    return _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_MINUTES
+    return _SENDING_WINDOW_START_MINUTES, _SENDING_WINDOW_END_MINUTES
 
 
 def _is_insurance_tenant(tenant_id: str) -> bool:
@@ -4513,13 +4523,13 @@ def build_daily_schedule() -> BackgroundScheduler:
             # which is why only 11 of 15 approved messages went out that
             # morning even though the daily cap wasn't the limiting factor.
             send_hour, send_minute = divmod(
-                _SENDING_WINDOW_START_HOUR * 60 + random.randint(0, _RUN_TIME_JITTER_MINUTES), 60,
+                _SENDING_WINDOW_START_MINUTES + random.randint(0, _RUN_TIME_JITTER_MINUTES), 60,
             )
             send_hour %= 24
         else:
             send_hour, send_minute = _spread_within_window(
                 index, len([e for e in sending_accounts if not _is_website(e[0])]),
-                _SENDING_WINDOW_START_HOUR * 60, _SENDING_WINDOW_END_MINUTES,
+                _SENDING_WINDOW_START_MINUTES, _SENDING_WINDOW_END_MINUTES,
             )
 
         def _run_sending_for_this_account(tenant_id: str = tenant_id, account_id: str = account["id"]) -> None:

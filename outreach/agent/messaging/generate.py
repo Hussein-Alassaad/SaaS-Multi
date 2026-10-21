@@ -347,13 +347,9 @@ _WEBSITE_OFFER_BUSINESS_NAME = "Website Offer"
 
 _WEBSITE_OFFER_TEMPLATE_INSTAGRAM = """Hi {greeting_name}
 
-We noticed {company_name} does not have a website yet, so we prepared one for you, free.
+We noticed {company_name} does not have a website, so we prepared one for you, free. It is professional and friendly for your customers.
 
-It is a professional website, clean and friendly for your customers. They can find you, see what you offer and contact you easily.
-
-Take a look, and if you like it, we can talk about getting it live. If not, no problem at all.
-
-Can we have a quick 5 minute meeting this week to show it to you?"""
+If you like it, we can talk about getting it live. Can we have a quick 5 minute meeting this week to show it to you?"""
 
 # FIXED template for MJivity (3D/CGI creative studio outreach), agreed with
 # the owner 2026-09-12 -- same "literal text the owner approved" posture as

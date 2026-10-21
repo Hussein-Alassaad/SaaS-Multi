@@ -232,13 +232,13 @@ check("Instagram discovery probes the Message button and captures the caption on
       "_profile_has_message_button(page)" in _dsrc and "extract_post_caption(page)" in _dsrc)
 import datetime as _qdt
 def _bt(h, m): return _qdt.datetime(2026, 10, 10, h, m)
-check("the hourly reply poll SKIPS during the sending window and the 40 min before it (07:20-12:45)",
-      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((7, 20), (8, 11), (10, 0), (12, 29), (12, 44))))
+check("the hourly reply poll SKIPS during the sending window and the 20 min before it (06:10-12:59)",
+      all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((6, 10), (7, 20), (8, 11), (10, 0), (12, 29), (12, 44))))
 check("the hourly reply poll SKIPS during the discovery window and the 40 min before it (17:20-04:00, including after midnight)",
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((17, 20), (18, 3), (21, 0), (23, 59), (0, 30), (3, 59))))
-check("the hourly reply poll still RUNS in the free gaps (04:00-07:19 and 13:20-17:19 when no sending cycle is running)",
-      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (7, 19), (13, 20), (14, 0), (15, 55), (16, 30), (17, 19))))
-check("the hourly reply poll SKIPS from the morning sending straight through to the Website Offer sending start (07:20-13:19)",
+check("the hourly reply poll still RUNS in the free gaps (04:00-06:09 and 13:20-17:19 when no sending cycle is running)",
+      not any(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((4, 0), (5, 30), (6, 9), (13, 20), (14, 0), (15, 55), (16, 30), (17, 19))))
+check("the hourly reply poll SKIPS from the morning sending straight through to the Website Offer sending start (06:10-13:19)",
       all(sch._reply_poll_should_skip(_bt(h, m)) for h, m in ((12, 45), (12, 59), (13, 0), (13, 15), (13, 19))))
 sch._sending_cycles_running = 1
 check("the hourly reply poll SKIPS for as long as a sending cycle is really running, at any hour (the Website Offer window is 13:00-17:50)",
@@ -257,19 +257,25 @@ check("a finished or crashed sending cycle gives the browser back to the reply p
 check("run_reply_detection_poll can still be forced past the quiet windows",
       "force" in inspect.signature(sch.run_reply_detection_poll).parameters)
 # ADDED 2026-10-10: Instagram-only, 08:00-11:50 sending.
-check("the sending window ends at 12:30 Beirut (owner 2026-10-11)", sch._SENDING_WINDOW_END_MINUTES == 12 * 60 + 30)
-check("25 new + 15 follow-ups = 40 sends: 39 gaps at the 6-minute minimum fit between the latest start (08:15) and 12:30",
-      39 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
-check("the Instagram follow-up cap is 15/day, separate from the 25 new-lead cap", sch._INSTAGRAM_FOLLOWUP_DAILY_LIMIT == 15)
-check("25 cold sends at the longest gap (24 gaps) fit between the latest start (08:15) and the window end",
-      24 * sch._SEND_GAP_MAX_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
-check("30 cold sends at the SHORTEST gap (29 gaps) also fit, so the dynamic gap can always squeeze them in",
-      29 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - (8 * 60 + 15)) * 60)
+check("Zimmar's sending window is 06:30 to 12:50 Beirut (owner 2026-10-17), before Website Offer's 13:00 start",
+      sch._SENDING_WINDOW_START_MINUTES == 6 * 60 + 30 and sch._SENDING_WINDOW_END_MINUTES == 12 * 60 + 50
+      and sch._SENDING_WINDOW_END_MINUTES < sch._WEBSITE_SENDING_WINDOW_START_MINUTES)
+_zlatest = 6 * 60 + 30 + sch._RUN_TIME_JITTER_MINUTES
+check("30 new + 20 follow-ups = 50 sends: 49 gaps at the 6-minute minimum fit between the latest start (06:45) and 12:50",
+      49 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - _zlatest) * 60)
+_fl_orig = sch.repo.get_settings
+sch.repo.get_settings = lambda tid=None: {"business_name": {"z": "Zimmar", "w": "Website Offer"}.get(tid, "Other")}
+check("the Instagram follow-up cap is 20/day for Zimmar, 15 for every other campaign, separate from the new-lead cap",
+      sch._instagram_followup_limit("z") == 20 and sch._instagram_followup_limit("w") == 15 and sch._instagram_followup_limit("x") == 15
+      and sch._INSTAGRAM_FOLLOWUP_DAILY_LIMIT == 15)
+sch.repo.get_settings = _fl_orig
+check("30 cold sends at the longest gap (29 gaps) fit between the latest start (06:45) and the window end",
+      29 * sch._SEND_GAP_MAX_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - _zlatest) * 60)
 check("email messages are no longer generated (even for a lead with an email in its bio)",
       sch._EMAIL_OUTREACH_ENABLED is False
       and "_EMAIL_OUTREACH_ENABLED and" in inspect.getsource(sch._run_message_generation_cycle_for_tenant))
-check("end-of-day recovery runs just after the window (12:35), nowhere near the 18:00 discovery start",
-      sch._SENDING_RECOVERY_HOUR == 12 and sch._SENDING_RECOVERY_MINUTE == 35)
+check("end-of-day recovery runs just after the window (12:55), nowhere near the 18:00 discovery start",
+      sch._SENDING_RECOVERY_HOUR == 12 and sch._SENDING_RECOVERY_MINUTE == 55)
 # ADDED 2026-10-11: follow-up dispatch.
 from agent.crm import followup as _fu
 _fjobs = [j for j in sch.build_daily_schedule().get_jobs() if j.id == "followup-dispatch-poll"]
@@ -302,11 +308,11 @@ check("generate_followup_message returns the fixed Zimmar text without calling t
 # ADDED 2026-10-11: the reply poll must never block sending/discovery.
 check("a job waits up to 45 minutes for the browser slot instead of giving up after 5 (owner: when the reply check finishes, everything continues)",
       sess._GLOBAL_SESSION_LOCK_TIMEOUT_SECONDS == 45 * 60)
-check("the reply poll's next hard stop is 07:55 before sending, 12:55 before the afternoon sending and 17:55 before discovery, rolling to tomorrow's 07:55",
-      sch._reply_poll_deadline(_bt(4, 37)) == _bt(7, 55) and sch._reply_poll_deadline(_bt(7, 54)) == _bt(7, 55)
-      and sch._reply_poll_deadline(_bt(7, 55)) == _bt(12, 55) and sch._reply_poll_deadline(_bt(12, 54)) == _bt(12, 55)
+check("the reply poll's next hard stop is 06:25 before sending, 12:55 before the afternoon sending and 17:55 before discovery, rolling to tomorrow's 06:25",
+      sch._reply_poll_deadline(_bt(4, 37)) == _bt(6, 25) and sch._reply_poll_deadline(_bt(6, 24)) == _bt(6, 25)
+      and sch._reply_poll_deadline(_bt(6, 25)) == _bt(12, 55) and sch._reply_poll_deadline(_bt(12, 54)) == _bt(12, 55)
       and sch._reply_poll_deadline(_bt(13, 37)) == _bt(17, 55)
-      and sch._reply_poll_deadline(_bt(17, 56)) == _qdt.datetime(2026, 10, 11, 7, 55))
+      and sch._reply_poll_deadline(_bt(17, 56)) == _qdt.datetime(2026, 10, 11, 6, 25))
 check("every reply poll is bounded by that deadline and the Instagram check actually honors it between leads",
       "deadline_ts" in inspect.getsource(sch.run_reply_detection_poll)  # since 2026-10-15 handed to the isolated runner, which is also killed at the deadline
       and "time.time() >= deadline_ts" in inspect.getsource(instagram_reply_check.check_instagram_replies))
@@ -1887,7 +1893,7 @@ try:
 finally:
     _wgen._business_identity = _orig_identity
 check("Website Offer's first message is the agreed text with the business name filled in and no dashes",
-      _wmsg.startswith("Hi Pizza Roma\n\nWe noticed Pizza Roma does not have a website yet, so we prepared one for you, free.")
+      _wmsg.startswith("Hi Pizza Roma\n\nWe noticed Pizza Roma does not have a website, so we prepared one for you, free. It is professional and friendly for your customers.")
       and "quick 5 minute meeting this week" in _wmsg and "—" not in _wmsg and "–" not in _wmsg and " - " not in _wmsg)
 check("Website Offer's follow-up is the short 'interested or not' note",
       _wfu == "Hi Pizza Roma,\n\nJust following up on my last message. Are you interested or not?")
@@ -1907,8 +1913,8 @@ check("Website Offer's competitor rules catch a web designer and a digital agenc
       sch._is_competitor("Website Offer", "Web design and development studio in Beirut", None, "Pixel Studio")
       and sch._is_competitor("Website Offer", "Digital marketing agency, social media", None, "Brand Hub")
       and not sch._is_competitor("Website Offer", "Fresh coffee and pastries in Hamra, Beirut", None, "Cafe Roma"))
-check("Zimmar's own sending window and recovery time are unchanged (08:00-12:30, recovery 12:35)",
-      sch._sending_window_minutes(False) == (8 * 60, 12 * 60 + 30) and divmod(sch._sending_window_minutes(False)[1] + 5, 60) == (12, 35))
+check("Zimmar's sending window is 06:30-12:50 with recovery at 12:55",
+      sch._sending_window_minutes(False) == (6 * 60 + 30, 12 * 60 + 50) and divmod(sch._sending_window_minutes(False)[1] + 5, 60) == (12, 55))
 check("Website Offer sends in the afternoon (13:00-17:50) after Zimmar's morning window and discovers (22:00) after Zimmar's evening run",
       sch._sending_window_minutes(True) == (13 * 60, 17 * 60 + 50) and sch._WEBSITE_DISCOVERY_START_MINUTES == 22 * 60
       and sch._WEBSITE_SENDING_WINDOW_START_MINUTES > sch._SENDING_WINDOW_END_MINUTES)
