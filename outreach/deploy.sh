@@ -1976,6 +1976,26 @@ check("...while a contacted (or lost) lead that writes back still moves to repli
       _res["contacted"] == ["replied"] and _res["lost"] == ["replied"])
 check("the Instagram reply check keeps watching leads the owner moved to interested / meeting booked",
       "interested" in _rc_src or "interested" in _insp_rc.getsource(instagram_reply_check))
+from agent.core import session as _sess
+_sm = _sess.SessionManager()
+_blocked = []
+for _st in ("paused", "warned"):
+    try:
+        _sm.open({"id": "x", "label": "t", "status": _st})
+        _blocked.append(False)
+    except _sess.AccountNotActive:
+        _blocked.append(True)
+    except Exception:
+        _blocked.append(False)
+try:
+    _sm.open({"id": "x", "label": "t", "status": "active"})
+    _active_passes = False
+except AssertionError:
+    _active_passes = True  # got past the status guard to the next line (the context-manager assert), i.e. active accounts are not blocked
+except Exception:
+    _active_passes = False
+check("no browser session is ever opened for a paused or warned account, while an active account is not blocked",
+      _blocked == [True, True] and _active_passes)
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

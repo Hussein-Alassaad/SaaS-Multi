@@ -133,6 +133,17 @@ def _lock_path(account_id: str) -> pathlib.Path:
 _SESSION_LOCK_TIMEOUT_SECONDS = 240
 
 
+class AccountNotActive(RuntimeError):
+    """
+    ADDED 2026-10-22, owner's order after Zimmar's Instagram account hit an appeal (it may be disabled for good): a browser session is
+    never opened for an account whose status is paused or warned, whatever called open(). The scheduler already leaves such accounts
+    out of every loop; this is the last line of defence if some path ever reaches open() with one anyway.
+    """
+
+
+_BLOCKED_ACCOUNT_STATUSES = ("paused", "warned")
+
+
 class SessionBusy(RuntimeError):
     """
     Raised when another process still holds this account's session lock after
@@ -492,6 +503,8 @@ class SessionManager:
         open_or_login(account) instead of open() directly from a call site
         that's prepared to persist a login outcome.
         """
+        if account.get("status") in _BLOCKED_ACCOUNT_STATUSES:
+            raise AccountNotActive(f"account {account.get('label') or account.get('id')} is {account.get('status')} -- no browser session is opened for it")
         assert self._browser is not None, "SessionManager must be used as a context manager"
 
         STORAGE_DIR.mkdir(exist_ok=True)
