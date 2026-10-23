@@ -802,7 +802,8 @@ class _FakeReplyRepo:
     def insert_error(self, *a, **k):
         pass
 
-_zim_paras = _gen._ZIMMAR_TEMPLATE_INSTAGRAM.split("\n\n")
+import re as _re_t
+_zim_paras = [x for x in _re_t.split(r"\n+", _gen._ZIMMAR_TEMPLATE_INSTAGRAM) if x]
 _ig_real_repo = instagram_reply_check.repo
 _li_real_repo = linkedin_reply_check.repo
 _orig_handle_reply = instagram_reply_check.handle_reply_detected
@@ -2000,6 +2001,11 @@ _wst = sch._website_offer_sector_terms("restaurant, cafe, beauty salon, dentist,
 check("Website Offer searches its own consumer sectors, each anchored to Lebanon (not the generic B2B rotation), and falls back to the generic one when none are set",
       _wst == ["restaurant lebanon", "cafe lebanon", "beauty salon lebanon", "dentist lebanon", "real estate lebanon"]
       and sch._website_offer_sector_terms("", "Lebanon") == [] and "_website_offer_sector_terms(industry, location)" in inspect.getsource(sch._run_discovery_cycle_for_tenant))
+_zt = _gen._ZIMMAR_TEMPLATE_INSTAGRAM
+_zmsg = _gen._zimmar_fixed_template({"business_name": "Cafe Roma", "display_name": "Cafe Roma"}, "instagram")
+check("Zimmar's Instagram message is the owner's Arabic text (5 lines, the greeting filled with the business name), not the old English one",
+      "علي زغيب" in _zt and "Quick question" not in _zt and len(_zt.split(chr(10))) == 5
+      and _zmsg.startswith("مرحبا Cafe Roma،") and "{" not in _zmsg and "—" not in _zmsg)
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

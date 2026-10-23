@@ -276,19 +276,11 @@ Worth a quick look at your setup?"""
 
 # REPLACED 2026-10-14, owner's exact text (Instagram is the only live outreach channel, so only this template changed;
 # the LinkedIn and email ones above/below are untouched and unused). {greeting_name} is the business name, as before.
-_ZIMMAR_TEMPLATE_INSTAGRAM = """Hi {greeting_name}
-
-Quick question: do you know who can watch your cameras right now, from their phone, at home?
-
-Most businesses still run their CCTV on the default password. In practice, anyone who finds it can watch your staff and customers live, copy footage, or delete it, usually the day you need it most (a theft, a dispute, an insurance claim).
-
-It’s also often on the same network as your cash register, computers, and other systems.
-
-We’re Zimmar Tech. We help businesses lock this down quickly, and we’ve reviewed 100+ setups so far.
-
-We can run a free 15-minute check on yours, and you’ll know exactly where you stand. If it’s fine, we’ll tell you.
-
-Want us to do it this week?"""
+_ZIMMAR_TEMPLATE_INSTAGRAM = """مرحبا {greeting_name}، معك علي زغيب من شركة zimmar Tech.
+نحن خبراء نتورك، كاميرات مراقبة، وايفاي، الخ...
+الكاميرات عندك شغالة على نفس شبكة الانترنت، وعندك بطئ بالنت، والموظفين اخدين باسورد بيعطيهن صلاحيات مطلقة على الشبكة، ومنها الدخول على الكاميرات والراوتر من دون اذنك.
+اليوم فيك تتواصل معي حتى نحط حد للفوضى عندك.
+قد ما كانت شبكتك صغيرة او كبيرة، لازم تكون مشغولة صح؟"""
 
 # ADDED 2026-10-07, real bug found and fixed live: this channel never had
 # its own template. generate_message()'s email path (scheduler.py's
