@@ -1996,6 +1996,10 @@ except Exception:
     _active_passes = False
 check("no browser session is ever opened for a paused or warned account, while an active account is not blocked",
       _blocked == [True, True] and _active_passes)
+_wst = sch._website_offer_sector_terms("restaurant, cafe, beauty salon, dentist, real estate", "Lebanon")
+check("Website Offer searches its own consumer sectors, each anchored to Lebanon (not the generic B2B rotation), and falls back to the generic one when none are set",
+      _wst == ["restaurant lebanon", "cafe lebanon", "beauty salon lebanon", "dentist lebanon", "real estate lebanon"]
+      and sch._website_offer_sector_terms("", "Lebanon") == [] and "_website_offer_sector_terms(industry, location)" in inspect.getsource(sch._run_discovery_cycle_for_tenant))
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

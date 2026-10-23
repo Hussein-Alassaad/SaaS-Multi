@@ -190,6 +190,16 @@ def _industry_rotation_terms(target_industry: str) -> list[str]:
     return terms
 
 
+def _website_offer_sector_terms(target_industry: str, location: str = "") -> list[str]:
+    """
+    Website Offer sells to shops, restaurants, clinics and other consumer-facing Lebanese businesses, so its hashtags are its OWN sector
+    list (OutreachSettings.targetIndustry), each anchored to the country ("restaurant lebanon") because a bare English word is
+    dominated by worldwide accounts. The generic rotation is B2B/industrial (wholesale, logistics, software) and would miss them.
+    """
+    anchor = (location or "lebanon").split(",")[0].strip().lower() or "lebanon"
+    return [t if anchor in t.lower() else f"{t} {anchor}" for t in _industry_rotation_terms(target_industry)]
+
+
 def _resolve_search_niche(niche: str, target_industry: str = "") -> str:
     """
     A configured niche is used as-is. An empty niche means "target any type
@@ -679,6 +689,12 @@ def _run_discovery_cycle_for_tenant(tenant_id: str, force: bool) -> list[dict]:
         if configured_niche.strip().lower() in _SERVICE_NOT_SECTOR_NICHES
         else []
     )
+    if _is_website_offer_business(business_name):
+        _sector_terms = _website_offer_sector_terms(industry, location)
+        if _sector_terms:
+            tenant_terms = _sector_terms
+            if not configured_niche:
+                niche = random.choice(_sector_terms)
     # Found stored but never actually enforced in the 2026-09-12 review --
     # OutreachSettings.targetCompanySizeMin (e.g. Insurance's real "100+
     # employees" requirement, Zimmar's "30+") was set on every tenant's
