@@ -265,8 +265,8 @@ check("30 new + 20 follow-ups = 50 sends: 49 gaps at the 6-minute minimum fit be
       49 * sch._SEND_GAP_MIN_SECONDS <= (sch._SENDING_WINDOW_END_MINUTES - _zlatest) * 60)
 _fl_orig = sch.repo.get_settings
 sch.repo.get_settings = lambda tid=None: {"business_name": {"z": "Zimmar", "w": "Website Offer"}.get(tid, "Other")}
-check("the Instagram follow-up cap is 5/day for Zimmar, 15 for every other campaign, separate from the new-lead cap",
-      sch._instagram_followup_limit("z") == 5 and sch._instagram_followup_limit("w") == 15 and sch._instagram_followup_limit("x") == 15
+check("the Instagram follow-up cap is 5/day for Zimmar and Website Offer, 15 for every other campaign, separate from the new-lead cap",
+      sch._instagram_followup_limit("z") == 5 and sch._instagram_followup_limit("w") == 5 and sch._instagram_followup_limit("x") == 15
       and sch._INSTAGRAM_FOLLOWUP_DAILY_LIMIT == 15)
 sch.repo.get_settings = _fl_orig
 check("30 cold sends at the longest gap (29 gaps) fit between the latest start (06:45) and the window end",

@@ -3938,7 +3938,7 @@ _SEND_GAP_MAX_SECONDS = 8 * 60
 # of competing for one shared counter.
 _INSTAGRAM_FOLLOWUP_DAILY_LIMIT = 15  # owner 2026-10-11: 15 follow-ups/day, on top of (separate from) the new-lead sends
 # Per campaign, keyed by lowercase business name; anything not listed uses the default above. Zimmar: 5 (owner 2026-10-23, was 20; new-lead cap 15, was 30).
-_INSTAGRAM_FOLLOWUP_LIMIT_BY_BUSINESS = {"zimmar": 5}
+_INSTAGRAM_FOLLOWUP_LIMIT_BY_BUSINESS = {"zimmar": 5, "website offer": 5}  # Website Offer 5 (owner 2026-10-23)
 
 
 def _instagram_followup_limit(tenant_id: str | None) -> int:
