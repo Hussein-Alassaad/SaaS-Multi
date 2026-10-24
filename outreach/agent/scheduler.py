@@ -4260,7 +4260,7 @@ def _insurance_jittered_minutes(hour: int, minute: int) -> tuple[int, int]:
 # gets its own times: discovery after Zimmar's evening run, sending in the afternoon after Zimmar's morning sending ends
 # (13:00) and before the afternoon reply poll. All Beirut minutes after midnight.
 _WEBSITE_OFFER_BUSINESS = "website offer"
-_WEBSITE_MIN_FOLLOWERS = 300  # owner's choice for this campaign (Instagram discovery otherwise has no size floor)
+_WEBSITE_MIN_FOLLOWERS = 100  # owner 2026-10-24 (was 300): 100 or more is accepted (Instagram discovery otherwise has no size floor)
 # Sized for the future volume (owner 2026-10-16): 25 new + up to 15 follow-ups = 40 sends at 6-8 min gaps. 13:00 (+0..15 min) to
 # 17:50 leaves 275+ minutes, the 6-minute-gap floor needs 234. With today's 10/day cap it simply ends about an hour after it starts.
 # Starts after Zimmar's 12:30 sending end and ends before Zimmar's 18:00 discovery. Discovery 22:00 (+0..15) starts after Zimmar's

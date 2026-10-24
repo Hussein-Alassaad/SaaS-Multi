@@ -1903,12 +1903,12 @@ _nw = {"platform": "instagram", "display_name": "Cafe Roma", "bio": "Fresh coffe
 check("Website Offer rejects a business that already has a website linked, but only for that campaign",
       qualify.qualify_profile({**_nw, "require_no_website": True}, "")[0] is False
       and "already has a website" in qualify.qualify_profile({**_nw, "require_no_website": True}, "")[1][0])
-_small = {**_nw, "has_website": False, "follower_or_headcount": 120, "require_no_website": True, "min_followers": 300}
+_small = {**_nw, "has_website": False, "follower_or_headcount": 60, "require_no_website": True, "min_followers": 100}
 _small_ok = qualify.qualify_profile({**_small, "min_followers": None}, "")
 _small_rej = qualify.qualify_profile(_small, "")
-check("Website Offer rejects a business under 300 followers, keeps an unreadable count, and the floor is off for other campaigns",
-      _small_rej[0] is False and "minimum of 300" in _small_rej[1][0] and "minimum of" not in " ".join(_small_ok[1])
-      and sch._WEBSITE_MIN_FOLLOWERS == 300
+check("Website Offer rejects a business under 100 followers, keeps an unreadable count, and the floor is off for other campaigns",
+      _small_rej[0] is False and "minimum of 100" in _small_rej[1][0] and "minimum of" not in " ".join(_small_ok[1])
+      and sch._WEBSITE_MIN_FOLLOWERS == 100
       and not (qualify.qualify_profile({**_small, "follower_or_headcount": None}, "")[1] or [""])[0].startswith("Hard reject: None"))
 check("Website Offer's competitor rules catch a web designer and a digital agency, and leave a cafe alone",
       sch._is_competitor("Website Offer", "Web design and development studio in Beirut", None, "Pixel Studio")
@@ -2006,6 +2006,13 @@ _zmsg = _gen._zimmar_fixed_template({"business_name": "Cafe Roma", "display_name
 check("Zimmar's Instagram message is the owner's Arabic text (5 lines, the greeting filled with the business name), not the old English one",
       "علي زغيب" in _zt and "Quick question" not in _zt and len(_zt.split(chr(10))) == 5
       and _zmsg.startswith("مرحبا Cafe Roma،") and "{" not in _zmsg and "—" not in _zmsg)
+check("shop/gym names like 'Ocean Fitness' and 'Fitness City' are no longer read as individuals, while 'Hsien Ismail' still is",
+      not qualify._looks_like_personal_name("Ocean Fitness") and not qualify._looks_like_personal_name("Fitness City")
+      and not qualify._looks_like_personal_name("Cave Gym") and qualify._looks_like_personal_name("Hsien Ismail"))
+_tn = _gen._tidy_business_name
+check("Website Offer messages use a clean business name: tagline cut, ALL CAPS title-cased, acronyms and normal names left alone",
+      _tn("FIRST STEP") == "First Step" and _tn("MC FIT | SPORT & PERFORMANCE") == "MC FIT" and _tn("AS_GYM") == "AS GYM"
+      and _tn("Doctor Gym") == "Doctor Gym" and _tn("Energy Gym") == "Energy Gym")
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

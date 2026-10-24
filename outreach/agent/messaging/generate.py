@@ -9,6 +9,8 @@ more formal, WhatsApp and Instagram more direct/casual (a DM, not a memo).
 
 from __future__ import annotations
 
+import re
+
 from agent import config
 from agent.analysis import client as claude_client
 from agent.analysis import prompts
@@ -62,6 +64,21 @@ more thorough.
 
 Respond with ONLY the message text, nothing else -- no preamble, no quotes around it, no "Here's \
 a message:"."""
+
+
+def _tidy_business_name(name: str) -> str:
+    """
+    A business name that reads cleanly mid-sentence (Website Offer messages): keeps the part before a " | " / " - " / bullet tagline,
+    drops emoji and stray symbols, and turns an ALL-CAPS name or an underscore handle into Title Case ("FIRST STEP" -> "First Step",
+    "AS_GYM" -> "As Gym"). Names that are already normal are returned unchanged.
+    """
+    cleaned = re.split(r"\s[|•·–—-]\s", name.strip(), maxsplit=1)[0]
+    cleaned = re.sub(r"[^\w\s&'.\-]", "", cleaned, flags=re.UNICODE).replace("_", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .-")
+    if cleaned and cleaned.upper() == cleaned and any(c.isalpha() for c in cleaned):
+        # Short all-caps names are usually acronyms ("MC FIT"), left alone; "FIRST STEP" style names are title-cased.
+        cleaned = cleaned.title() if any(len(w) >= 4 for w in cleaned.split()) else cleaned
+    return cleaned or name.strip()
 
 
 def _greeting_name(lead: dict) -> str:
@@ -423,7 +440,8 @@ def generate_message(lead: dict, channel: str, message_style: str, model: str | 
         body = _zimmar_fixed_template(lead, channel)
     elif business_name == _WEBSITE_OFFER_BUSINESS_NAME:
         body = _WEBSITE_OFFER_TEMPLATE_INSTAGRAM.format(
-            greeting_name=_greeting_name(lead), company_name=_company_name_in_sentence(lead),
+            greeting_name=_tidy_business_name(_greeting_name(lead)),
+            company_name=_tidy_business_name(_company_name_in_sentence(lead)),
         )
     elif business_name == _MJIVITY_BUSINESS_NAME and channel == "instagram":
         body = _mjivity_fixed_template(lead, channel)

@@ -182,6 +182,16 @@ _BUSINESS_WORDS = {
 _SHORT_BUSINESS_WORDS = {w for w in _BUSINESS_WORDS if len(w) <= 3}
 _LONG_BUSINESS_WORDS = _BUSINESS_WORDS - _SHORT_BUSINESS_WORDS
 
+# ADDED 2026-10-24 for the Website Offer campaign (shops, restaurants, clinics): its real discovery night rejected "Ocean Fitness",
+# "Fitness City" and "Vera Fitness" as individuals because two Title-Case words look like a first and last name. These words only
+# rescue a Title-Case DISPLAY NAME; they are deliberately NOT in _BUSINESS_WORDS, so handle-shaped individuals ("anthony_fitness")
+# are still caught exactly as before.
+_CONSUMER_BUSINESS_NAME_WORDS = {
+    "fitness", "bakery", "patisserie", "barbershop", "barber", "dental", "dentist", "pharmacy", "hotel", "furniture", "florist",
+    "flowers", "jewelry", "jewellery", "perfumes", "optical", "properties", "realty", "supermarket", "grill", "bistro", "pizza",
+    "lounge", "academy", "nursery", "spa", "beauty", "sport", "sports", "center", "centre", "kitchen", "decor", "city", "house",
+}
+
 
 def _mentions_business_word(text: str) -> bool:
     """
@@ -411,6 +421,8 @@ def _looks_like_personal_name(display_name: str) -> bool:
     if _mentions_business_word(name):
         return False
     if _PERSONAL_NAME_PATTERN.match(name):
+        if any(t in _CONSUMER_BUSINESS_NAME_WORDS for t in re.split(r"[^a-z]+", name.lower())):
+            return False
         return True
     # An Instagram @username never matches the Title-Case pattern above, so
     # fall back to handle-shaped detection for those.
