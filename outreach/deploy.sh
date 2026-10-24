@@ -2013,6 +2013,23 @@ _tn = _gen._tidy_business_name
 check("Website Offer messages use a clean business name: tagline cut, ALL CAPS title-cased, acronyms and normal names left alone",
       _tn("FIRST STEP") == "First Step" and _tn("MC FIT | SPORT & PERFORMANCE") == "MC FIT" and _tn("AS_GYM") == "AS GYM"
       and _tn("Doctor Gym") == "Doctor Gym" and _tn("Energy Gym") == "Energy Gym")
+from agent.sending import instagram_send as _isend
+class _FakeUrlPage:
+    def __init__(self, url): self.url = url
+_upd = []
+_orig_ua = _isend.repo.update_account
+_isend.repo.update_account = lambda aid, fields: _upd.append((aid, fields))
+_res_susp = None
+try:
+    _isend._raise_if_logged_out(_FakeUrlPage("https://www.instagram.com/accounts/suspended/?next=%2Ffoo%2F"), {"id": "acc1", "label": "Website Offer Instagram"})
+except _isend.SessionLoggedOut:
+    _res_susp = True
+_isend._raise_if_logged_out(_FakeUrlPage("https://www.instagram.com/first.step.bei/"), {"id": "acc1"})  # a normal profile must not raise
+_isend.repo.update_account = _orig_ua
+check("Instagram's 'confirm you're human' / suspended page is recognised: the send stops, and the account is paused on the spot",
+      _res_susp is True and any(f.get("status") == "paused" and f.get("warning_type") == "challenge" for _, f in _upd))
+check("the sending cycle stops at the first logged-out/checkpoint error instead of trying every remaining message",
+      "except InstagramSessionLoggedOut as exc:" in inspect.getsource(sch._run_sending_cycle_for_tenant))
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

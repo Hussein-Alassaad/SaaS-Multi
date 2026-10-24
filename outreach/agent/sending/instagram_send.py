@@ -220,6 +220,22 @@ def _raise_if_logged_out(page: Page, account: dict) -> None:
             f"Account {account.get('label') or account['id']} is no longer logged in on Instagram "
             f"(redirected to {page.url})."
         )
+    # ADDED 2026-10-24, real incident: after one test send Instagram started redirecting every page of the Website Offer account to
+    # /accounts/suspended/ ("Confirm you're human to use your profile"). This check did not know that URL, so each of the next 9 sends
+    # looked like "no reachable Message button", was marked failed for good, and the account kept being hit for over an hour. Now it is
+    # a checkpoint like the one below, AND the account is paused on the spot so nothing else opens a session on it.
+    if any(marker in page.url for marker in ("/accounts/suspended", "/accounts/disabled", "/challenge/")):
+        repo.update_account(account["id"], {
+            "login_status": "failed",
+            "login_error": "Instagram is asking this account to confirm it is human (suspended/challenge page) -- clear it on a real device first.",
+            "status": "paused",
+            "warning_type": "challenge",
+            "warning_reason": "Instagram showed a human-verification / suspended page. The agent paused this account; resume only after the owner has cleared it.",
+        })
+        raise SessionLoggedOut(
+            f"Account {account.get('label') or account['id']} is on Instagram's human-verification page "
+            f"(redirected to {page.url}); the account was paused."
+        )
     if "coig_challenge_redirected" in page.url or "/auth_platform/" in page.url:
         repo.update_account(account["id"], {"login_status": "failed", "login_error": "Instagram served a security checkpoint on this account -- clear it by logging in directly on a real device, then reconnect via the extension."})
         raise SessionLoggedOut(

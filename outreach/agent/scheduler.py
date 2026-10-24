@@ -3342,6 +3342,12 @@ def _run_sending_cycle_for_tenant(limit: int | None, account_id: str | None = No
             results.append({"message_id": message["id"], "channel": channel, "ok": False, "error": str(exc)})
             log_error("sending", exc, channel=channel, lead_id=message.get("lead_id"))
             break
+        except InstagramSessionLoggedOut as exc:
+            # A logged-out or checkpointed Instagram session fails every remaining message identically; stop at once instead of
+            # hitting the account again for each one (the message itself is released back to pending by the sender).
+            results.append({"message_id": message["id"], "channel": channel, "ok": False, "error": str(exc)})
+            log_error("sending", exc, channel=channel, lead_id=message.get("lead_id"))
+            break
         except Exception as exc:  # noqa: BLE001 -- one bad message shouldn't stop the rest
             results.append({"message_id": message["id"], "channel": channel, "ok": False, "error": str(exc)})
             log_error("sending", exc, channel=channel, lead_id=message.get("lead_id"))
