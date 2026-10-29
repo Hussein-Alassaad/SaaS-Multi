@@ -2030,6 +2030,14 @@ check("Instagram's 'confirm you're human' / suspended page is recognised: the se
       _res_susp is True and any(f.get("status") == "paused" and f.get("warning_type") == "challenge" for _, f in _upd))
 check("the sending cycle stops at the first logged-out/checkpoint error instead of trying every remaining message",
       "except InstagramSessionLoggedOut as exc:" in inspect.getsource(sch._run_sending_cycle_for_tenant))
+_orig_id2 = _gen._business_identity
+_gen._business_identity = lambda: ("Zimmar", "network and CCTV")
+try:
+    _zfu = _gen.generate_followup_message({"business_name": "Cafe Roma"}, "instagram", "discovery", "x")
+finally:
+    _gen._business_identity = _orig_id2
+check("Zimmar's follow-up is the short Arabic 'interested or not' note with the business name, while Website Offer's stays English",
+      _zfu == "مرحبا Cafe Roma، حبيت تابع معك على رسالتي. مهتم أو لا؟" and "interested" not in _zfu.lower())
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

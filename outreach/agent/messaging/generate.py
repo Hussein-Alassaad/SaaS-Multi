@@ -475,6 +475,9 @@ _ZIMMAR_FOLLOWUP_TEMPLATE = """Hi {greeting_name},
 
 Just following up on my last message. Are you interested or not?"""
 
+# ADDED 2026-10-29, owner's "yes": Zimmar's first message is Arabic, so its follow-up is Arabic too (Website Offer keeps the English one above).
+_ZIMMAR_FOLLOWUP_TEMPLATE_AR = """مرحبا {greeting_name}، حبيت تابع معك على رسالتي. مهتم أو لا؟"""
+
 
 def generate_followup_message(
     lead: dict, channel: str, message_style: str, original_body: str,
@@ -494,7 +497,9 @@ def generate_followup_message(
     """
     model = model or config.MODEL_MESSAGES
     business_name, business_description = _business_identity()
-    if business_name in (_ZIMMAR_BUSINESS_NAME, _WEBSITE_OFFER_BUSINESS_NAME):
+    if business_name == _ZIMMAR_BUSINESS_NAME:
+        return _ZIMMAR_FOLLOWUP_TEMPLATE_AR.format(greeting_name=_greeting_name(lead))
+    if business_name == _WEBSITE_OFFER_BUSINESS_NAME:
         return _ZIMMAR_FOLLOWUP_TEMPLATE.format(greeting_name=_greeting_name(lead))
     system = prompts.cacheable_system(
         build_system_prompt(channel, message_style, business_name, business_description, is_followup=True)
