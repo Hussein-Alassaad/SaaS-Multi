@@ -2038,6 +2038,48 @@ finally:
     _gen._business_identity = _orig_id2
 check("Zimmar's follow-up is the short Arabic 'interested or not' note with the business name, while Website Offer's stays English",
       _zfu == "مرحبا Cafe Roma، حبيت تابع معك على رسالتي. مهتم أو لا؟" and "interested" not in _zfu.lower())
+class _EvalPage:
+    def __init__(self, items): self.items = items
+    def evaluate(self, js, sel): return self.items
+    def locator(self, *a, **k): raise AssertionError("must not read bubbles one by one")
+_bubbles = instagram_reply_check._read_thread_messages(_EvalPage([
+    {"text": "Hi ZK", "left": 700.0, "right": 1000.0, "width": 300.0, "height": 40.0},
+    {"text": "", "left": 0.0, "right": 0.0, "width": 0.0, "height": 0.0},
+    {"text": "Your note", "left": 10.0, "right": 90.0, "width": 80.0, "height": 20.0},
+    {"text": "hidden", "left": 5.0, "right": 5.0, "width": 0.0, "height": 0.0},
+    {"text": "ok send me the price", "left": 300.0, "right": 560.0, "width": 260.0, "height": 40.0},
+]))
+check("a long thread is read in one browser-side pass (no per-bubble timeouts that fail when Instagram re-renders): real bubbles kept in order, empty/hidden/sidebar ones dropped",
+      [b["text"] for b in _bubbles] == ["Hi ZK", "ok send me the price"] and _bubbles[1]["left"] == 300.0 and _bubbles[1]["right"] == 560.0
+      and instagram_reply_check._read_thread_messages(_EvalPage([])) == [])
+class _GeoRepo:
+    def __init__(self): self.out = []
+    def replies_for_lead(self, lead_id): return []
+    def messages_for_lead(self, lead_id): return [{"channel": "instagram", "body": "Hi ZK" + chr(10) * 2 + "We noticed ZK does not have a website"}]
+    def insert_message(self, fields): self.out.append(fields)
+    def insert_error(self, *a, **k): pass
+_geo_real_repo = instagram_reply_check.repo
+_geo_real_handle = instagram_reply_check.handle_reply_detected
+_geo_found = []
+instagram_reply_check.repo = _GeoRepo()
+instagram_reply_check.handle_reply_detected = lambda *a, **k: _geo_found.append(k.get("body"))
+try:
+    # long thread: our original pitch is NOT in the page; bubbles on the right edge (1350) are ours, short ones are the lead's
+    _long = [
+        {"text": "Yes akid", "left": 1259.0, "right": 1350.0}, {"text": "Hi kifak", "left": 523.0, "right": 596.0},
+        {"text": "0:05View transcription", "left": 523.0, "right": 807.0}, {"text": "It is prepared", "left": 1238.0, "right": 1350.0},
+    ]
+    _rep, _outg = instagram_reply_check._sync_thread_messages({"id": "zk"}, {"id": "a1"}, _long)
+    _only_ours = [{"text": "Yes akid", "left": 1259.0, "right": 1350.0}, {"text": "Hi", "left": 1312.0, "right": 1350.0}]
+    _found_before = len(_geo_found)
+    _rep2, _ = instagram_reply_check._sync_thread_messages({"id": "zk2"}, {"id": "a1"}, _only_ours)
+finally:
+    instagram_reply_check.repo = _geo_real_repo
+    instagram_reply_check.handle_reply_detected = _geo_real_handle
+check("a LONG chat whose original pitch has scrolled out of view is still read: the lead's bubbles are recorded as replies, ours are not",
+      _rep == 2 and _geo_found[:2] == ["Hi kifak", "0:05View transcription"] and _outg == 2)
+check("...while a thread showing only our own right-aligned bubbles still fabricates no reply",
+      _rep2 == 0 and len(_geo_found) == _found_before)
 check("hard stops: Zimmar 21:45, Website Offer 24:00; Website Offer starts after Zimmar's stop and its stop is before the 00:30 message writing",
       _hs["zimmar"] == 21 * 60 + 45 and _hs["website offer"] == 24 * 60
       and sch._WEBSITE_DISCOVERY_START_MINUTES >= _hs["zimmar"] and _hs["website offer"] <= 24 * 60 + 30)

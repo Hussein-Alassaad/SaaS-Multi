@@ -221,24 +221,30 @@ def _read_thread_messages(page: Page) -> list[dict]:
     the full reasoning and the safe-skip fallback when no such anchor
     exists yet.
     """
-    messages = page.locator(_THREAD_MESSAGE_SELECTOR)
-    count = messages.count()
-    if count == 0:
-        return []
-
+    # FIXED 2026-10-29, owner report (a two-day chat with "ZK Car Rental" never showed up as a reply): this used to count the bubbles,
+    # then read them one by one with a 2s timeout each. In a LONG conversation Instagram re-renders the list while it is being read, so
+    # bubble number 8 vanished between the count and the read, Playwright timed out, the whole lead was recorded as an error and its
+    # real replies were never seen -- on every poll, for every long chat. All bubbles are now read in ONE browser-side pass (text and
+    # position together), which cannot go stale halfway through.
+    raw = page.evaluate(
+        """(sel) => Array.from(document.querySelectorAll(sel)).map((el) => {
+            const r = el.getBoundingClientRect();
+            return {text: (el.textContent || '').trim(), left: r.x, right: r.x + r.width, width: r.width, height: r.height};
+        })""",
+        _THREAD_MESSAGE_SELECTOR,
+    )
     boxes = []
-    for i in range(count):
-        el = messages.nth(i)
-        text = (el.text_content(timeout=2_000) or "").strip()
+    for item in raw or []:
+        text = item.get("text") or ""
         # `in`, not `startswith()`: the bubble's own text is
         # "<rotating prompt text>Your note" -- "Your note" is the stable
         # SECOND line, not a prefix, so a prefix check would never match
         # regardless of which specific prompt copy Instagram shows that day.
         if not text or _SIDEBAR_PROMPT_TEXT in text:
             continue
-        box = el.bounding_box()
-        if box:
-            boxes.append({"left": box["x"], "right": box["x"] + box["width"], "text": text})
+        if (item.get("width") or 0) <= 0 or (item.get("height") or 0) <= 0:
+            continue  # not rendered / hidden, same as a missing bounding box before
+        boxes.append({"left": item["left"], "right": item["right"], "text": text})
 
     return boxes
 
@@ -551,6 +557,14 @@ def _sync_thread_messages(lead: dict, account: dict, live_messages: list[dict]) 
         b["right"] for b in live_messages if _normalized(b["text"]) in known_outgoing and b.get("right") is not None
     )
 
+    # ADDED 2026-10-29, owner report (a two-day chat with ZK Car Rental was never picked up): in a LONG conversation our original pitch
+    # has scrolled far up and is not in the page at all, so no bubble can be matched to a message we sent, there is no anchor, and every
+    # bubble was skipped -- on every poll. Our bubbles are right-aligned and all end at the same right edge, the lead's end well short
+    # of it, so when the visible bubbles show BOTH edges, the rightmost edge is ours. A thread where every bubble ends at the same edge
+    # (only our own messages) still has no anchor and is still skipped, which keeps the fake-reply protection above intact.
+    _rights = [b["right"] for b in live_messages if b.get("right") is not None]
+    geometric_us_right = max(_rights) if _rights and (max(_rights) - min(_rights)) > _RIGHT_EDGE_TOLERANCE_PX else None
+
     new_replies = 0
     new_outgoing = 0
     for msg in live_messages:
@@ -568,6 +582,8 @@ def _sync_thread_messages(lead: dict, account: dict, live_messages: list[dict]) 
         elif confirmed_us_lefts and "left" in msg:
             avg_us_left = sum(confirmed_us_lefts) / len(confirmed_us_lefts)
             direction = "lead" if msg["left"] < avg_us_left else "us"
+        elif geometric_us_right is not None and msg.get("right") is not None:
+            direction = "us" if abs(msg["right"] - geometric_us_right) <= _RIGHT_EDGE_TOLERANCE_PX else "lead"
         else:
             # No content match and no safe anchor to guess from -- skip
             # rather than risk fabricating a reply from our own text.
